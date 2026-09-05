@@ -7377,7 +7377,7 @@ function RulesContent() {
                 </div>
               </div>
               {form.targetRuleId && form.routeMode !== "chain" && form.routeMode !== "group" ? (
-                <div className="space-y-2 sm:col-span-2">
+                <div className="space-y-2">
                   <Label>已完成转发（转发链落地）</Label>
                   <Select value={String(form.targetRuleId)} onValueChange={(value) => {
                     const result = availableSavedForwardResults.find((item: any) => Number(item.id) === Number(value));
