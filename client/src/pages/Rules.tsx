@@ -7355,7 +7355,7 @@ function RulesContent() {
                   </Button>
                 </div>
               </div>
-              {!isForwardGroupRouteMode && <div className="space-y-2 sm:col-span-2">
+              {form.routeMode !== "chain" && form.routeMode !== "group" && <div className="space-y-2 sm:col-span-2">
                 <Label>出口类型</Label>
                 <Select value={form.targetRuleId ? "saved" : "direct"} onValueChange={(value) => {
                   const result = value === "saved" ? availableSavedForwardResults[0] : null;
@@ -7368,7 +7368,7 @@ function RulesContent() {
                   </SelectContent>
                 </Select>
               </div>}
-              {form.targetRuleId && !isForwardGroupRouteMode ? (
+              {form.targetRuleId && form.routeMode !== "chain" && form.routeMode !== "group" ? (
                 <div className="space-y-2 sm:col-span-2">
                   <Label>已完成转发</Label>
                   <Select value={String(form.targetRuleId)} onValueChange={(value) => {
