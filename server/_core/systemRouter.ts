@@ -1122,12 +1122,12 @@ function normalizeUpgradeCommand(
 ) {
   const trimmed = command.trim();
   if (!trimmed) return "";
-  const missingLocalPanelUpgrade = trimmed.match(/^(?:\/bin\/bash|\/usr\/bin\/bash|bash)\s+(\S*install-panel-local\.sh)\s+upgrade\s*$/i);
-  if (missingLocalPanelUpgrade) {
-    const scriptPath = missingLocalPanelUpgrade[1].replace(/^['"]|['"]$/g, "");
-    if (!fs.existsSync(scriptPath)) {
-      return panelManualUpgradeCommand("local", accelerator);
-    }
+  // The configured command points at the script bundled with the currently
+  // running panel. Always refresh that script from the repository first;
+  // otherwise an online upgrade keeps executing a stale installer after the
+  // panel itself has been upgraded.
+  if (/^(?:\/bin\/bash|\/usr\/bin\/bash|bash)\s+\S*install-panel-local\.sh\s+upgrade\s*$/i.test(trimmed)) {
+    return buildPanelInstallerCommand({ deployment: "local", action: "upgrade", accelerator, sudo: false });
   }
   if (/^(?:bash|sh|\/bin\/bash|\/usr\/bin\/bash|\/bin\/sh|\/usr\/bin\/sh)\s+/i.test(trimmed)) {
     return trimmed;
