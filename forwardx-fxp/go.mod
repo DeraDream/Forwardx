@@ -1,4 +1,4 @@
-module github.com/poouo/Forwardx/forwardx-fxp
+module github.com/DeraDream/Forwardx/forwardx-fxp
 
 go 1.22
 

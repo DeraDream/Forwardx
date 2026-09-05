@@ -345,6 +345,9 @@ export const forwardRules = table("forward_rules", {
   sourcePort: int("sourcePort").notNull(),
   targetIp: text("targetIp").notNull(),
   targetPort: int("targetPort").notNull(),
+  // When set, targetIp/targetPort are the resolved entry of this saved chain result.
+  // Keeping the resolved values preserves compatibility with every Agent runtime.
+  targetRuleId: int("targetRuleId"),
   telegramErrorNotifyEnabled: boolean("telegramErrorNotifyEnabled").notNull().default(false),
   blockHttp: boolean("blockHttp").notNull().default(false),
   blockSocks: boolean("blockSocks").notNull().default(false),

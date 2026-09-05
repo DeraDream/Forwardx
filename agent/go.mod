@@ -1,4 +1,4 @@
-module github.com/poouo/Forwardx/agent
+module github.com/DeraDream/Forwardx/agent
 
 go 1.23.1
 

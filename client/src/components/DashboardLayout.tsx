@@ -1627,7 +1627,7 @@ function DashboardLayoutContent({
         <footer className="pb-4 text-center text-xs text-muted-foreground">
           <div className="inline-flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
             <a
-              href={publicInfo?.repoUrl || "https://github.com/poouo/Forwardx"}
+              href={publicInfo?.repoUrl || "https://github.com/DeraDream/Forwardx"}
               target="_blank"
               rel="noopener noreferrer"
               className="transition-colors hover:text-foreground"
@@ -1636,7 +1636,7 @@ function DashboardLayoutContent({
             </a>
             <span className="text-muted-foreground/45">|</span>
             <a
-              href="https://poouo.github.io/Forwardx/"
+              href="https://deradream.github.io/Forwardx/"
               target="_blank"
               rel="noopener noreferrer"
               className="transition-colors hover:text-foreground"

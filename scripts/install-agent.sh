@@ -14,7 +14,7 @@ GITHUB_ACCELERATOR_URL="${GITHUB_ACCELERATOR_URL:-}"
 GITHUB_ACCELERATOR_ENABLED="${GITHUB_ACCELERATOR_ENABLED:-}"
 case "$GITHUB_ACCELERATOR_ENABLED" in
   1|true|TRUE|yes|YES|on|ON)
-    GITHUB_ACCELERATOR_URL="${GITHUB_ACCELERATOR_URL:-https://git.poouo.com}"
+    GITHUB_ACCELERATOR_URL="${GITHUB_ACCELERATOR_URL:-}"
     ;;
 esac
 FORWARDX_AGENT_PANEL_FIRST="${FORWARDX_AGENT_PANEL_FIRST:-false}"
@@ -23,7 +23,7 @@ FORWARDX_CURL_LOW_SPEED_LIMIT="${FORWARDX_CURL_LOW_SPEED_LIMIT:-1024}"
 FORWARDX_CURL_LOW_SPEED_TIME="${FORWARDX_CURL_LOW_SPEED_TIME:-60}"
 
 FORWARDX_INSTALL_MIMIC="${FORWARDX_INSTALL_MIMIC:-ask}"
-FORWARDX_MIMIC_INSTALLER_URL="${FORWARDX_MIMIC_INSTALLER_URL:-https://raw.githubusercontent.com/poouo/Forwardx/main/scripts/install-mimic.sh}"
+FORWARDX_MIMIC_INSTALLER_URL="${FORWARDX_MIMIC_INSTALLER_URL:-https://raw.githubusercontent.com/DeraDream/Forwardx/main/scripts/install-mimic.sh}"
 FORWARDX_MIMIC_VERSION="${FORWARDX_MIMIC_VERSION:-0.7.1}"
 # Keep Realm on the glibc-compatible release by default. Set this explicitly
 # to opt into another Realm release, for example 2.9.6.
@@ -50,15 +50,15 @@ show_help() {
 
 用法:
   安装 Agent:
-    curl -fsSL https://raw.githubusercontent.com/poouo/Forwardx/main/scripts/install-agent.sh | \
+    curl -fsSL https://raw.githubusercontent.com/DeraDream/Forwardx/main/scripts/install-agent.sh | \
       PANEL_URL="http://your-panel:9810" bash -s -- install YOUR_TOKEN
 
   卸载 Agent:
-    curl -fsSL https://raw.githubusercontent.com/poouo/Forwardx/main/scripts/install-agent.sh | \
+    curl -fsSL https://raw.githubusercontent.com/DeraDream/Forwardx/main/scripts/install-agent.sh | \
       bash -s -- uninstall
 
   升级 Agent:
-    curl -fsSL https://raw.githubusercontent.com/poouo/Forwardx/main/scripts/install-agent.sh | \
+    curl -fsSL https://raw.githubusercontent.com/DeraDream/Forwardx/main/scripts/install-agent.sh | \
       PANEL_URL="http://your-panel:9810" bash -s -- upgrade [YOUR_TOKEN]
 
 参数:

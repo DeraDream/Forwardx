@@ -40,6 +40,28 @@ const strictFailoverTargetSchema = z.object({
 });
 const failoverStrategySchema = z.enum(["fallback", "round_robin", "random", "ip_hash"]);
 const MAX_FAILOVER_TARGETS = 10;
+
+async function resolveSavedForwardResult(actor: { id: number; role: string }, targetRuleId: unknown) {
+  const id = Number(targetRuleId || 0);
+  if (!Number.isInteger(id) || id <= 0) return null;
+  const result = await db.getForwardRuleById(id) as any;
+  if (!result || result.pendingDelete || !result.isEnabled || !result.isForwardGroupTemplate) {
+    throw new Error("引用的已完成转发不存在或未启用");
+  }
+  if (actor.role !== "admin" && Number(result.userId) !== Number(actor.id)) throw new Error("无权引用该已完成转发");
+  const group = await db.getForwardGroupById(Number(result.forwardGroupId || 0)) as any;
+  if (!group || String(group.groupMode) !== "chain" || !group.isEnabled) throw new Error("引用目标必须是已启用转发链上的规则");
+  const entries = Number(group.entryGroupId || 0)
+    ? ((await db.getForwardGroupById(Number(group.entryGroupId))) as any)?.members || []
+    : group.members || [];
+  const enabled = entries.filter((member: any) => member?.isEnabled !== false && Number(member?.hostId || 0) > 0);
+  if (enabled.length !== 1) throw new Error("引用的转发链必须有且仅有一个启用入口");
+  const host = await db.getHostById(Number(enabled[0].hostId));
+  const targetIp = String((host as any)?.entryIp || (host as any)?.ipv4 || (host as any)?.ip || "").trim();
+  const targetPort = Number(result.sourcePort || 0);
+  if (!targetIp || targetPort < 1 || targetPort > 65535) throw new Error("引用的已完成转发入口不可用");
+  return { id, targetIp, targetPort };
+}
 const mainBackupGostTunnelModes = new Set(["tls", "wss", "tcp", "mtls", "mwss", "mtcp"]);
 
 function isMainBackupGostTunnelMode(mode: unknown) {
@@ -668,6 +690,10 @@ export async function deleteForwardRuleForActor(
     const rule = await db.getForwardRuleById(ruleId);
     if (!rule || (rule as any).pendingDelete) throw new Error("规则不存在或已删除");
     if (actor.role !== "admin" && rule.userId !== actor.id) throw new Error("无权操作此规则");
+    const references = (await db.getForwardRules()).filter((candidate: any) => (
+      Number(candidate?.targetRuleId || 0) === Number(ruleId) && !candidate?.pendingDelete
+    ));
+    if (references.length > 0) throw new Error(`该已完成转发仍被 ${references.length} 条规则引用，请先改为直接地址或其他已完成转发`);
     if ((rule as any).forwardGroupRuleId) throw new Error("转发组成员规则由系统维护，不能直接删除");
     const reasonPrefix = String(options.reasonPrefix || "forward-rule").trim() || "forward-rule";
     let chargedCents = 0;
@@ -854,6 +880,12 @@ export async function createDirectForwardRuleForActor(
   }
   const host = await db.getHostById(hostId);
   if (!host) throw new Error("主机不存在");
+  const savedResult = await resolveSavedForwardResult(actor, input.targetRuleId);
+  if (savedResult) {
+    input = { ...input, targetIp: savedResult.targetIp, targetPort: savedResult.targetPort, targetRuleId: savedResult.id };
+  } else {
+    input = { ...input, targetRuleId: null };
+  }
   const entryPolicy = selectedTunnelForRule
     ? combinePortPolicies(
       portPolicyFrom(host as any),
@@ -946,6 +978,7 @@ export async function createDirectForwardRuleForActor(
       sourcePort,
       hostId,
       targetIp: normalizeRuleTargetIp(input.targetIp, { tunnelId }),
+      targetRuleId: input.targetRuleId || null,
       gostMode: "direct",
       gostRelayHost: null,
       gostRelayPort: null,
@@ -989,6 +1022,7 @@ export const crudRulesRouter = router({
         "请输入有效的 IP 地址或域名"
       ),
       targetPort: z.number().min(1).max(65535),
+      targetRuleId: z.number().int().positive().nullable().optional(),
       isEnabled: z.boolean().optional().default(true),
       telegramErrorNotifyEnabled: z.boolean().optional().default(false),
       blockHttp: z.boolean().optional(),
@@ -1003,6 +1037,7 @@ export const crudRulesRouter = router({
       // 权限检查：管理员或有 canAddRules 权限的用户
       let currentUser = await db.getUserById(ctx.user.id);
       if (input.forwardGroupId) {
+        if (input.targetRuleId) throw new Error("引用已完成转发仅支持普通端口转发，不能作为转发链的出口");
         const forwardGroupId = Number(input.forwardGroupId);
         return withKeyedTaskLock(`forward-group:${forwardGroupId}`, async () => {
         const groupReservations: HostPortReservation[] = [];
@@ -1129,6 +1164,7 @@ export const crudRulesRouter = router({
           sourcePort,
           targetIp: normalizeRuleTargetIp(input.targetIp, { tunnelId: forwardType === "gost" && !isForwardChain && (group as any).groupType === "tunnel" ? 1 : null }),
           targetPort: input.targetPort,
+          targetRuleId: null,
           isEnabled: input.isEnabled,
           telegramErrorNotifyEnabled: !!input.telegramErrorNotifyEnabled,
           blockHttp: false,
@@ -1195,6 +1231,7 @@ export const crudRulesRouter = router({
         "请输入有效的 IP 地址或域名"
       ).optional(),
       targetPort: z.number().min(1).max(65535).optional(),
+      targetRuleId: z.number().int().positive().nullable().optional(),
       telegramErrorNotifyEnabled: z.boolean().optional(),
       blockHttp: z.boolean().optional(),
       blockSocks: z.boolean().optional(),
@@ -1242,6 +1279,15 @@ export const crudRulesRouter = router({
       const rule = await db.getForwardRuleById(input.id);
       if (!rule) throw new Error("规则不存在");
       if (ctx.user.role !== "admin" && rule.userId !== ctx.user.id) throw new Error("无权操作此规则");
+      if (input.targetRuleId !== undefined && (rule as any).isForwardGroupTemplate) {
+        throw new Error("引用已完成转发仅支持普通端口转发，不能作为转发链的出口");
+      }
+      if (input.targetRuleId !== undefined) {
+        const savedResult = await resolveSavedForwardResult(ctx.user, input.targetRuleId);
+        Object.assign(input, savedResult
+          ? { targetRuleId: savedResult.id, targetIp: savedResult.targetIp, targetPort: savedResult.targetPort }
+          : { targetRuleId: null });
+      }
       if ((rule as any).forwardGroupRuleId) throw new Error("转发组成员规则由系统维护，不能直接修改");
       await requireRuleTelegramNotifyReady(input.telegramErrorNotifyEnabled);
 
@@ -1623,6 +1669,7 @@ export const crudRulesRouter = router({
           forwardGroupRuleId: null,
           forwardGroupMemberId: null,
           isForwardGroupTemplate: true,
+          targetRuleId: null,
         };
         delete data.id;
         delete data.blockHttp;
@@ -1656,6 +1703,7 @@ export const crudRulesRouter = router({
       }
 
       if (input.forwardGroupId !== undefined && input.forwardGroupId !== null) {
+        if (input.targetRuleId) throw new Error("引用已完成转发仅支持普通端口转发，不能作为转发链的出口");
         const groupId = Number(input.forwardGroupId);
         const sourcePort = Number(input.sourcePort ?? (rule as any).sourcePort);
         if (!groupId) throw new Error("请选择转发链或转发组");

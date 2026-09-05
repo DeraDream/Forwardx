@@ -193,7 +193,7 @@ function formatDatabaseSwitchDuration(milliseconds: number) {
   return remainingMinutes > 0 ? `${hours} 小时 ${remainingMinutes} 分` : `${hours} 小时`;
 }
 
-const defaultGithubAcceleratorUrl = "https://git.poouo.com";
+const defaultGithubAcceleratorUrl = "";
 type AiProvider = "deepseek" | "siliconflow" | "custom";
 const aiProviderOptions: Array<{ value: AiProvider; label: string }> = [
   { value: "deepseek", label: "DeepSeek" },
@@ -266,7 +266,7 @@ function toLocalAiProviderConfig(provider: AiProvider, source?: AiProviderServer
 }
 type DdnsProvider = "disabled" | "cloudflare" | "webhook" | "huaweicloud" | "aliyun" | "tencentcloud";
 const ddnsProviders: DdnsProvider[] = ["disabled", "cloudflare", "webhook", "huaweicloud", "aliyun", "tencentcloud"];
-const docsBaseUrl = "https://poouo.github.io/Forwardx";
+const docsBaseUrl = "https://deradream.github.io/Forwardx";
 const ddnsProviderGuideAnchors: Record<DdnsProvider, string> = {
   disabled: "quick-setup",
   cloudflare: "cloudflare",

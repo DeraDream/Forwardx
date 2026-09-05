@@ -75,7 +75,7 @@ import { executePluginPanelRequest, getPluginPanelOperationCapabilities } from "
 import { getSetting } from "./settingsRepository";
 
 const GITHUB_RE = /^https:\/\/github\.com\/([^/\s]+)\/([^/\s#?]+)(?:[/?#].*)?$/i;
-const FORWARDX_REPO_URL = "https://github.com/poouo/Forwardx";
+const FORWARDX_REPO_URL = "https://github.com/DeraDream/Forwardx";
 const MANIFEST_CANDIDATES = ["forwardx-plugin.json", "plugin.json", ".forwardx/plugin.json"];
 const OFFICIAL_STORE_PATH = "plugins/official-store.json";
 const DEFAULT_THIRD_PARTY_STORE_PATH = "forwardx-store.json";
@@ -2053,7 +2053,7 @@ function builtinFallbackManifest(storeItem: PluginStoreItem): ForwardxPluginMani
     description: storeItem.description,
     detailsMarkdown: storeItem.detailsMarkdown,
     features: storeItem.features,
-    author: storeItem.author || "poouo",
+    author: storeItem.author || "DeraDream",
     logo: storeItem.logo,
     releaseDate: storeItem.releaseDate,
     updatedAt: storeItem.updatedAt,

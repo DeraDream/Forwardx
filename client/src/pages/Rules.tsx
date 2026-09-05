@@ -269,6 +269,7 @@ type RuleFormData = {
   sourcePort: number;
   targetIp: string;
   targetPort: number;
+  targetRuleId: number | null;
   telegramErrorNotifyEnabled: boolean;
   blockHttp: boolean;
   blockSocks: boolean;
@@ -328,6 +329,7 @@ const defaultForm: RuleFormData = {
   sourcePort: 0,
   targetIp: "",
   targetPort: 0,
+  targetRuleId: null,
   telegramErrorNotifyEnabled: false,
   blockHttp: false,
   blockSocks: false,
@@ -2928,6 +2930,10 @@ function RulesContent() {
     () => availableForwardGroups.filter((group: any) => isForwardChainGroup(group)),
     [availableForwardGroups]
   );
+  const availableSavedForwardResults = useMemo(() => (fullRulesQuery.data || []).filter((rule: any) => {
+    const group = forwardGroupById.get(Number(rule.forwardGroupId || 0));
+    return !!rule.isForwardGroupTemplate && !!rule.isEnabled && isForwardChainGroup(group);
+  }), [forwardGroupById, fullRulesQuery.data]);
   const availableFailoverForwardGroups = useMemo(
     () => availableForwardGroups.filter((group: any) => normalizeForwardGroupModeForRule(group) === "failover"),
     [availableForwardGroups]
@@ -3572,7 +3578,7 @@ function RulesContent() {
 
   const handleSubmit = async () => {
     const submitForwardType = effectiveRouteForwardType;
-    if (!form.name || !form.targetIp || !form.targetPort || (!isForwardGroupRouteMode && !form.hostId)) {
+    if (!form.name || (!form.targetRuleId && !form.targetIp) || !form.targetPort || (!isForwardGroupRouteMode && !form.hostId)) {
       toast.error("请填写所有必填字段（目标端口必须填写）");
       return;
     }
@@ -3699,6 +3705,7 @@ function RulesContent() {
         isEnabled: portStatus === "available" ? true : undefined,
         targetIp: form.targetIp,
         targetPort: form.targetPort,
+        targetRuleId: form.targetRuleId,
         telegramErrorNotifyEnabled: form.telegramErrorNotifyEnabled,
         ...failoverPayload,
       });
@@ -3716,6 +3723,7 @@ function RulesContent() {
         sourcePort: form.sourcePort,
         targetIp: form.targetIp,
         targetPort: form.targetPort,
+        targetRuleId: form.targetRuleId,
         telegramErrorNotifyEnabled: form.telegramErrorNotifyEnabled,
         ...failoverPayload,
       });
@@ -5336,6 +5344,7 @@ function RulesContent() {
       sourcePort: rule.sourcePort,
       targetIp: rule.targetIp,
       targetPort: rule.targetPort,
+      targetRuleId: rule.targetRuleId || null,
       isEnabled: rule.isEnabled,
       telegramErrorNotifyEnabled: telegramBotReady && !!rule.telegramErrorNotifyEnabled,
       proxyProtocolReceive: rule.proxyProtocolReceive,
@@ -7346,6 +7355,35 @@ function RulesContent() {
                   </Button>
                 </div>
               </div>
+              {!isForwardGroupRouteMode && <div className="space-y-2 sm:col-span-2">
+                <Label>出口类型</Label>
+                <Select value={form.targetRuleId ? "saved" : "direct"} onValueChange={(value) => {
+                  const result = value === "saved" ? availableSavedForwardResults[0] : null;
+                  setForm({ ...form, targetRuleId: result?.id || null, targetIp: result ? String(result.targetIp || "") : form.targetIp, targetPort: result ? Number(result.sourcePort || 0) : form.targetPort });
+                }}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="direct">直接地址</SelectItem>
+                    <SelectItem value="saved" disabled={availableSavedForwardResults.length === 0}>引用已完成转发</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>}
+              {form.targetRuleId && !isForwardGroupRouteMode ? (
+                <div className="space-y-2 sm:col-span-2">
+                  <Label>已完成转发</Label>
+                  <Select value={String(form.targetRuleId)} onValueChange={(value) => {
+                    const result = availableSavedForwardResults.find((item: any) => Number(item.id) === Number(value));
+                    setForm({ ...form, targetRuleId: Number(value), targetIp: String(result?.targetIp || ""), targetPort: Number(result?.sourcePort || 0) });
+                  }}>
+                    <SelectTrigger><SelectValue placeholder="请选择链上已完成转发" /></SelectTrigger>
+                    <SelectContent>{availableSavedForwardResults.map((result: any) => {
+                      const group = forwardGroupById.get(Number(result.forwardGroupId));
+                      return <SelectItem key={result.id} value={String(result.id)}>{group?.name || "转发链"} / {result.name}（入口 :{result.sourcePort}）</SelectItem>;
+                    })}</SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">面板会自动解析并跟随该链上规则当前的入口地址和端口。</p>
+                </div>
+              ) : <>
               <div className="space-y-2">
                 <Label>目标地址</Label>
                 <Input
@@ -7354,6 +7392,7 @@ function RulesContent() {
                   onChange={(e) => setForm({ ...form, targetIp: e.target.value })}
                 />
               </div>
+              </>}
               <div className="space-y-2 sm:col-span-2">
                 <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(220px,0.9fr)] sm:items-end">
                   <div className="space-y-2">
