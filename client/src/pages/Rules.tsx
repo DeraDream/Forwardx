@@ -2990,8 +2990,7 @@ function RulesContent() {
     return forwardGroupById.get(Number(form.forwardGroupId)) || null;
   }, [form.forwardGroupId, forwardGroupById]);
   const routeModeLocked = false;
-  const isForwardGroupRouteMode = isForwardGroupBackedRouteModeValue(form.routeMode, form.forwardGroupId)
-    || (isLegacyLocalRuleEdit && form.routeMode === "local");
+  const isForwardGroupRouteMode = isForwardGroupBackedRouteModeValue(form.routeMode, form.forwardGroupId);
   const effectiveRouteForwardType = useMemo<ForwardType>(() => {
     if (form.routeMode === "tunnel") return "gost";
     if (isForwardGroupRouteMode) {
