@@ -8,6 +8,10 @@
 - 增加引用权限校验、单入口校验，并阻止删除仍被引用的转发规则。
 - 将安装、升级、Release、Docker 镜像和文档地址统一切换到 DeraDream/Forwardx。
 
+### 版本
+
+- 面板与 APK Release `2.3.280`，Agent `2.2.193`，ForwardX FXP runtime `2.2.117`，Android APP `2.3.97`。
+
 ## [2.3.279] - 2026-09-03
 
 ### 修复与优化
