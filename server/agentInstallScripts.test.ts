@@ -196,8 +196,8 @@ test("GitHub Agent entry script forwards the Realm version override", () => {
 
   assert.match(script, /FORWARDX_REALM_VERSION="\$\{FORWARDX_REALM_VERSION:-2\.9\.4\}"/);
   assert.match(script, /FORWARDX_REALM_VERSION_EXPLICIT="false"/);
-  assert.match(script, /FORWARDX_REALM_VERSION="\$FORWARDX_REALM_VERSION" \\\n\s+bash "\$tmp_script"/);
-  assert.match(script, /FORWARDX_REALM_VERSION_EXPLICIT="\$FORWARDX_REALM_VERSION_EXPLICIT" \\\n\s+FORWARDX_REALM_VERSION=/);
+  assert.match(script, /FORWARDX_REALM_VERSION_EXPLICIT="\$FORWARDX_REALM_VERSION_EXPLICIT" \\\r?\n\s+FORWARDX_REALM_VERSION="\$FORWARDX_REALM_VERSION" \\\r?\n\s+bash "\$tmp_script"/);
+  assert.match(script, /FORWARDX_REALM_VERSION_EXPLICIT="\$FORWARDX_REALM_VERSION_EXPLICIT" \\\r?\n\s+FORWARDX_REALM_VERSION=/);
 });
 
 test("nginx installer validates a staged candidate and preserves the existing runtime on failure", () => {

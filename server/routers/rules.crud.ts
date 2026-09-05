@@ -54,7 +54,9 @@ async function resolveSavedForwardResult(actor: { id: number; role: string }, ta
   const entries = Number(group.entryGroupId || 0)
     ? ((await db.getForwardGroupById(Number(group.entryGroupId))) as any)?.members || []
     : group.members || [];
-  const enabled = entries.filter((member: any) => member?.isEnabled !== false && Number(member?.hostId || 0) > 0);
+  // SQLite booleans may arrive as 0/1; checking only `!== false` incorrectly
+  // treats a disabled member (0) as enabled and rejects valid single-entry chains.
+  const enabled = entries.filter((member: any) => dbBool(member?.isEnabled, true) && Number(member?.hostId || 0) > 0);
   if (enabled.length !== 1) throw new Error("引用的转发链必须有且仅有一个启用入口");
   const host = await db.getHostById(Number(enabled[0].hostId));
   const targetIp = String((host as any)?.entryIp || (host as any)?.ipv4 || (host as any)?.ip || "").trim();
