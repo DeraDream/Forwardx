@@ -7245,7 +7245,7 @@ function RulesContent() {
                 </div>
               )}
             </RuleRouteTransition>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <div className="space-y-2">
                 <Label>规则名称</Label>
                 <Input
@@ -7272,6 +7272,24 @@ function RulesContent() {
                   </SelectContent>
                 </Select>
               </div>
+              {form.routeMode !== "chain" && form.routeMode !== "group" && <div className="space-y-2">
+                <Label>出口类型</Label>
+                <Select value={form.targetRuleId ? "saved" : "direct"} onValueChange={(value) => {
+                  const result = value === "saved" ? availableSavedForwardResults[0] : null;
+                  setForm({
+                    ...form,
+                    targetRuleId: result?.id || null,
+                    targetIp: result ? String(result.targetIp || "") : form.targetIp,
+                    targetPort: result ? Number(result.sourcePort || 0) : form.targetPort,
+                  });
+                }}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="direct">直接地址</SelectItem>
+                    <SelectItem value="saved" disabled={availableSavedForwardResults.length === 0}>引用已完成转发</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>}
               {!isForwardGroupRouteMode && form.routeMode === "local" && (
                 <div className="space-y-2">
                   <Label>转发工具</Label>
@@ -7358,22 +7376,9 @@ function RulesContent() {
                   </Button>
                 </div>
               </div>
-              {form.routeMode !== "chain" && form.routeMode !== "group" && <div className="space-y-2 sm:col-span-2">
-                <Label>出口类型</Label>
-                <Select value={form.targetRuleId ? "saved" : "direct"} onValueChange={(value) => {
-                  const result = value === "saved" ? availableSavedForwardResults[0] : null;
-                  setForm({ ...form, targetRuleId: result?.id || null, targetIp: result ? String(result.targetIp || "") : form.targetIp, targetPort: result ? Number(result.sourcePort || 0) : form.targetPort });
-                }}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="direct">直接地址</SelectItem>
-                    <SelectItem value="saved" disabled={availableSavedForwardResults.length === 0}>引用已完成转发</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>}
               {form.targetRuleId && form.routeMode !== "chain" && form.routeMode !== "group" ? (
                 <div className="space-y-2 sm:col-span-2">
-                  <Label>已完成转发</Label>
+                  <Label>已完成转发（转发链落地）</Label>
                   <Select value={String(form.targetRuleId)} onValueChange={(value) => {
                     const result = availableSavedForwardResults.find((item: any) => Number(item.id) === Number(value));
                     setForm({ ...form, targetRuleId: Number(value), targetIp: String(result?.targetIp || ""), targetPort: Number(result?.sourcePort || 0) });
@@ -7381,10 +7386,10 @@ function RulesContent() {
                     <SelectTrigger><SelectValue placeholder="请选择链上已完成转发" /></SelectTrigger>
                     <SelectContent>{availableSavedForwardResults.map((result: any) => {
                       const group = forwardGroupById.get(Number(result.forwardGroupId));
-                      return <SelectItem key={result.id} value={String(result.id)}>{group?.name || "转发链"} / {result.name}（入口 :{result.sourcePort}）</SelectItem>;
+                      return <SelectItem key={result.id} value={String(result.id)}>{group?.name || "转发链"} / {result.name} · {result.targetIp || "未解析 IP"}</SelectItem>;
                     })}</SelectContent>
                   </Select>
-                  <p className="text-xs text-muted-foreground">面板会自动解析并跟随该链上规则当前的入口地址和端口。</p>
+                  <p className="text-xs text-muted-foreground">选择后将跟随该转发链落地规则，目标地址和目标端口由链路自动解析。</p>
                 </div>
               ) : <>
               <div className="space-y-2">
@@ -7396,7 +7401,7 @@ function RulesContent() {
                 />
               </div>
               </>}
-              <div className="space-y-2 sm:col-span-2">
+              {!form.targetRuleId && <div className="space-y-2 sm:col-span-2">
                 <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(220px,0.9fr)] sm:items-end">
                   <div className="space-y-2">
                     <Label>目标端口 <span className="text-destructive">*</span></Label>
@@ -7424,7 +7429,7 @@ function RulesContent() {
                     />
                   </div>
                 </div>
-              </div>
+              </div>}
             </div>
             {kernelForwardWarning && (
               <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-300">
