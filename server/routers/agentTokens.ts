@@ -92,10 +92,12 @@ export const agentTokensRouter = router({
       return { success: true, releasedPendingCleanup, removedHosts };
     }),
   getInstallToken: protectedProcedure
-    .input(z.object({ id: z.number().optional(), token: z.string().optional() }))
+    .input(z.object({ id: z.number().optional(), token: z.string().optional(), hostId: z.number().optional() }))
     .query(async ({ input, ctx }) => {
-      if (!input.id && !input.token) throw new Error("缺少 Token 参数");
-      const token = input.id
+      if (!input.id && !input.token && !input.hostId) throw new Error("缺少 Token 参数");
+      const token = input.hostId
+        ? await db.getHostById(input.hostId).then((host: any) => host?.agentToken ? { token: host.agentToken, userId: host.userId } : null)
+        : input.id
         ? await db.getAgentTokenById(input.id)
         : await db.getAgentTokenByToken(input.token!);
       if (!token) throw new Error("Token 不存在");

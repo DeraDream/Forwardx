@@ -1463,6 +1463,8 @@ function HostsContent() {
   const [hostDialogTab, setHostDialogTab] = useState<HostDialogTab>("basic");
   const [upgradeHost, setUpgradeHost] = useState<any>(null);
   const [reinstallHost, setReinstallHost] = useState<any>(null);
+  const [reinstallToken, setReinstallToken] = useState("");
+  const [reinstallTokenLoading, setReinstallTokenLoading] = useState(false);
   const [reinstallMimic, setReinstallMimic] = useState(false);
   const [probeLatencyHost, setProbeLatencyHost] = useState<any>(null);
   const [resetTrafficHost, setResetTrafficHost] = useState<any>(null);
@@ -1475,6 +1477,22 @@ function HostsContent() {
   const [tokenViewMode, setTokenViewMode] = useState<AgentTokenViewMode>(() => getStoredAgentTokenViewMode());
   const [serviceViewMode, setServiceViewMode] = useState<HostProbeServiceViewMode>(() => getStoredHostProbeServiceViewMode());
   const [hostGroupViewMode, setHostGroupViewMode] = useState<HostGroupViewMode>(() => getStoredHostGroupViewMode());
+
+  const openReinstallAgent = async (host: any) => {
+    setReinstallHost(host);
+    setReinstallToken("");
+    setReinstallMimic(false);
+    setReinstallTokenLoading(true);
+    try {
+      const result = await utils.agentTokens.getInstallToken.fetch({ hostId: Number(host.id) });
+      setReinstallToken(result.token);
+    } catch (error: any) {
+      setReinstallHost(null);
+      toast.error(error?.message || "获取当前 Agent Token 失败");
+    } finally {
+      setReinstallTokenLoading(false);
+    }
+  };
   const hostManageTabItems = user?.role === "admin" ? HOST_MANAGE_TAB_ITEMS_ADMIN : HOST_MANAGE_TAB_ITEMS_USER;
   const hostLiveRefreshInterval = visiblePollingInterval("live", pageVisible && activeManageTab === "hosts");
   // Sorted, because the ids travel as a query input: keeping the visual order here
@@ -2124,7 +2142,7 @@ function HostsContent() {
       onEdit={openEdit}
       onDelete={(id) => deleteMutation.mutate({ id })}
       onUpgrade={requestAgentUpgrade}
-      onReinstall={setReinstallHost}
+      onReinstall={openReinstallAgent}
       canUpgrade={user?.role === "admin"}
       onResetTraffic={user?.role === "admin" ? requestResetHostTraffic : undefined}
       onCorrectTraffic={user?.role === "admin" ? requestCorrectHostTraffic : undefined}
@@ -2788,7 +2806,7 @@ function HostsContent() {
                             onEdit={openEdit}
                             onDelete={(id) => deleteMutation.mutate({ id })}
                             onUpgrade={requestAgentUpgrade}
-                            onReinstall={setReinstallHost}
+                            onReinstall={openReinstallAgent}
                             onResetTraffic={user?.role === "admin" ? requestResetHostTraffic : undefined}
                             onCorrectTraffic={user?.role === "admin" ? requestCorrectHostTraffic : undefined}
                             onViewProbeLatency={setProbeLatencyHost}
@@ -3008,10 +3026,20 @@ function HostsContent() {
       <Dialog open={!!reinstallHost} onOpenChange={(open) => !open && setReinstallHost(null)}>
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
-            <DialogTitle>重新安装 Agent</DialogTitle>
-            <DialogDescription>停止并覆盖该主机上的现有 Agent，安装完成后只保留一个活动实例。</DialogDescription>
+            <DialogTitle>安装命令已生成</DialogTitle>
+            <DialogDescription>复用当前 Agent Token，停止并覆盖旧 Agent，安装完成后只保留一个活动实例。</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
+            {reinstallHost && <div className="rounded-lg border border-border/50 bg-muted/20 p-3 text-sm">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">目标主机</span>
+                <span className="font-medium">{reinstallHost.name}</span>
+              </div>
+              <div className="mt-2 flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">当前 Token</span>
+                <span className="font-mono">{reinstallTokenLoading ? "读取中..." : reinstallToken ? "已提取" : "读取失败"}</span>
+              </div>
+            </div>}
             <div className="flex items-start justify-between gap-4 rounded-lg border p-3">
               <div>
                 <Label>安装 mimic UDP 混淆环境</Label>
@@ -3019,8 +3047,8 @@ function HostsContent() {
               </div>
               <Switch checked={reinstallMimic} onCheckedChange={setReinstallMimic} />
             </div>
-            <pre className="max-h-40 overflow-auto rounded-lg bg-muted p-3 text-xs whitespace-pre-wrap">{`curl -fsSL "${typeof window !== "undefined" ? window.location.origin : "http://你的面板地址:9810"}/api/agent/install.sh" | FORWARDX_INSTALL_MIMIC=${reinstallMimic ? "yes" : "no"} PANEL_URL="${typeof window !== "undefined" ? window.location.origin : "http://你的面板地址:9810"}" bash -s -- upgrade`}</pre>
-            <p className="text-xs text-muted-foreground">请在目标 VPS 以 root 执行。upgrade 模式会复用现有 Token，并覆盖旧 Agent 服务。</p>
+            <pre className="max-h-40 overflow-auto rounded-lg bg-muted p-3 text-xs whitespace-pre-wrap">{reinstallToken ? `curl -fsSL "${typeof window !== "undefined" ? window.location.origin : "http://你的面板地址:9810"}/api/agent/install.sh" | FORWARDX_INSTALL_MIMIC=${reinstallMimic ? "yes" : "no"} PANEL_URL="${typeof window !== "undefined" ? window.location.origin : "http://你的面板地址:9810"}" bash -s -- install ${reinstallToken}` : "正在提取当前 Agent Token..."}</pre>
+            <p className="text-xs text-muted-foreground">请在目标 VPS 以 root 执行。install 模式会使用当前 Token，并覆盖旧 Agent 服务；不会生成新的主机。</p>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setReinstallHost(null)}>关闭</Button>

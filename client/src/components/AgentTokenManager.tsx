@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import {
   Table,
   TableBody,
@@ -426,6 +427,7 @@ export default function AgentTokenManager({
   const [scriptToken, setScriptToken] = useState("");
   const [loadingScriptTokenId, setLoadingScriptTokenId] = useState<number | null>(null);
   const [newToken, setNewToken] = useState("");
+  const [newTokenMimic, setNewTokenMimic] = useState(false);
   const [description, setDescription] = useState("");
   const [editingToken, setEditingToken] = useState<any>(null);
   const [editDescription, setEditDescription] = useState("");
@@ -654,12 +656,13 @@ export default function AgentTokenManager({
     }
   };
 
-  const getAgentScriptCommand = (args: string, targetPanelUrl = commandPanelUrl) => {
+  const getAgentScriptCommand = (args: string, targetPanelUrl = commandPanelUrl, mimic = false) => {
     const installPanelUrl = normalizeConfigUrl(targetPanelUrl) || panelUrl;
     const env = [
       githubAcceleratorActive ? "GITHUB_ACCELERATOR_ENABLED=true" : "",
       githubAcceleratorActive ? `GITHUB_ACCELERATOR_URL=${shellQuote(githubAcceleratorUrl)}` : "",
       agentPreferPanelInstall ? "FORWARDX_AGENT_PANEL_FIRST=true" : "",
+      mimic ? "FORWARDX_INSTALL_MIMIC=yes" : "FORWARDX_INSTALL_MIMIC=no",
     ].filter(Boolean).join(" ");
     const bashPrefix = env ? `${env} bash` : "bash";
     const withPipefail = (pipeline: string) => `bash -c ${shellQuote(`set -o pipefail; ${pipeline}`)}`;
@@ -675,7 +678,7 @@ export default function AgentTokenManager({
     return `${githubCommand} || ${panelCommand}`;
   };
 
-  const getInstallCommand = (token: string) => getAgentScriptCommand(`install ${token}`);
+  const getInstallCommand = (token: string, mimic = false) => getAgentScriptCommand(`install ${token}`, commandPanelUrl, mimic);
   const getUninstallCommand = () => getAgentScriptCommand("uninstall");
   const getUpgradeCommand = () => getAgentScriptCommand("upgrade");
   const openEditToken = (tokenItem: any) => {
@@ -926,6 +929,13 @@ export default function AgentTokenManager({
               selectedId={installAddressMode}
               onChange={setInstallAddressMode}
             />
+            <div className="flex items-start justify-between gap-4 rounded-lg border p-3">
+              <div>
+                <Label>安装 mimic UDP 混淆环境</Label>
+                <p className="mt-1 text-xs text-muted-foreground">开启后自动安装或修复 mimic 及内核模块；关闭则跳过，不再在终端询问 y/N。</p>
+              </div>
+              <Switch checked={newTokenMimic} onCheckedChange={setNewTokenMimic} />
+            </div>
             {panelUrlUsesLoopback && (
               <Alert className="border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300">
                 <AlertTriangle className="h-4 w-4" />
@@ -939,14 +949,14 @@ export default function AgentTokenManager({
               <p className="text-sm font-medium">快速安装命令：</p>
               <div className="p-3 rounded-lg bg-background/50 border">
                 <code className="text-xs font-mono break-all">
-                  {getInstallCommand(newToken)}
+                  {getInstallCommand(newToken, newTokenMimic)}
                 </code>
               </div>
               <Button
                 variant="outline"
                 size="sm"
                 className="w-full gap-2"
-                onClick={() => copyToClipboard(getInstallCommand(newToken))}
+                onClick={() => copyToClipboard(getInstallCommand(newToken, newTokenMimic))}
               >
                 <Copy className="h-3 w-3" />
                 复制安装命令
