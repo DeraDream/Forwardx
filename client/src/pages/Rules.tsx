@@ -2377,7 +2377,10 @@ function RulesContent() {
       if (timeoutHandle !== undefined) globalThis.clearTimeout(timeoutHandle);
     };
   }, [isRuleGlobeView, ruleMapQuery.fetchNextPage, ruleMapQuery.hasNextPage, ruleMapQuery.isFetchingNextPage]);
-  const needsFullRuleList = showCopyDialog
+  // The rule editor needs the complete rule list to populate saved chain targets.
+  // Without this, "引用已完成转发" always has zero options when creating/editing a rule.
+  const needsFullRuleList = showDialog
+    || showCopyDialog
     || showExportDialog
     || showImportDialog;
   const fullRulesQuery = trpc.rules.list.useQuery(effectiveRulesQuery as any, {
