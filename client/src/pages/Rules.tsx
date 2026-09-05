@@ -2933,7 +2933,7 @@ function RulesContent() {
   );
   const availableSavedForwardResults = useMemo(() => (fullRulesQuery.data || []).filter((rule: any) => {
     const group = forwardGroupById.get(Number(rule.forwardGroupId || 0));
-    return !!rule.isForwardGroupTemplate && !!rule.isEnabled && isForwardChainGroup(group);
+    return !!rule.isEnabled && !rule.pendingDelete && isForwardChainGroup(group);
   }), [forwardGroupById, fullRulesQuery.data]);
   const availableFailoverForwardGroups = useMemo(
     () => availableForwardGroups.filter((group: any) => normalizeForwardGroupModeForRule(group) === "failover"),

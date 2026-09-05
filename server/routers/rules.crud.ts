@@ -45,7 +45,7 @@ async function resolveSavedForwardResult(actor: { id: number; role: string }, ta
   const id = Number(targetRuleId || 0);
   if (!Number.isInteger(id) || id <= 0) return null;
   const result = await db.getForwardRuleById(id) as any;
-  if (!result || result.pendingDelete || !result.isEnabled || !result.isForwardGroupTemplate) {
+  if (!result || result.pendingDelete || !result.isEnabled) {
     throw new Error("引用的已完成转发不存在或未启用");
   }
   if (actor.role !== "admin" && Number(result.userId) !== Number(actor.id)) throw new Error("无权引用该已完成转发");
