@@ -2737,6 +2737,7 @@ function RulesContent() {
       sourcePort: rule.sourcePort,
       targetIp: rule.targetIp,
       targetPort: rule.targetPort,
+      targetRuleId: rule.targetRuleId || null,
       telegramErrorNotifyEnabled: !!rule.telegramErrorNotifyEnabled,
       blockHttp: false,
       blockSocks: false,

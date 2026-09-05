@@ -20,6 +20,7 @@ export type RuleTransferFileRule = {
   sourcePort: number;
   targetIp: string;
   targetPort: number;
+  targetRuleId?: number | null;
   isEnabled: boolean;
   telegramErrorNotifyEnabled?: boolean;
   proxyProtocolReceive: boolean;
@@ -63,6 +64,7 @@ const targetHostSchema = z.string().trim().min(1).max(253).refine(
 const failoverTargetSchema = z.object({
   targetIp: targetHostSchema,
   targetPort: z.number().int().min(1).max(65535),
+  targetRuleId: z.number().int().positive().nullable().optional(),
 });
 
 const ruleTransferRuleSchema = z.object({
