@@ -92,6 +92,7 @@ type HostCardProps = {
   onEdit: (host: any) => void;
   onDelete: (id: number) => void;
   onUpgrade: (host: any) => void;
+  onReinstall: (host: any) => void;
   onResetTraffic?: (host: any) => void;
   onCorrectTraffic?: (host: any) => void;
   onViewProbeLatency?: (host: any) => void;
@@ -109,6 +110,7 @@ type HostCardProps = {
 type HostActionButtonsProps = Pick<
   HostCardProps,
   "host" | "onEdit" | "onDelete" | "onUpgrade" | "onResetTraffic" | "onCorrectTraffic" | "onViewProbeLatency" | "resetTrafficPending" | "canUpgrade"
+  | "onReinstall"
 > & {
   className?: string;
   buttonClassName?: string;
@@ -119,6 +121,7 @@ export function HostActionButtons({
   onEdit,
   onDelete,
   onUpgrade,
+  onReinstall,
   onResetTraffic,
   onCorrectTraffic,
   onViewProbeLatency,
@@ -205,6 +208,10 @@ export function HostActionButtons({
             <Download />
             <span>升级 Agent</span>
           </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => onReinstall(host)}>
+            <Download />
+            <span>重新安装 Agent</span>
+          </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem
             variant="destructive"
@@ -224,6 +231,7 @@ export default function HostCard({
   onEdit,
   onDelete,
   onUpgrade,
+  onReinstall,
   onResetTraffic,
   onCorrectTraffic,
   onViewProbeLatency,
@@ -471,6 +479,7 @@ export default function HostCard({
               onEdit={onEdit}
               onDelete={onDelete}
               onUpgrade={onUpgrade}
+              onReinstall={onReinstall}
               onResetTraffic={onResetTraffic}
               onCorrectTraffic={onCorrectTraffic}
               onViewProbeLatency={onViewProbeLatency}
@@ -489,6 +498,7 @@ export default function HostCard({
               onEdit={onEdit}
               onDelete={onDelete}
               onUpgrade={onUpgrade}
+              onReinstall={onReinstall}
               onResetTraffic={onResetTraffic}
               onCorrectTraffic={onCorrectTraffic}
               onViewProbeLatency={onViewProbeLatency}

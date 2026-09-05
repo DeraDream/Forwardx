@@ -1462,6 +1462,8 @@ function HostsContent() {
   const [showDialog, setShowDialog] = useState(false);
   const [hostDialogTab, setHostDialogTab] = useState<HostDialogTab>("basic");
   const [upgradeHost, setUpgradeHost] = useState<any>(null);
+  const [reinstallHost, setReinstallHost] = useState<any>(null);
+  const [reinstallMimic, setReinstallMimic] = useState(false);
   const [probeLatencyHost, setProbeLatencyHost] = useState<any>(null);
   const [resetTrafficHost, setResetTrafficHost] = useState<any>(null);
   const [resetTrafficHostId, setResetTrafficHostId] = useState<number | null>(null);
@@ -2122,6 +2124,7 @@ function HostsContent() {
       onEdit={openEdit}
       onDelete={(id) => deleteMutation.mutate({ id })}
       onUpgrade={requestAgentUpgrade}
+      onReinstall={setReinstallHost}
       canUpgrade={user?.role === "admin"}
       onResetTraffic={user?.role === "admin" ? requestResetHostTraffic : undefined}
       onCorrectTraffic={user?.role === "admin" ? requestCorrectHostTraffic : undefined}
@@ -2785,6 +2788,7 @@ function HostsContent() {
                             onEdit={openEdit}
                             onDelete={(id) => deleteMutation.mutate({ id })}
                             onUpgrade={requestAgentUpgrade}
+                            onReinstall={setReinstallHost}
                             onResetTraffic={user?.role === "admin" ? requestResetHostTraffic : undefined}
                             onCorrectTraffic={user?.role === "admin" ? requestCorrectHostTraffic : undefined}
                             onViewProbeLatency={setProbeLatencyHost}
@@ -3000,6 +3004,30 @@ function HostsContent() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {/* Agent Upgrade Dialog */}
+      <Dialog open={!!reinstallHost} onOpenChange={(open) => !open && setReinstallHost(null)}>
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>重新安装 Agent</DialogTitle>
+            <DialogDescription>停止并覆盖该主机上的现有 Agent，安装完成后只保留一个活动实例。</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="flex items-start justify-between gap-4 rounded-lg border p-3">
+              <div>
+                <Label>安装 mimic UDP 混淆环境</Label>
+                <p className="mt-1 text-xs text-muted-foreground">开启后会自动安装或修复 mimic 及内核模块；关闭则跳过，不再在终端询问 y/N。</p>
+              </div>
+              <Switch checked={reinstallMimic} onCheckedChange={setReinstallMimic} />
+            </div>
+            <pre className="max-h-40 overflow-auto rounded-lg bg-muted p-3 text-xs whitespace-pre-wrap">{`curl -fsSL "${typeof window !== "undefined" ? window.location.origin : "http://你的面板地址:9810"}/api/agent/install.sh" | FORWARDX_INSTALL_MIMIC=${reinstallMimic ? "yes" : "no"} PANEL_URL="${typeof window !== "undefined" ? window.location.origin : "http://你的面板地址:9810"}" bash -s -- upgrade`}</pre>
+            <p className="text-xs text-muted-foreground">请在目标 VPS 以 root 执行。upgrade 模式会复用现有 Token，并覆盖旧 Agent 服务。</p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReinstallHost(null)}>关闭</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Agent Upgrade Dialog */}
       <Dialog open={!!upgradeHost} onOpenChange={(open) => !open && setUpgradeHost(null)}>
         <DialogContent className="sm:max-w-md">

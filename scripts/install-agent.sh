@@ -104,6 +104,13 @@ remove_service_by_name() {
   rm -f "/etc/init.d/$name"
 }
 
+stop_existing_agent() {
+  remove_service_by_name "$SERVICE_NAME"
+  pkill -TERM -f '/forwardx-agent($|[[:space:]])' 2>/dev/null || true
+  sleep 1
+  pkill -KILL -f '/forwardx-agent($|[[:space:]])' 2>/dev/null || true
+}
+
 read_existing_config() {
   EXISTING_PANEL_URL=""
   EXISTING_TOKEN=""
@@ -174,6 +181,7 @@ run_panel_installer() {
 do_install() {
   require_root
   local agent_token="$1"
+  stop_existing_agent
 
   if [ -z "$agent_token" ]; then
     echo "[错误] install 需要 Agent Token"
@@ -206,6 +214,7 @@ do_install() {
 do_upgrade() {
   require_root
   local override_token="$1"
+  stop_existing_agent
 
   read_existing_config
   PANEL_URL="${PANEL_URL:-${EXISTING_PANEL_URL:-}}"
