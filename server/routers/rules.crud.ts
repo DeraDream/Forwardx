@@ -62,6 +62,11 @@ async function resolveSavedForwardResult(actor: { id: number; role: string }, ta
   if (!targetIp || targetPort < 1 || targetPort > 65535) throw new Error("引用的已完成转发入口不可用");
   return { id, targetIp, targetPort };
 }
+
+async function isChainBackedForwardGroup(groupId: unknown) {
+  const group = await db.getForwardGroupById(Number(groupId || 0)) as any;
+  return String(group?.groupMode || "") === "chain";
+}
 const mainBackupGostTunnelModes = new Set(["tls", "wss", "tcp", "mtls", "mwss", "mtcp"]);
 
 function isMainBackupGostTunnelMode(mode: unknown) {
@@ -1037,7 +1042,9 @@ export const crudRulesRouter = router({
       // 权限检查：管理员或有 canAddRules 权限的用户
       let currentUser = await db.getUserById(ctx.user.id);
       if (input.forwardGroupId) {
-        if (input.targetRuleId) throw new Error("引用已完成转发仅支持普通端口转发，不能作为转发链的出口");
+        if (input.targetRuleId && await isChainBackedForwardGroup(input.forwardGroupId)) {
+          throw new Error("引用已完成转发仅支持普通端口转发，不能作为转发链的出口");
+        }
         const forwardGroupId = Number(input.forwardGroupId);
         return withKeyedTaskLock(`forward-group:${forwardGroupId}`, async () => {
         const groupReservations: HostPortReservation[] = [];
@@ -1279,7 +1286,8 @@ export const crudRulesRouter = router({
       const rule = await db.getForwardRuleById(input.id);
       if (!rule) throw new Error("规则不存在");
       if (ctx.user.role !== "admin" && rule.userId !== ctx.user.id) throw new Error("无权操作此规则");
-      if (input.targetRuleId !== undefined && (rule as any).isForwardGroupTemplate) {
+      if (input.targetRuleId !== undefined && (rule as any).isForwardGroupTemplate
+        && await isChainBackedForwardGroup((rule as any).forwardGroupId)) {
         throw new Error("引用已完成转发仅支持普通端口转发，不能作为转发链的出口");
       }
       if (input.targetRuleId !== undefined) {
@@ -1703,8 +1711,10 @@ export const crudRulesRouter = router({
       }
 
       if (input.forwardGroupId !== undefined && input.forwardGroupId !== null) {
-        if (input.targetRuleId) throw new Error("引用已完成转发仅支持普通端口转发，不能作为转发链的出口");
         const groupId = Number(input.forwardGroupId);
+        if (input.targetRuleId && await isChainBackedForwardGroup(groupId)) {
+          throw new Error("引用已完成转发仅支持普通端口转发，不能作为转发链的出口");
+        }
         const sourcePort = Number(input.sourcePort ?? (rule as any).sourcePort);
         if (!groupId) throw new Error("请选择转发链或转发组");
         let groupAccess = { isTrafficBillingResource: false };
