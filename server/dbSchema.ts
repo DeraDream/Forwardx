@@ -240,6 +240,7 @@ const tables: TableDef[] = [
       c("isForwardGroupTemplate", "bool", { notNull: true, default: false }),
       c("sourcePort", "int", { notNull: true }), c("targetIp", "text", { notNull: true }),
       c("targetPort", "int", { notNull: true }),
+      c("targetRuleId", "int"),
       c("telegramErrorNotifyEnabled", "bool", { notNull: true, default: false }),
       c("blockHttp", "bool", { notNull: true, default: false }), c("blockSocks", "bool", { notNull: true, default: false }),
       c("blockTls", "bool", { notNull: true, default: false }),
