@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.3.284] - 2026-09-06
+
+### Agent 安装
+
+- 统一新建 Agent 与重新安装 Agent 的安装命令弹窗样式。
+- 重新安装复用当前 Agent Token，并支持 mimic UDP 混淆环境开关。
+- 面板与 APK Release `2.3.284`，Agent `2.2.193`，ForwardX FXP runtime `2.2.117`，Android APP `2.3.97`。
+
+## [2.3.283] - 2026-09-06
+
+### 修复
+
+- 修复普通端口转发引用已完成转发后，保存时丢失引用关系的问题。
+- 修复编辑引用规则时错误恢复为直接地址，以及延迟探测不显示转发链路的问题。
+- 面板与 APK Release `2.3.283`，Agent `2.2.193`，ForwardX FXP runtime `2.2.117`，Android APP `2.3.97`。
+
 ## [2.3.282] - 2026-09-06
 
 ### Agent 安装

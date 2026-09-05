@@ -1042,9 +1042,6 @@ export const crudRulesRouter = router({
       // 权限检查：管理员或有 canAddRules 权限的用户
       let currentUser = await db.getUserById(ctx.user.id);
       if (input.forwardGroupId) {
-        if (input.targetRuleId && await isChainBackedForwardGroup(input.forwardGroupId)) {
-          throw new Error("引用已完成转发仅支持普通端口转发，不能作为转发链的出口");
-        }
         const forwardGroupId = Number(input.forwardGroupId);
         return withKeyedTaskLock(`forward-group:${forwardGroupId}`, async () => {
         const groupReservations: HostPortReservation[] = [];
@@ -1116,6 +1113,19 @@ export const crudRulesRouter = router({
         const group = await db.validateForwardGroupRuleConfig(forwardGroupId, { sourcePort, protocol: input.protocol });
         const isForwardChain = (group as any).groupMode === "chain";
         const isPortGroup = (group as any).groupMode === "port";
+        if (input.targetRuleId && !isPortGroup) {
+          throw new Error("引用已完成转发仅支持普通端口转发，不能作为转发链的出口");
+        }
+        if (input.targetRuleId && isPortGroup) {
+          const savedResult = await resolveSavedForwardResult(ctx.user, input.targetRuleId);
+          if (!savedResult) throw new Error("引用的已完成转发不存在或当前不可用");
+          input = {
+            ...input,
+            targetRuleId: savedResult.id,
+            targetIp: savedResult.targetIp,
+            targetPort: savedResult.targetPort,
+          };
+        }
         if (ctx.user.role !== "admin") {
           await requireTrafficBillingBalanceForRule(ctx.user.id, groupAccess.isTrafficBillingResource);
         }
@@ -1171,7 +1181,7 @@ export const crudRulesRouter = router({
           sourcePort,
           targetIp: normalizeRuleTargetIp(input.targetIp, { tunnelId: forwardType === "gost" && !isForwardChain && (group as any).groupType === "tunnel" ? 1 : null }),
           targetPort: input.targetPort,
-          targetRuleId: null,
+          targetRuleId: input.targetRuleId || null,
           isEnabled: input.isEnabled,
           telegramErrorNotifyEnabled: !!input.telegramErrorNotifyEnabled,
           blockHttp: false,

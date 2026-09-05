@@ -73,6 +73,7 @@ import {
   ArrowUp,
   ArrowUpFromLine,
   ArrowRightLeft,
+  CheckCircle2,
   CalendarDays,
   CircleCheck,
   Clock,
@@ -92,6 +93,7 @@ import {
   Loader2,
   MemoryStick,
   RefreshCw,
+  Copy,
   Search,
   Key,
   Rows3,
@@ -3026,20 +3028,13 @@ function HostsContent() {
       <Dialog open={!!reinstallHost} onOpenChange={(open) => !open && setReinstallHost(null)}>
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
-            <DialogTitle>安装命令已生成</DialogTitle>
-            <DialogDescription>复用当前 Agent Token，停止并覆盖旧 Agent，安装完成后只保留一个活动实例。</DialogDescription>
+            <DialogTitle className="flex items-center gap-2">
+              <CheckCircle2 className="h-5 w-5 text-chart-2" />
+              安装命令已生成
+            </DialogTitle>
+            <DialogDescription>在目标主机执行命令；Agent 上线后会出现在主机列表。</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            {reinstallHost && <div className="rounded-lg border border-border/50 bg-muted/20 p-3 text-sm">
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-muted-foreground">目标主机</span>
-                <span className="font-medium">{reinstallHost.name}</span>
-              </div>
-              <div className="mt-2 flex items-center justify-between gap-3">
-                <span className="text-muted-foreground">当前 Token</span>
-                <span className="font-mono">{reinstallTokenLoading ? "读取中..." : reinstallToken ? "已提取" : "读取失败"}</span>
-              </div>
-            </div>}
             <div className="flex items-start justify-between gap-4 rounded-lg border p-3">
               <div>
                 <Label>安装 mimic UDP 混淆环境</Label>
@@ -3047,11 +3042,26 @@ function HostsContent() {
               </div>
               <Switch checked={reinstallMimic} onCheckedChange={setReinstallMimic} />
             </div>
-            <pre className="max-h-40 overflow-auto rounded-lg bg-muted p-3 text-xs whitespace-pre-wrap">{reinstallToken ? `curl -fsSL "${typeof window !== "undefined" ? window.location.origin : "http://你的面板地址:9810"}/api/agent/install.sh" | FORWARDX_INSTALL_MIMIC=${reinstallMimic ? "yes" : "no"} PANEL_URL="${typeof window !== "undefined" ? window.location.origin : "http://你的面板地址:9810"}" bash -s -- install ${reinstallToken}` : "正在提取当前 Agent Token..."}</pre>
-            <p className="text-xs text-muted-foreground">请在目标 VPS 以 root 执行。install 模式会使用当前 Token，并覆盖旧 Agent 服务；不会生成新的主机。</p>
+            <div className="space-y-2">
+              <p className="text-sm font-medium">快速安装命令：</p>
+              <pre className="max-h-40 overflow-auto rounded-lg border bg-background/50 p-3 text-xs whitespace-pre-wrap">{reinstallToken ? `curl -fsSL "${typeof window !== "undefined" ? window.location.origin : "http://你的面板地址:9810"}/api/agent/install.sh" | FORWARDX_INSTALL_MIMIC=${reinstallMimic ? "yes" : "no"} PANEL_URL="${typeof window !== "undefined" ? window.location.origin : "http://你的面板地址:9810"}" bash -s -- install ${reinstallToken}` : "正在提取当前 Agent Token..."}</pre>
+              <Button
+                variant="outline"
+                className="w-full gap-2"
+                disabled={!reinstallToken || reinstallTokenLoading}
+                onClick={() => {
+                  if (!reinstallToken) return;
+                  const command = `curl -fsSL "${window.location.origin}/api/agent/install.sh" | FORWARDX_INSTALL_MIMIC=${reinstallMimic ? "yes" : "no"} PANEL_URL="${window.location.origin}" bash -s -- install ${reinstallToken}`;
+                  void navigator.clipboard?.writeText(command).then(() => toast.success("已复制安装命令"));
+                }}
+              >
+                <Copy className="h-3 w-3" />
+                复制安装命令
+              </Button>
+            </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setReinstallHost(null)}>关闭</Button>
+            <Button onClick={() => setReinstallHost(null)}>确定</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
