@@ -692,6 +692,8 @@ const IMPORT_TABLE_ORDER = [
   "hosts",
   "landing_hosts",
   "landing_services",
+  "landing_service_traffic_counters",
+  "landing_service_traffic_stats",
   "host_groups",
   "host_group_members",
   "tunnels",
@@ -1124,6 +1126,17 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
     case "landing_services":
       row.hostId = mapRequiredId(maps, "hosts", source.hostId);
       row.userId = mapRequiredId(maps, "users", source.userId);
+      return { row };
+
+    case "landing_service_traffic_counters":
+      row.serviceId = mapRequiredId(maps, "landing_services", source.serviceId);
+      row.hostId = mapRequiredId(maps, "hosts", source.hostId);
+      row.userId = mapRequiredId(maps, "users", source.userId);
+      return { row, existingWhere: { serviceId: row.serviceId, hostId: row.hostId } };
+
+    case "landing_service_traffic_stats":
+      row.serviceId = mapRequiredId(maps, "landing_services", source.serviceId);
+      row.hostId = mapRequiredId(maps, "hosts", source.hostId);
       return { row };
 
     case "host_group_members":

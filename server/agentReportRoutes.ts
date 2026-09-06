@@ -5,6 +5,7 @@ import {
   isAgentForwardGroupLatencyResult,
   isAgentHostProbeServiceResult,
   isAgentHostTrafficStat,
+  isAgentLandingTrafficStat,
   isAgentTcpingResult,
   isAgentTrafficStat,
   isAgentTunnelTcpingResult,
@@ -609,10 +610,18 @@ agentRouter.post("/api/agent/traffic", async (req: Request, res: Response) => {
       : [];
     const compactStats = compactTrafficStats(req.body?.s);
     const stats: AgentTrafficStat[] = objectStats.length > 0 ? objectStats : compactStats;
+    const landingStats = Array.isArray(req.body?.landingStats) ? req.body.landingStats.filter(isAgentLandingTrafficStat) : [];
     reportedStatCount = stats.length;
     const hostTraffic: AgentHostTrafficStat | null = isAgentHostTrafficStat(req.body?.hostTraffic)
       ? req.body.hostTraffic
       : compactHostTraffic(req.body?.h);
+    if (landingStats.length > 0) {
+      const services = await Promise.all(landingStats.map((stat: any) => db.getLandingServiceById(stat.landingServiceId)));
+      await db.recordLandingServiceTraffic(landingStats.flatMap((stat: any, index: number) => {
+        const service: any = services[index];
+        return service && Number(service.hostId) === Number(host.id) ? [{ serviceId: service.id, hostId: Number(host.id), userId: Number(service.userId), bytesIn: Math.max(0, Number(stat.bytesIn) || 0), bytesOut: Math.max(0, Number(stat.bytesOut) || 0) }] : [];
+      }));
+    }
     if (!Array.isArray(req.body?.stats) && !Array.isArray(req.body?.s) && !hostTraffic) {
       res.status(400).json({ error: "stats array or hostTraffic is required" });
       return;
@@ -1256,9 +1265,28 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
       }
     });
 
-    const expectedServices = serviceResults.length > 0 ? await db.getHostProbeTasksForHost(Number(host.id)) as any[] : [];
+    const landingServiceReports = serviceResults.filter((report: any) => Number(report.landingServiceId || 0) > 0);
+    if (landingServiceReports.length > 0) {
+      const marker = await db.getLandingHostByHostId(Number(host.id)) as any;
+      if (marker?.isEnabled !== false) {
+        await Promise.all(landingServiceReports.map(async (report: any) => {
+          const service = await db.getLandingServiceById(Number(report.landingServiceId), false) as any;
+          if (!service || Number(service.hostId) !== Number(host.id) || service.isEnabled === false) return;
+          if (report.targetIp && !sameProbeTarget(report.targetIp, service.latencyTargetHost)) return;
+          if (report.targetPort && Number(report.targetPort) !== Number(service.latencyTargetPort || 443)) return;
+          const latencyMs = typeof report.latencyMs === "number" && report.latencyMs > 0 ? Math.round(report.latencyMs) : null;
+          await db.updateLandingService(Number(service.id), {
+            latestLatencyMs: latencyMs,
+            latestLatencyIsTimeout: !!report.isTimeout || latencyMs === null,
+            latestLatencyAt: new Date(),
+          });
+        }));
+      }
+    }
+    const ordinaryServiceResults = serviceResults.filter((report: any) => Number(report.landingServiceId || 0) <= 0);
+    const expectedServices = ordinaryServiceResults.length > 0 ? await db.getHostProbeTasksForHost(Number(host.id)) as any[] : [];
     const expectedServiceById = new Map(expectedServices.map((service: any) => [Number(service.serviceId), service]));
-    const serviceStats = serviceResults.flatMap((report) => {
+    const serviceStats = ordinaryServiceResults.flatMap((report) => {
       const serviceId = Number(report.serviceId || 0);
       const expected = expectedServiceById.get(serviceId) as any;
       if (!expected) return [];

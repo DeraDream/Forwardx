@@ -9,6 +9,11 @@ export type AgentHostTrafficStat = {
   bytesIn?: number;
   bytesOut?: number;
 };
+export type AgentLandingTrafficStat = { landingServiceId: number; bytesIn?: number; bytesOut?: number; };
+export function isAgentLandingTrafficStat(value: unknown): value is AgentLandingTrafficStat {
+  const item = value as Partial<AgentLandingTrafficStat>;
+  return !!item && Number.isInteger(Number(item.landingServiceId)) && Number(item.landingServiceId) > 0 && isAgentHostTrafficStat(item);
+}
 export type AgentTcpingResult = {
   ruleId: number;
   tunnelId?: number;
@@ -41,6 +46,7 @@ export type AgentTunnelTcpingResult = {
 
 export type AgentHostProbeServiceResult = {
   serviceId: number;
+  landingServiceId?: number;
   targetIp?: string;
   targetPort?: number;
   probeKey?: string;
@@ -150,7 +156,7 @@ export function isAgentTunnelTcpingResult(value: unknown): value is AgentTunnelT
 
 export function isAgentHostProbeServiceResult(value: unknown): value is AgentHostProbeServiceResult {
   const item = value as Partial<AgentHostProbeServiceResult>;
-  return validAgentProbeResult(item, "serviceId");
+  return validAgentProbeResult(item, "serviceId") && validOptionalInteger(item.landingServiceId, 1);
 }
 export function isAgentForwardGroupLatencyResult(value: unknown): value is AgentForwardGroupLatencyResult {
   const item = value as Partial<AgentForwardGroupLatencyResult>;

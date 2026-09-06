@@ -498,6 +498,7 @@ type tcpingTask struct {
 	MemberID        int
 	ProbeType       string
 	ServiceID       int
+	LandingServiceID int
 	Method          string
 	TargetIP        string
 	TargetPort      int
@@ -1108,6 +1109,11 @@ func collectTraffic(cfg Config) time.Duration {
 		}
 	}()
 	stats := []map[string]any{}
+	landingStats := []map[string]any{}
+	for serviceID, counters := range landingIptablesSnapshot() {
+		in, out := landingTrafficDelta(serviceID, counters)
+		if in > 0 || out > 0 { landingStats = append(landingStats, map[string]any{"landingServiceId": serviceID, "bytesIn": in, "bytesOut": out}) }
+	}
 	pendingBaselines := make([]trafficBaselineUpdate, 0, len(states))
 	watched := len(states)
 	reportPanelURL := currentPanelURL(cfg)
@@ -1229,6 +1235,7 @@ func collectTraffic(cfg Config) time.Duration {
 		}
 	}
 	payload := map[string]any{"stats": stats}
+	if len(landingStats) > 0 { payload["landingStats"] = landingStats }
 	if hostTraffic != nil {
 		payload["hostTraffic"] = hostTraffic
 	}
@@ -1242,7 +1249,7 @@ func collectTraffic(cfg Config) time.Duration {
 			payload["h"] = []any{hostTraffic["bytesIn"], hostTraffic["bytesOut"]}
 		}
 	}
-	if reportRuleTraffic || hostTraffic != nil {
+	if reportRuleTraffic || hostTraffic != nil || len(landingStats) > 0 {
 		payload["reportId"] = newTrafficReportID()
 		payload["reportProducerId"] = trafficReportProducerID(reportIdentity)
 		pending := pendingTrafficReport{
@@ -1348,7 +1355,7 @@ func collectTCPing(cfg Config, ruleProbes []ruleLatencyProbe, probes []tunnelPro
 
 	serviceTasks := []tcpingTask{}
 	for _, probe := range serviceProbes {
-		if probe.ServiceID <= 0 || probe.TargetIP == "" {
+		if probe.ServiceID == 0 || probe.TargetIP == "" {
 			continue
 		}
 		method := strings.ToLower(strings.TrimSpace(probe.Method))
@@ -1356,6 +1363,7 @@ func collectTCPing(cfg Config, ruleProbes []ruleLatencyProbe, probes []tunnelPro
 			serviceTasks = append(serviceTasks, tcpingTask{
 				Kind:      "service",
 				ServiceID: probe.ServiceID,
+				LandingServiceID: probe.LandingServiceID,
 				Method:    method,
 				TargetIP:  probe.TargetIP,
 				ProbeKey:  fmt.Sprintf("service:%d:%s:ping", probe.ServiceID, strings.ToLower(strings.TrimSpace(probe.TargetIP))),
@@ -1368,6 +1376,7 @@ func collectTCPing(cfg Config, ruleProbes []ruleLatencyProbe, probes []tunnelPro
 		serviceTasks = append(serviceTasks, tcpingTask{
 			Kind:       "service",
 			ServiceID:  probe.ServiceID,
+			LandingServiceID: probe.LandingServiceID,
 			Method:     "tcping",
 			TargetIP:   probe.TargetIP,
 			TargetPort: probe.TargetPort,
@@ -1869,6 +1878,9 @@ func executeTCPingTaskWithWireGuardProbe(task tcpingTask, wireGuardProbe func(in
 		payload["hopCount"] = task.HopCount
 	case "service":
 		payload["serviceId"] = task.ServiceID
+		if task.LandingServiceID > 0 {
+			payload["landingServiceId"] = task.LandingServiceID
+		}
 		payload["method"] = task.Method
 	default:
 		return tcpingTaskResult{}
@@ -2356,6 +2368,32 @@ func roundPositiveLatency(value string) int {
 func iptablesCounterSnapshot() map[string]trafficCounters {
 	counters, _ := iptablesCounterSnapshotWithDiagnostics()
 	return counters
+}
+
+func landingIptablesSnapshot() map[int]trafficCounters {
+	out := map[int]trafficCounters{}
+	raw, err := commandOutputWithTimeout(5*time.Second, "iptables", "-t", "mangle", "-nvxL")
+	if err != nil { return out }
+	pattern := regexp.MustCompile(`fwx-landing-([0-9]+):(in|out)`)
+	for _, line := range strings.Split(string(raw), "\n") {
+		match := pattern.FindStringSubmatch(line); if len(match) < 3 { continue }
+		fields := strings.Fields(strings.TrimSpace(line)); if len(fields) < 2 { continue }
+		value, parseErr := strconv.ParseUint(fields[1], 10, 64); if parseErr != nil { continue }
+		id, _ := strconv.Atoi(match[1]); current := out[id]
+		if match[2] == "in" { current.In += value } else { current.Out += value }; out[id] = current
+	}
+	return out
+}
+
+func landingTrafficDelta(id int, current trafficCounters) (uint64, uint64) {
+	path := trafficStateDir + fmt.Sprintf("/landing_%d.prev", id)
+	var previous trafficPrevState
+	if raw, err := os.ReadFile(path); err == nil {
+		lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+		if len(lines) >= 2 { previous.in, _ = strconv.ParseUint(lines[0], 10, 64); previous.out, _ = strconv.ParseUint(lines[1], 10, 64) }
+	}
+	_ = writeTrafficStateFile(path, []byte(fmt.Sprintf("%d\n%d\n", current.In, current.Out)), 0644)
+	return delta(current.In, previous.in), delta(current.Out, previous.out)
 }
 
 func iptablesCounterSnapshotWithDiagnostics() (map[string]trafficCounters, trafficDiagnosticsSnapshot) {

@@ -37,7 +37,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.194"
+var Version = "2.2.196"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -2435,6 +2435,7 @@ type ruleLatencyProbe struct {
 
 type hostProbeServiceProbe struct {
 	ServiceID       int    `json:"serviceId"`
+	LandingServiceID int    `json:"landingServiceId,omitempty"`
 	TargetIP        string `json:"targetIp"`
 	TargetPort      int    `json:"targetPort"`
 	Method          string `json:"method"`

@@ -593,21 +593,43 @@ async function fetchPanelBundleAssetStatus(
   accelerator?: GithubAcceleratorConfig | null,
 ): Promise<{ ready: boolean; status: number; url: string }> {
   const url = panelBundleAssetUrl(version);
-  const res = await fetchGithubResource(url, {
-    // GitHub's release CDN may reject HEAD after the redirect from github.com.
-    // A one-byte range GET verifies the asset without downloading the archive.
-    method: "GET",
-    headers: {
-      Range: "bytes=0-0",
-      "Cache-Control": "no-cache",
-      "Pragma": "no-cache",
-      "User-Agent": `ForwardX/${APP_VERSION}`,
-    },
-    redirect: "follow",
-    cache: "no-store",
-  }, accelerator);
-  await res.body?.cancel().catch(() => undefined);
-  return { ready: res.ok, status: res.status, url };
+  try {
+    const res = await fetchGithubResource(url, {
+      // GitHub's release CDN may reject HEAD after the redirect from github.com.
+      // A one-byte range GET verifies the asset without downloading the archive.
+      method: "GET",
+      headers: {
+        Range: "bytes=0-0",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "User-Agent": `ForwardX/${APP_VERSION}`,
+      },
+      redirect: "follow",
+      cache: "no-store",
+    }, accelerator);
+    await res.body?.cancel().catch(() => undefined);
+    return { ready: res.ok, status: res.status, url };
+  } catch (downloadError: any) {
+    // The server's Node runtime can be blocked from following GitHub's release
+    // CDN redirect even when GitHub's API and the installer's curl download work.
+    // Release metadata is authoritative about whether an uploaded asset exists.
+    try {
+      const release = await fetchGithubJson<GithubReleaseInfo>(
+        `${githubApiBase(REPO_URL)}/releases/tags/${encodeURIComponent(`v${normalizeVersion(version)}`)}`,
+        accelerator,
+      );
+      const expectedName = `forwardx-panel-v${normalizeVersion(version)}.tar.gz`;
+      const asset = (release.assets || []).find((item) => item.name === expectedName);
+      if (asset?.state === "uploaded" && Number(asset.size || 0) > 0) {
+        return { ready: true, status: 200, url };
+      }
+      return { ready: false, status: 404, url };
+    } catch (metadataError: any) {
+      const downloadMessage = downloadError?.message || "未知下载错误";
+      const metadataMessage = metadataError?.message || "未知 API 错误";
+      throw new Error(`Release 下载探测失败：${downloadMessage}；Release API 校验失败：${metadataMessage}`);
+    }
+  }
 }
 
 function parseAgentVersionFromVersionsText(text: string) {

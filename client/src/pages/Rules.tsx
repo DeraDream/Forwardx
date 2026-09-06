@@ -106,6 +106,7 @@ import {
   GitBranch,
   Globe,
   RotateCcw,
+  Server,
 } from "lucide-react";
 import type { GlobeMethods } from "react-globe.gl";
 import {
@@ -125,6 +126,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { toast } from "sonner";
 import { useLocation, useSearch } from "wouter";
 import { TcpingDetailDialog } from "@/components/rules/TcpingDetailDialog";
+import { LandingManagement } from "@/components/LandingManagement";
 import { countryFeatureHasCode, normalizeCountryCode, type CountryFeatureLike } from "@/lib/countryFeatures";
 import {
   addHostNodeMeta,
@@ -377,6 +379,7 @@ type RulePageSize = 12 | 24 | 36 | 48;
 type RuleGroupType = keyof typeof desktopRuleTypeLabels;
 type RuleGroupCollapsedState = Partial<Record<RuleGroupType, boolean>>;
 type RuleCategory = "all" | "local" | "tunnel" | "chain" | "group";
+type RulePageTab = RuleCategory | "landing";
 type RuleCategoryCounts = Record<RuleCategory, number>;
 type RuleTransferScopeType = Exclude<RuleCategory, "all">;
 type RuleBatchManageMode = "copy" | "edit" | "export" | "import";
@@ -2260,6 +2263,11 @@ function RulesContent() {
     defaultValue: "all",
     storageKey: ruleCategoryStorageKey,
   });
+  const [rulePageTab, setRulePageTab] = useState<RulePageTab>(ruleCategory);
+  const [landingCreateRequest, setLandingCreateRequest] = useState(0);
+  useEffect(() => {
+    if (rulePageTab !== "landing") setRulePageTab(ruleCategory);
+  }, [ruleCategory, rulePageTab]);
   const [viewMode, setViewMode] = useState<RuleViewMode>(() => getStoredRuleViewMode());
   const [ruleCardSize, setRuleCardSize] = useState<RuleCardSize>(() => getStoredRuleCardSize());
   const effectiveViewMode: RuleViewMode = isMobile ? "card" : viewMode;
@@ -4037,12 +4045,13 @@ function RulesContent() {
   }, [hasFreshRuleCategoryCounts, liveRuleCategoryCounts, ruleCategoryCountsCacheKey]);
   const ruleCategoryCountsReady = hasFreshRuleCategoryCounts || stableRuleCategoryCounts.ready;
   const ruleCategoryCounts = hasFreshRuleCategoryCounts ? liveRuleCategoryCounts : stableRuleCategoryCounts.counts;
-  const ruleCategoryItems = useMemo<SlidingTabItem<RuleCategory>[]>(() => [
+  const ruleCategoryItems = useMemo<SlidingTabItem<RulePageTab>[]>(() => [
     { value: "all", label: "全部", icon: LayoutGrid, badge: ruleCategoryCountsReady ? ruleCategoryCounts.all : null },
     { value: "local", label: desktopRuleTypeLabels.local, icon: ArrowRightLeft, badge: ruleCategoryCountsReady ? ruleCategoryCounts.local : null },
     { value: "tunnel", label: desktopRuleTypeLabels.tunnel, icon: Network, badge: ruleCategoryCountsReady ? ruleCategoryCounts.tunnel : null },
     { value: "chain", label: desktopRuleTypeLabels.chain, icon: GitBranch, badge: ruleCategoryCountsReady ? ruleCategoryCounts.chain : null },
     { value: "group", label: desktopRuleTypeLabels.group, icon: Layers3, badge: ruleCategoryCountsReady ? ruleCategoryCounts.group : null },
+    { value: "landing", label: "落地 SS", icon: Server, badge: null },
   ], [ruleCategoryCounts, ruleCategoryCountsReady]);
   const visibleRuleIdsForMetrics = useMemo(() => (
     Array.from(new Set(filteredRules.map((rule: any) => Number(rule.id)).filter((id: number) => Number.isInteger(id) && id > 0)))
@@ -6229,6 +6238,14 @@ function RulesContent() {
     const next = (value === "local" || value === "tunnel" || value === "chain" || value === "group" ? value : "all") as RuleCategory;
     setRuleCategory(next);
   };
+  const handleRulePageTabChange = (value: string) => {
+    if (value === "landing") {
+      setRulePageTab("landing");
+      return;
+    }
+    handleRuleCategoryChange(value);
+    setRulePageTab(value as RuleCategory);
+  };
 
   const handleFilterUserChange = (value: string) => {
     setFilterUser(value);
@@ -6555,6 +6572,20 @@ function RulesContent() {
     );
   };
 
+  if (rulePageTab === "landing") {
+    const landingViewMode = displayMode === "table" ? "table" : displayMode === "compact" ? "compact" : "card";
+    return (
+      <div className="space-y-6">
+        <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
+          <div className="min-w-0"><h1 className="text-xl sm:text-2xl font-bold tracking-tight">转发规则</h1><p className="mt-1 text-xs text-muted-foreground sm:text-sm">管理转发规则和运行状态</p></div>
+          <div className="flex w-full gap-2 sm:w-auto sm:items-center sm:justify-end"><div className="hidden items-center overflow-hidden rounded-md border border-border/40 md:flex"><Button variant={landingViewMode === "compact" ? "secondary" : "ghost"} size="icon" className="h-8 w-8 rounded-none" title="紧凑样式" onClick={() => handleDisplayModeChange("compact")}><Rows3 className="h-4 w-4" /></Button><Button variant={landingViewMode === "card" ? "secondary" : "ghost"} size="icon" className="h-8 w-8 rounded-none" title="方块样式" onClick={() => handleDisplayModeChange("standard")}><LayoutGrid className="h-4 w-4" /></Button><Button variant={landingViewMode === "table" ? "secondary" : "ghost"} size="icon" className="h-8 w-8 rounded-none" title="列表样式" onClick={() => handleDisplayModeChange("table")}><List className="h-4 w-4" /></Button></div><Button className="ml-auto gap-2 sm:ml-0" onClick={() => setLandingCreateRequest(Date.now())}><Plus className="h-4 w-4" />新建落地</Button></div>
+        </div>
+        <Tabs value={rulePageTab} onValueChange={handleRulePageTabChange}><SlidingTabsList items={ruleCategoryItems} activeValue={rulePageTab} ariaLabel="转发规则分类" minItemWidthRem={8.5} /></Tabs>
+        <LandingManagement viewMode={landingViewMode} createRequestKey={landingCreateRequest} />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
@@ -6664,7 +6695,7 @@ function RulesContent() {
         </div>
       )}
 
-      {(user?.role === "admin" || ruleScopeTotal > 0 || hasActiveRuleFilter || (rules && rules.length > 0)) && (
+      {(user?.role === "admin" || ruleScopeTotal > 0 || hasActiveRuleFilter || (rules && rules.length > 0) || (hosts?.length ?? 0) > 0) && (
         <div className="space-y-3">
           <div className="grid gap-2 sm:flex sm:flex-wrap sm:items-center sm:gap-3">
             <div className="flex items-center gap-2">
@@ -6734,8 +6765,8 @@ function RulesContent() {
             </Select>
           </div>
 
-          <Tabs value={ruleCategory} onValueChange={handleRuleCategoryChange}>
-            <SlidingTabsList items={ruleCategoryItems} activeValue={ruleCategory} ariaLabel="转发规则分类" minItemWidthRem={8.5} />
+          <Tabs value={rulePageTab} onValueChange={handleRulePageTabChange}>
+            <SlidingTabsList items={ruleCategoryItems} activeValue={rulePageTab} ariaLabel="转发规则分类" minItemWidthRem={8.5} />
           </Tabs>
         </div>
       )}
@@ -7295,8 +7326,9 @@ function RulesContent() {
                     ...form,
                     targetRuleId: result?.id || null,
                     targetLandingServiceId: landing?.id || null,
-                    targetIp: result ? String(result.targetIp || "") : landing ? String(landing.targetIp || "0.0.0.0") : form.targetIp,
+                    targetIp: result ? String(result.targetIp || "") : landing ? String(landing.endpoint || landing.host?.ip || landing.targetIp || "") : form.targetIp,
                     targetPort: result ? Number(result.sourcePort || 0) : landing ? Number(landing.port || 0) : form.targetPort,
+                    sourcePort: result ? Number(result.sourcePort || 0) : landing ? Number(landing.port || 0) : form.sourcePort,
                   });
                 }}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
@@ -7398,12 +7430,12 @@ function RulesContent() {
                   <Label>已完成转发（转发链落地）</Label>
                   <Select value={String(form.targetRuleId)} onValueChange={(value) => {
                     const result = availableSavedForwardResults.find((item: any) => Number(item.id) === Number(value));
-                    setForm({ ...form, targetRuleId: Number(value), targetIp: String(result?.targetIp || ""), targetPort: Number(result?.sourcePort || 0) });
+                    setForm({ ...form, targetRuleId: Number(value), targetIp: String(result?.targetIp || ""), targetPort: Number(result?.sourcePort || 0), sourcePort: Number(result?.sourcePort || 0) });
                   }}>
                     <SelectTrigger><SelectValue placeholder="请选择链上已完成转发" /></SelectTrigger>
                     <SelectContent>{availableSavedForwardResults.map((result: any) => {
                       const group = forwardGroupById.get(Number(result.forwardGroupId));
-                      return <SelectItem key={result.id} value={String(result.id)}>{group?.name || "转发链"} / {result.name} · {result.targetIp || "未解析 IP"}</SelectItem>;
+                      return <SelectItem key={result.id} value={String(result.id)}>{group?.name || "转发链"} / {result.name} · {result.targetIp || "未解析 IP"}:{Number(result.sourcePort || 0) || "-"}</SelectItem>;
                     })}</SelectContent>
                   </Select>
                   <p className="text-xs text-muted-foreground">选择后将跟随该转发链落地规则，目标地址和目标端口由链路自动解析。</p>
@@ -7413,10 +7445,10 @@ function RulesContent() {
                   <Label>落地服务（地址与端口由服务自动解析）</Label>
                   <Select value={String(form.targetLandingServiceId)} onValueChange={(value) => {
                     const service = availableLandingServices.find((item: any) => Number(item.id) === Number(value));
-                    setForm({ ...form, targetLandingServiceId: Number(value), targetRuleId: null, targetIp: String(service?.targetIp || "0.0.0.0"), targetPort: Number(service?.port || 0) });
+                    setForm({ ...form, targetLandingServiceId: Number(value), targetRuleId: null, targetIp: String(service?.endpoint || service?.host?.ip || service?.targetIp || ""), targetPort: Number(service?.port || 0), sourcePort: Number(service?.port || 0) });
                   }}>
                     <SelectTrigger><SelectValue placeholder="请选择落地服务" /></SelectTrigger>
-                    <SelectContent>{availableLandingServices.map((service: any) => <SelectItem key={service.id} value={String(service.id)}>{service.name} · {service.protocol.toUpperCase()} · :{service.port}</SelectItem>)}</SelectContent>
+                    <SelectContent>{availableLandingServices.map((service: any) => <SelectItem key={service.id} value={String(service.id)}>{service.name} · {service.host?.ip || service.endpoint || service.targetIp || "未解析 IP"}:{service.port}</SelectItem>)}</SelectContent>
                   </Select>
                   <p className="text-xs text-muted-foreground">规则会始终转发到该落地 VPS 的 SS 监听端口。</p>
                 </div>

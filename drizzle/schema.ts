@@ -311,6 +311,7 @@ export const landingHosts = table("landing_hosts", {
   id: serial("id"),
   hostId: int("hostId").notNull().unique(),
   userId: int("userId").notNull(),
+  isEnabled: boolean("isEnabled").notNull().default(true),
   createdAt: epoch("createdAt").notNull().default(nowDefault()),
   updatedAt: epoch("updatedAt").notNull().default(nowDefault()),
 });
@@ -329,6 +330,12 @@ export const landingServices = table("landing_services", {
   method: varchar("method", { length: 96 }).notNull(),
   password: text("password").notNull(),
   port: int("port").notNull(),
+  endpoint: text("endpoint"),
+  latencyTargetHost: text("latencyTargetHost").notNull().default("1.1.1.1"),
+  latencyTargetPort: int("latencyTargetPort").notNull().default(443),
+  latestLatencyMs: int("latestLatencyMs"),
+  latestLatencyIsTimeout: boolean("latestLatencyIsTimeout").notNull().default(false),
+  latestLatencyAt: epoch("latestLatencyAt"),
   isEnabled: boolean("isEnabled").notNull().default(true),
   status: varchar("status", { length: 24 }).notNull().default("pending"),
   statusMessage: text("statusMessage"),
@@ -336,6 +343,16 @@ export const landingServices = table("landing_services", {
   updatedAt: epoch("updatedAt").notNull().default(nowDefault()),
 });
 export type LandingService = typeof landingServices.$inferSelect;
+
+export const landingServiceTrafficCounters = table("landing_service_traffic_counters", {
+  id: serial("id"), serviceId: int("serviceId").notNull(), hostId: int("hostId").notNull(), userId: int("userId").notNull(),
+  bytesIn: bigint("bytesIn", { mode: "number" }).notNull().default(0), bytesOut: bigint("bytesOut", { mode: "number" }).notNull().default(0),
+  updatedAt: epoch("updatedAt").notNull().default(nowDefault()),
+});
+export const landingServiceTrafficStats = table("landing_service_traffic_stats", {
+  id: serial("id"), serviceId: int("serviceId").notNull(), hostId: int("hostId").notNull(),
+  bytesIn: bigint("bytesIn", { mode: "number" }).notNull().default(0), bytesOut: bigint("bytesOut", { mode: "number" }).notNull().default(0), recordedAt: epoch("recordedAt").notNull().default(nowDefault()),
+});
 
 export const hostGroups = table("host_groups", {
   id: serial("id"),

@@ -125,7 +125,7 @@ import {
 } from "recharts";
 import MultiHopEditor from "@/components/MultiHopEditor";
 import { ForwardGroupsContent } from "@/pages/ForwardGroups";
-import { LandingManagement } from "@/components/LandingManagement";
+import { LandingHostManagement } from "@/components/LandingManagement";
 
 const loadReactGlobe = () => import("react-globe.gl");
 const ReactGlobe = lazy(loadReactGlobe) as typeof import("react-globe.gl").default;
@@ -4412,8 +4412,8 @@ function TunnelsContent() {
           </TunnelSectionTransition>
         </TabsContent>
         <TabsContent value="landing" className="space-y-4">
-          <TunnelSectionTransition transitionKey={activeSectionTransitionKey}>
-            <LandingManagement />
+          <TunnelSectionTransition transitionKey={`landing-host-markers-${groupViewMode}`}>
+            <LandingHostManagement viewMode={groupViewMode} />
           </TunnelSectionTransition>
         </TabsContent>
       </Tabs>
