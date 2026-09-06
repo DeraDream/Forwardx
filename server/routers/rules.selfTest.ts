@@ -50,6 +50,12 @@ export const selfTestRulesRouter = router({
           const batchId = createHopTestBatch("saved-forward", Number(rule.id));
           const testHostIds = new Set<number>();
           const hopCount = probes.length + 1;
+          const chainLatencyMode = probes.some((probe) => probe.method === "tcp")
+            && ["iptables", "nftables"].includes(String(savedChain.forwardType || "").trim().toLowerCase())
+            ? Number(savedChain.entryGroupId || 0) > 0
+              ? "multi-source-remaining-path"
+              : "remaining-path"
+            : "sum";
           const sourceHost = await db.getHostById(Number(rule.hostId));
           const sourceName = String((sourceHost as any)?.name || `主机${rule.hostId}`).trim();
           const entryHost = await db.getHostById(Number(probes[0].fromHostId));
@@ -60,7 +66,7 @@ export const selfTestRulesRouter = router({
             message: JSON.stringify({ kind: "forward-chain", groupId: savedChain.id, ruleId: rule.id,
               entryIp: rule.targetIp, entrySourcePort: rule.targetPort, targetIp: rule.targetIp, targetPort: rule.targetPort,
               method: linkProbeMethodForRule(rule), hopLabel: `1/${hopCount} ${sourceName}->${entryName}`,
-              routeLabel: `${sourceName} -> ${entryName}`, batchId, latencyMode: "sum", runtimeDependent: true }),
+              routeLabel: `${sourceName} -> ${entryName}`, batchId, latencyMode: chainLatencyMode, runtimeDependent: true }),
           });
           registerHopTest(batchId, Number(outerTestId));
           testHostIds.add(Number(rule.hostId));
@@ -71,7 +77,7 @@ export const selfTestRulesRouter = router({
               message: JSON.stringify({ kind: "forward-chain", groupId: savedChain.id, ruleId: rule.id,
                 entryIp: probe.targetIp, entrySourcePort: probe.targetPort, targetIp: probe.targetIp, targetPort: probe.targetPort,
                 method: probe.method, hopLabel: `${index + 2}/${hopCount} ${probe.hopLabel}`, routeLabel: probe.routeLabel,
-                batchId, latencyMode: "sum", runtimeDependent: probe.runtimeDependent }),
+                batchId, latencyMode: chainLatencyMode, runtimeDependent: probe.runtimeDependent }),
             });
             registerHopTest(batchId, Number(testId));
             testHostIds.add(Number(probe.fromHostId));

@@ -594,15 +594,19 @@ async function fetchPanelBundleAssetStatus(
 ): Promise<{ ready: boolean; status: number; url: string }> {
   const url = panelBundleAssetUrl(version);
   const res = await fetchGithubResource(url, {
-    method: "HEAD",
-    redirect: "follow",
-    cache: "no-store",
+    // GitHub's release CDN may reject HEAD after the redirect from github.com.
+    // A one-byte range GET verifies the asset without downloading the archive.
+    method: "GET",
     headers: {
+      Range: "bytes=0-0",
       "Cache-Control": "no-cache",
       "Pragma": "no-cache",
       "User-Agent": `ForwardX/${APP_VERSION}`,
     },
+    redirect: "follow",
+    cache: "no-store",
   }, accelerator);
+  await res.body?.cancel().catch(() => undefined);
   return { ready: res.ok, status: res.status, url };
 }
 
