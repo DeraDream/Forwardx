@@ -353,6 +353,11 @@ export const landingServiceTrafficStats = table("landing_service_traffic_stats",
   id: serial("id"), serviceId: int("serviceId").notNull(), hostId: int("hostId").notNull(),
   bytesIn: bigint("bytesIn", { mode: "number" }).notNull().default(0), bytesOut: bigint("bytesOut", { mode: "number" }).notNull().default(0), recordedAt: epoch("recordedAt").notNull().default(nowDefault()),
 });
+export const landingServiceLatencyStats = table("landing_service_latency_stats", {
+  id: serial("id"), serviceId: int("serviceId").notNull(), hostId: int("hostId").notNull(),
+  latencyMs: int("latencyMs"), isTimeout: boolean("isTimeout").notNull().default(false),
+  recordedAt: epoch("recordedAt").notNull().default(nowDefault()),
+});
 
 export const hostGroups = table("host_groups", {
   id: serial("id"),

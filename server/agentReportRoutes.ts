@@ -1269,18 +1269,21 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
     if (landingServiceReports.length > 0) {
       const marker = await db.getLandingHostByHostId(Number(host.id)) as any;
       if (marker?.isEnabled !== false) {
+        const acceptedLandingStats: Array<{ serviceId: number; hostId: number; latencyMs: number | null; isTimeout: boolean }> = [];
         await Promise.all(landingServiceReports.map(async (report: any) => {
           const service = await db.getLandingServiceById(Number(report.landingServiceId), false) as any;
           if (!service || Number(service.hostId) !== Number(host.id) || service.isEnabled === false) return;
           if (report.targetIp && !sameProbeTarget(report.targetIp, service.latencyTargetHost)) return;
           if (report.targetPort && Number(report.targetPort) !== Number(service.latencyTargetPort || 443)) return;
           const latencyMs = typeof report.latencyMs === "number" && report.latencyMs > 0 ? Math.round(report.latencyMs) : null;
+          acceptedLandingStats.push({ serviceId: Number(service.id), hostId: Number(host.id), latencyMs, isTimeout: !!report.isTimeout || latencyMs === null });
           await db.updateLandingService(Number(service.id), {
             latestLatencyMs: latencyMs,
             latestLatencyIsTimeout: !!report.isTimeout || latencyMs === null,
             latestLatencyAt: new Date(),
           });
         }));
+        if (acceptedLandingStats.length > 0) await db.recordLandingServiceLatency(acceptedLandingStats);
       }
     }
     const ordinaryServiceResults = serviceResults.filter((report: any) => Number(report.landingServiceId || 0) <= 0);

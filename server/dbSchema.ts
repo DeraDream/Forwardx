@@ -29,6 +29,7 @@ export const MIGRATION_TABLES = [
   "landing_services",
   "landing_service_traffic_counters",
   "landing_service_traffic_stats",
+  "landing_service_latency_stats",
   "host_groups",
   "host_group_members",
   "tunnels",
@@ -220,6 +221,9 @@ const tables: TableDef[] = [
   },
   {
     name: "landing_service_traffic_stats", columns: [c("id", "id"), c("serviceId", "int", { notNull: true }), c("hostId", "int", { notNull: true }), c("bytesIn", "bigint", { notNull: true, default: 0 }), c("bytesOut", "bigint", { notNull: true, default: 0 }), c("recordedAt", "epoch", { notNull: true, default: "now" })], indexes: [["serviceId", "recordedAt"], ["hostId", "recordedAt"]],
+  },
+  {
+    name: "landing_service_latency_stats", columns: [c("id", "id"), c("serviceId", "int", { notNull: true }), c("hostId", "int", { notNull: true }), c("latencyMs", "int"), c("isTimeout", "bool", { notNull: true, default: false }), c("recordedAt", "epoch", { notNull: true, default: "now" })], indexes: [["serviceId", "recordedAt"], ["hostId", "recordedAt"]],
   },
   {
     name: "host_groups",

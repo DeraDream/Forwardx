@@ -1,7 +1,7 @@
 import { protectedProcedure, router } from "../_core/trpc";
 import { z } from "zod";
 import * as db from "../db";
-import { pushAgentRefresh } from "../agentEvents";
+import { pushAgentRefresh, requestHostTcping } from "../agentEvents";
 import { getLandingPortCheck, requestLandingPortCheck } from "../landingPortChecks";
 
 const METHODS = [
@@ -101,6 +101,21 @@ export const landingRouter = router({
     return { success: true };
   }),
   list: protectedProcedure.query(async ({ ctx }) => db.getLandingServices(isAdmin(ctx.user) ? undefined : ctx.user.id, true)),
+  latencySeries: protectedProcedure.input(z.object({ id: z.number().int().positive(), hours: z.number().min(0.5).max(72).default(24) })).query(async ({ input, ctx }) => {
+    const service = await db.getLandingServiceById(input.id, false) as any;
+    if (!service) throw new Error("落地服务不存在");
+    if (!isAdmin(ctx.user) && Number(service.userId) !== Number(ctx.user.id)) throw new Error("无权查看此服务");
+    return db.getLandingServiceLatencySeries(Number(service.id), new Date(Date.now() - input.hours * 3600 * 1000));
+  }),
+  startLatencyTest: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ input, ctx }) => {
+    const service = await db.getLandingServiceById(input.id, false) as any;
+    if (!service) throw new Error("落地服务不存在");
+    if (!isAdmin(ctx.user) && Number(service.userId) !== Number(ctx.user.id)) throw new Error("无权测试此服务");
+    if (service.isEnabled === false || service.status === "removing") throw new Error("该落地服务未运行，无法探测");
+    requestHostTcping(Number(service.hostId));
+    pushAgentRefresh(Number(service.hostId), "landing-service-tcping", { urgent: true });
+    return { queued: true };
+  }),
   checkPort: protectedProcedure.input(z.object({ hostId: z.number().int().positive(), port: z.number().int().min(1).max(65535), excludeId: z.number().int().positive().optional() })).query(async ({ input, ctx }) => {
     await requireEligibleHost(ctx.user, input.hostId);
     const services = await db.getLandingServicesForHost(input.hostId);

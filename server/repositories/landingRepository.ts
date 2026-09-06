@@ -120,3 +120,22 @@ export async function recordLandingServiceTraffic(items: Array<{ serviceId: numb
     await executeRaw(`INSERT INTO ${q("landing_service_traffic_counters")} (${q("serviceId")},${q("hostId")},${q("userId")},${q("bytesIn")},${q("bytesOut")},${q("updatedAt")}) VALUES (?,?,?,?,?,?) ${suffix}`, [item.serviceId,item.hostId,item.userId,item.bytesIn,item.bytesOut,now]);
   }
 }
+
+export async function recordLandingServiceLatency(items: Array<{ serviceId: number; hostId: number; latencyMs: number | null; isTimeout: boolean }>) {
+  const q = quoteIdentifier; const now = epochSeconds(nowDate());
+  for (const item of items) {
+    await executeRaw(
+      `INSERT INTO ${q("landing_service_latency_stats")} (${q("serviceId")},${q("hostId")},${q("latencyMs")},${q("isTimeout")},${q("recordedAt")}) VALUES (?,?,?,?,?)`,
+      [item.serviceId, item.hostId, item.latencyMs, item.isTimeout, now],
+    );
+  }
+}
+
+export async function getLandingServiceLatencySeries(serviceId: number, since: Date) {
+  const q = quoteIdentifier; const cutoff = epochSeconds(since);
+  const rows = await queryRaw<any>(
+    `SELECT ${q("latencyMs")} latencyMs, ${q("isTimeout")} isTimeout, ${q("recordedAt")} recordedAt FROM ${q("landing_service_latency_stats")} WHERE ${q("serviceId")} = ? AND ${q("recordedAt")} >= ? ORDER BY ${q("recordedAt")} ASC, ${q("id")} ASC`,
+    [serviceId, cutoff],
+  ).catch(() => []);
+  return rows.map((row: any) => ({ latencyMs: row.latencyMs === null || row.latencyMs === undefined ? null : Number(row.latencyMs), isTimeout: bool(row.isTimeout), recordedAt: asDate(row.recordedAt) }));
+}

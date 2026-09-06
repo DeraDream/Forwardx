@@ -170,9 +170,13 @@ async function applyAgentRuleStatus(host: any, payload: any): Promise<AgentStatu
       if (!service || Number(service.hostId) !== Number(host.id)) {
         return { status: 404, body: { error: "landing service not found" } };
       }
-      if (!isRunning && String(service.status) === "removing") {
-        await db.deleteLandingService(landingServiceId);
-        return { status: 200, body: { success: true } };
+      if (String(service.status) === "removing") {
+        // A delayed success report from an older apply action must never
+        // resurrect a service that the user has explicitly deleted.
+        if (!isRunning) {
+          await db.deleteLandingService(landingServiceId);
+        }
+        return { status: 200, body: { success: true, removing: true } };
       }
       await db.updateLandingService(landingServiceId, {
         status: isRunning ? "running" : "error",
