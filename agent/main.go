@@ -37,7 +37,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.193"
+var Version = "2.2.194"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -2322,6 +2322,8 @@ type action struct {
 	StatusType                string              `json:"statusType"`
 	RuleID                    int                 `json:"ruleId"`
 	PluginID                  string              `json:"pluginId,omitempty"`
+	LandingServiceID          int                 `json:"landingServiceId,omitempty"`
+	LandingPortCheckID        string              `json:"landingPortCheckId,omitempty"`
 	IssuedAt                  int64               `json:"issuedAt,omitempty"`
 	ConfigRevision            int64               `json:"configRevision,omitempty"`
 	ConfigHash                string              `json:"configHash,omitempty"`
@@ -5565,10 +5567,16 @@ func runtimeActionKey(a action) string {
 	if isWireGuardRuntimeAction(a) && a.TunnelID > 0 {
 		return key + ":" + strconv.Itoa(a.TunnelID)
 	}
+	if strings.HasPrefix(key, "landing-ss-service-") && a.LandingServiceID > 0 {
+		return key + ":" + strconv.Itoa(a.LandingServiceID)
+	}
 	return key
 }
 
 func runtimeActionServicesHealthy(a action) bool {
+	if strings.HasPrefix(strings.TrimSpace(a.ForwardType), "landing-ss-service-") && a.LandingServiceID > 0 {
+		return managedServiceActive(fmt.Sprintf("forwardx-ss-%d", a.LandingServiceID))
+	}
 	if isWireGuardRuntimeAction(a) {
 		if a.Op == "remove" {
 			return !wireGuardRuntimeReady(a.TunnelID, nil)

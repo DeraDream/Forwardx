@@ -125,6 +125,7 @@ import {
 } from "recharts";
 import MultiHopEditor from "@/components/MultiHopEditor";
 import { ForwardGroupsContent } from "@/pages/ForwardGroups";
+import { LandingManagement } from "@/components/LandingManagement";
 
 const loadReactGlobe = () => import("react-globe.gl");
 const ReactGlobe = lazy(loadReactGlobe) as typeof import("react-globe.gl").default;
@@ -781,10 +782,10 @@ function getTunnelModeDisplay(mode: unknown, showNginxLabel = true, forwardxVers
 }
 
 type TunnelViewMode = "card" | "table" | "globe";
-type TunnelSection = "tunnels" | "ports" | "chains" | "groups" | "entries" | "exits";
+type TunnelSection = "tunnels" | "ports" | "chains" | "groups" | "entries" | "exits" | "landing";
 type TunnelGroupMode = "port" | "failover" | "entry" | "exit";
 
-const TUNNEL_SECTIONS = ["tunnels", "ports", "chains", "groups", "entries", "exits"] as const;
+const TUNNEL_SECTIONS = ["tunnels", "ports", "chains", "groups", "entries", "exits", "landing"] as const;
 const TUNNEL_SECTION_ITEMS = [
   { value: "tunnels", label: "隧道链路", icon: Network },
   { value: "ports", label: "端口转发", icon: ArrowRightLeft },
@@ -792,6 +793,7 @@ const TUNNEL_SECTION_ITEMS = [
   { value: "groups", label: "转发组", icon: ShieldCheck },
   { value: "entries", label: "入口组", icon: LogIn },
   { value: "exits", label: "出口组", icon: LogOut },
+  { value: "landing", label: "落地机", icon: Server },
 ] as const satisfies readonly SlidingTabItem<TunnelSection>[];
 
 const TUNNEL_SECTION_STORAGE_KEY = "forwardx.tunnels.section";
@@ -4407,6 +4409,11 @@ function TunnelsContent() {
               searchQuery={normalizedLinkSearchQuery}
               createRequestKey={groupCreateRequest?.mode === "exit" ? groupCreateRequest.requestKey : undefined}
             />
+          </TunnelSectionTransition>
+        </TabsContent>
+        <TabsContent value="landing" className="space-y-4">
+          <TunnelSectionTransition transitionKey={activeSectionTransitionKey}>
+            <LandingManagement />
           </TunnelSectionTransition>
         </TabsContent>
       </Tabs>

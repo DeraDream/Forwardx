@@ -25,6 +25,8 @@ const c = (name: string, type: ColumnType, opts: Omit<ColumnDef, "name" | "type"
 export const MIGRATION_TABLES = [
   "users",
   "hosts",
+  "landing_hosts",
+  "landing_services",
   "host_groups",
   "host_group_members",
   "tunnels",
@@ -221,6 +223,25 @@ const tables: TableDef[] = [
     indexes: [["userId", "sortOrder"], ["userId", "createdAt"], ["isEnabled"]],
   },
   {
+    name: "landing_hosts",
+    columns: [
+      c("id", "id"), c("hostId", "int", { notNull: true }), c("userId", "int", { notNull: true }),
+      c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }),
+    ],
+    unique: [["hostId"]], indexes: [["userId"], ["hostId"]],
+  },
+  {
+    name: "landing_services",
+    columns: [
+      c("id", "id"), c("hostId", "int", { notNull: true }), c("userId", "int", { notNull: true }), c("name", "text", { notNull: true }),
+      c("protocol", "varchar", { length: 16, notNull: true, default: "ss" }), c("method", "varchar", { length: 96, notNull: true }),
+      c("password", "text", { notNull: true }), c("port", "int", { notNull: true }), c("isEnabled", "bool", { notNull: true, default: true }),
+      c("status", "varchar", { length: 24, notNull: true, default: "pending" }), c("statusMessage", "text"),
+      c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }),
+    ],
+    unique: [["hostId", "port"]], indexes: [["userId"], ["hostId"], ["hostId", "isEnabled"]],
+  },
+  {
     name: "host_group_members",
     columns: [
       c("id", "id"), c("groupId", "int", { notNull: true }), c("hostId", "int", { notNull: true }),
@@ -240,7 +261,7 @@ const tables: TableDef[] = [
       c("isForwardGroupTemplate", "bool", { notNull: true, default: false }),
       c("sourcePort", "int", { notNull: true }), c("targetIp", "text", { notNull: true }),
       c("targetPort", "int", { notNull: true }),
-      c("targetRuleId", "int"),
+      c("targetRuleId", "int"), c("targetLandingServiceId", "int"),
       c("telegramErrorNotifyEnabled", "bool", { notNull: true, default: false }),
       c("blockHttp", "bool", { notNull: true, default: false }), c("blockSocks", "bool", { notNull: true, default: false }),
       c("blockTls", "bool", { notNull: true, default: false }),

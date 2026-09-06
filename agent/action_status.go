@@ -22,6 +22,8 @@ type actionStatusPayload struct {
 	Message     string `json:"message,omitempty"`
 	ForwardType string `json:"forwardType,omitempty"`
 	Protocol    string `json:"protocol,omitempty"`
+	LandingServiceID int `json:"landingServiceId,omitempty"`
+	LandingPortCheckID string `json:"landingPortCheckId,omitempty"`
 	IssuedAt    int64  `json:"issuedAt,omitempty"`
 }
 
@@ -62,6 +64,8 @@ func enqueueActionStatusReport(cfg Config, a action, running bool, message strin
 		Message:     strings.TrimSpace(message),
 		ForwardType: strings.TrimSpace(a.ForwardType),
 		Protocol:    strings.TrimSpace(a.Protocol),
+		LandingServiceID: a.LandingServiceID,
+		LandingPortCheckID: a.LandingPortCheckID,
 		IssuedAt:    a.IssuedAt,
 	}
 	if payload.StatusType == "" {

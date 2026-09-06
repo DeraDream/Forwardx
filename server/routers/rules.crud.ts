@@ -68,6 +68,19 @@ async function resolveSavedForwardResult(actor: { id: number; role: string }, ta
   return { id, targetIp, targetPort };
 }
 
+async function resolveLandingServiceTarget(actor: { id: number; role: string }, targetLandingServiceId: unknown) {
+  const id = Number(targetLandingServiceId || 0);
+  if (!Number.isInteger(id) || id <= 0) return null;
+  const service = await db.getLandingServiceById(id, true) as any;
+  if (!service || !service.isEnabled || service.status === "removing") throw new Error("引用的落地服务不存在或未启用");
+  if (actor.role !== "admin" && Number(service.userId) !== Number(actor.id)) throw new Error("无权引用该落地服务");
+  const host = await db.getHostById(Number(service.hostId)) as any;
+  const targetIp = String(host?.entryIp || host?.ipv4 || host?.ip || "").trim();
+  const targetPort = Number(service.port || 0);
+  if (!targetIp || targetPort < 1 || targetPort > 65535) throw new Error("落地服务地址不可用");
+  return { id, targetIp, targetPort };
+}
+
 async function isChainBackedForwardGroup(groupId: unknown) {
   const group = await db.getForwardGroupById(Number(groupId || 0)) as any;
   return String(group?.groupMode || "") === "chain";
@@ -891,10 +904,14 @@ export async function createDirectForwardRuleForActor(
   const host = await db.getHostById(hostId);
   if (!host) throw new Error("主机不存在");
   const savedResult = await resolveSavedForwardResult(actor, input.targetRuleId);
+  const landingTarget = await resolveLandingServiceTarget(actor, input.targetLandingServiceId);
+  if (savedResult && landingTarget) throw new Error("只能选择一种引用落地目标");
   if (savedResult) {
     input = { ...input, targetIp: savedResult.targetIp, targetPort: savedResult.targetPort, targetRuleId: savedResult.id };
+  } else if (landingTarget) {
+    input = { ...input, targetIp: landingTarget.targetIp, targetPort: landingTarget.targetPort, targetRuleId: null, targetLandingServiceId: landingTarget.id };
   } else {
-    input = { ...input, targetRuleId: null };
+    input = { ...input, targetRuleId: null, targetLandingServiceId: null };
   }
   const entryPolicy = selectedTunnelForRule
     ? combinePortPolicies(
@@ -989,6 +1006,7 @@ export async function createDirectForwardRuleForActor(
       hostId,
       targetIp: normalizeRuleTargetIp(input.targetIp, { tunnelId }),
       targetRuleId: input.targetRuleId || null,
+      targetLandingServiceId: input.targetLandingServiceId || null,
       gostMode: "direct",
       gostRelayHost: null,
       gostRelayPort: null,
@@ -1033,6 +1051,7 @@ export const crudRulesRouter = router({
       ),
       targetPort: z.number().min(1).max(65535),
       targetRuleId: z.number().int().positive().nullable().optional(),
+      targetLandingServiceId: z.number().int().positive().nullable().optional(),
       isEnabled: z.boolean().optional().default(true),
       telegramErrorNotifyEnabled: z.boolean().optional().default(false),
       blockHttp: z.boolean().optional(),
@@ -1044,6 +1063,15 @@ export const crudRulesRouter = router({
     }))
     .mutation(async ({ input, ctx }) => {
       await requireRuleTelegramNotifyReady(input.telegramErrorNotifyEnabled);
+      if (input.targetLandingServiceId) {
+        const landingTarget = await resolveLandingServiceTarget(ctx.user, input.targetLandingServiceId);
+        if (landingTarget) Object.assign(input, {
+          targetLandingServiceId: landingTarget.id,
+          targetRuleId: null,
+          targetIp: landingTarget.targetIp,
+          targetPort: landingTarget.targetPort,
+        });
+      }
       // 权限检查：管理员或有 canAddRules 权限的用户
       let currentUser = await db.getUserById(ctx.user.id);
       if (input.forwardGroupId) {
@@ -1254,6 +1282,7 @@ export const crudRulesRouter = router({
       ).optional(),
       targetPort: z.number().min(1).max(65535).optional(),
       targetRuleId: z.number().int().positive().nullable().optional(),
+      targetLandingServiceId: z.number().int().positive().nullable().optional(),
       telegramErrorNotifyEnabled: z.boolean().optional(),
       blockHttp: z.boolean().optional(),
       blockSocks: z.boolean().optional(),
@@ -1310,6 +1339,12 @@ export const crudRulesRouter = router({
         Object.assign(input, savedResult
           ? { targetRuleId: savedResult.id, targetIp: savedResult.targetIp, targetPort: savedResult.targetPort }
           : { targetRuleId: null });
+      }
+      if (input.targetLandingServiceId !== undefined) {
+        const landingTarget = await resolveLandingServiceTarget(ctx.user, input.targetLandingServiceId);
+        Object.assign(input, landingTarget
+          ? { targetLandingServiceId: landingTarget.id, targetRuleId: null, targetIp: landingTarget.targetIp, targetPort: landingTarget.targetPort }
+          : { targetLandingServiceId: null });
       }
       if ((rule as any).forwardGroupRuleId) throw new Error("转发组成员规则由系统维护，不能直接修改");
       await requireRuleTelegramNotifyReady(input.telegramErrorNotifyEnabled);

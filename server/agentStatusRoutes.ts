@@ -14,6 +14,7 @@ import { mapWithConcurrency } from "./asyncPool";
 import { withKeyedTaskLock } from "./keyedTaskLock";
 import { agentStatusOrderGuard, agentStatusOrderingKey } from "./agentStatusOrdering";
 import { pruneMapEntries, setBoundedMapValue } from "./boundedCache";
+import { completeLandingPortCheck } from "./landingPortChecks";
 
 function isForwardXTunnel(tunnel: any) {
   return String(tunnel?.mode || "").toLowerCase() === "forwardx";
@@ -158,6 +159,30 @@ async function applyAgentRuleStatus(host: any, payload: any): Promise<AgentStatu
   }
   if (statusType === "runtime") {
     const runtimeType = String(payload?.forwardType || "runtime").trim() || "runtime";
+    const landingPortCheckId = String(payload?.landingPortCheckId || "").trim();
+    if (runtimeType.startsWith("landing-port-check-") && landingPortCheckId) {
+      const result = completeLandingPortCheck(Number(host.id), landingPortCheckId, !!isRunning, message || (isRunning ? "Agent 确认端口可用" : "Agent 检测到端口已占用"));
+      return result ? { status: 200, body: { success: true } } : { status: 404, body: { error: "landing port check not found" } };
+    }
+    const landingServiceId = Number(payload?.landingServiceId || 0);
+    if (runtimeType.startsWith("landing-ss-service-") && Number.isInteger(landingServiceId) && landingServiceId > 0) {
+      const service = await db.getLandingServiceById(landingServiceId, true) as any;
+      if (!service || Number(service.hostId) !== Number(host.id)) {
+        return { status: 404, body: { error: "landing service not found" } };
+      }
+      if (!isRunning && String(service.status) === "removing") {
+        await db.deleteLandingService(landingServiceId);
+        return { status: 200, body: { success: true } };
+      }
+      await db.updateLandingService(landingServiceId, {
+        status: isRunning ? "running" : "error",
+        statusMessage: message || (isRunning ? "Agent 已启动 Shadowsocks 服务" : "Agent 未能启动 Shadowsocks 服务"),
+      });
+      if (shouldLogStatus(`landing:${landingServiceId}:${host.id}`, `running=${!!isRunning}`, !isRunning || !!message)) {
+        appendPanelLog(isRunning ? "info" : "warn", `[Landing] service=${landingServiceId} host=${host.id} running=${!!isRunning}${logMessage !== "-" ? ` message=${logMessage}` : ""}`);
+      }
+      return { status: 200, body: { success: true } };
+    }
     // Error details can contain dynamic errno/addresses. Use the runtime state
     // as the throttling signature so changing diagnostics do not bypass the
     // five-minute warning interval; the latest message is still included when

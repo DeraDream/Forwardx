@@ -305,6 +305,38 @@ export const hosts = table("hosts", {
 export type Host = typeof hosts.$inferSelect;
 export type InsertHost = typeof hosts.$inferInsert;
 
+// A landing host is deliberately only an eligibility marker.  Marking a host
+// must never change its Agent/runtime; services are created separately below.
+export const landingHosts = table("landing_hosts", {
+  id: serial("id"),
+  hostId: int("hostId").notNull().unique(),
+  userId: int("userId").notNull(),
+  createdAt: epoch("createdAt").notNull().default(nowDefault()),
+  updatedAt: epoch("updatedAt").notNull().default(nowDefault()),
+});
+export type LandingHost = typeof landingHosts.$inferSelect;
+
+// Multiple Shadowsocks services may belong to one marked host.  `password`
+// is never returned by the public list API; it is retained for the Agent
+// desired-state reconciliation and for displaying the connection URI to the
+// service owner only.
+export const landingServices = table("landing_services", {
+  id: serial("id"),
+  hostId: int("hostId").notNull(),
+  userId: int("userId").notNull(),
+  name: text("name").notNull(),
+  protocol: varchar("protocol", { length: 16 }).notNull().default("ss"),
+  method: varchar("method", { length: 96 }).notNull(),
+  password: text("password").notNull(),
+  port: int("port").notNull(),
+  isEnabled: boolean("isEnabled").notNull().default(true),
+  status: varchar("status", { length: 24 }).notNull().default("pending"),
+  statusMessage: text("statusMessage"),
+  createdAt: epoch("createdAt").notNull().default(nowDefault()),
+  updatedAt: epoch("updatedAt").notNull().default(nowDefault()),
+});
+export type LandingService = typeof landingServices.$inferSelect;
+
 export const hostGroups = table("host_groups", {
   id: serial("id"),
   name: text("name").notNull(),
@@ -348,6 +380,8 @@ export const forwardRules = table("forward_rules", {
   // When set, targetIp/targetPort are the resolved entry of this saved chain result.
   // Keeping the resolved values preserves compatibility with every Agent runtime.
   targetRuleId: int("targetRuleId"),
+  // Resolved IP/port of a managed landing Shadowsocks listener.
+  targetLandingServiceId: int("targetLandingServiceId"),
   telegramErrorNotifyEnabled: boolean("telegramErrorNotifyEnabled").notNull().default(false),
   blockHttp: boolean("blockHttp").notNull().default(false),
   blockSocks: boolean("blockSocks").notNull().default(false),

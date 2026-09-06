@@ -270,6 +270,7 @@ type RuleFormData = {
   targetIp: string;
   targetPort: number;
   targetRuleId: number | null;
+  targetLandingServiceId: number | null;
   telegramErrorNotifyEnabled: boolean;
   blockHttp: boolean;
   blockSocks: boolean;
@@ -330,6 +331,7 @@ const defaultForm: RuleFormData = {
   targetIp: "",
   targetPort: 0,
   targetRuleId: null,
+  targetLandingServiceId: null,
   telegramErrorNotifyEnabled: false,
   blockHttp: false,
   blockSocks: false,
@@ -2390,6 +2392,11 @@ function RulesContent() {
     refetchOnWindowFocus: false,
     placeholderData: (previousData: any) => previousData,
   });
+  const landingServicesQuery = trpc.landing.list.useQuery(undefined, {
+    enabled: needsFullRuleList,
+    refetchInterval: pollingInterval("normal"),
+    staleTime: 10_000,
+  });
   useEffect(() => {
     if (!showCopyDialog) return;
     void fullRulesQuery.refetch();
@@ -2741,6 +2748,7 @@ function RulesContent() {
       targetIp: rule.targetIp,
       targetPort: rule.targetPort,
       targetRuleId: rule.targetRuleId || null,
+      targetLandingServiceId: rule.targetLandingServiceId || null,
       telegramErrorNotifyEnabled: !!rule.telegramErrorNotifyEnabled,
       blockHttp: false,
       blockSocks: false,
@@ -2938,6 +2946,10 @@ function RulesContent() {
     const group = forwardGroupById.get(Number(rule.forwardGroupId || 0));
     return !!rule.isEnabled && !rule.pendingDelete && isForwardChainGroup(group);
   }), [forwardGroupById, fullRulesQuery.data]);
+  const availableLandingServices = useMemo(
+    () => (landingServicesQuery.data || []).filter((service: any) => service.isEnabled && service.status !== "removing"),
+    [landingServicesQuery.data],
+  );
   const availableFailoverForwardGroups = useMemo(
     () => availableForwardGroups.filter((group: any) => normalizeForwardGroupModeForRule(group) === "failover"),
     [availableForwardGroups]
@@ -3709,6 +3721,7 @@ function RulesContent() {
         targetIp: form.targetIp,
         targetPort: form.targetPort,
         targetRuleId: form.targetRuleId,
+        targetLandingServiceId: form.targetLandingServiceId,
         telegramErrorNotifyEnabled: form.telegramErrorNotifyEnabled,
         ...failoverPayload,
       });
@@ -3727,6 +3740,7 @@ function RulesContent() {
         targetIp: form.targetIp,
         targetPort: form.targetPort,
         targetRuleId: form.targetRuleId,
+        targetLandingServiceId: form.targetLandingServiceId,
         telegramErrorNotifyEnabled: form.telegramErrorNotifyEnabled,
         ...failoverPayload,
       });
@@ -7272,24 +7286,27 @@ function RulesContent() {
                   </SelectContent>
                 </Select>
               </div>
-              {form.routeMode !== "chain" && form.routeMode !== "group" && <div className="space-y-2">
+              <div className="space-y-2">
                 <Label>出口类型</Label>
-                <Select value={form.targetRuleId ? "saved" : "direct"} onValueChange={(value) => {
+                <Select value={form.targetRuleId ? "saved" : form.targetLandingServiceId ? "landing" : "direct"} onValueChange={(value) => {
                   const result = value === "saved" ? availableSavedForwardResults[0] : null;
+                  const landing = value === "landing" ? availableLandingServices[0] : null;
                   setForm({
                     ...form,
                     targetRuleId: result?.id || null,
-                    targetIp: result ? String(result.targetIp || "") : form.targetIp,
-                    targetPort: result ? Number(result.sourcePort || 0) : form.targetPort,
+                    targetLandingServiceId: landing?.id || null,
+                    targetIp: result ? String(result.targetIp || "") : landing ? String(landing.targetIp || "0.0.0.0") : form.targetIp,
+                    targetPort: result ? Number(result.sourcePort || 0) : landing ? Number(landing.port || 0) : form.targetPort,
                   });
                 }}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="direct">直接地址</SelectItem>
-                    <SelectItem value="saved" disabled={availableSavedForwardResults.length === 0}>引用已完成转发</SelectItem>
+                    <SelectItem value="saved" disabled={availableSavedForwardResults.length === 0 || form.routeMode === "chain" || form.routeMode === "group"}>引用已完成转发</SelectItem>
+                    <SelectItem value="landing" disabled={availableLandingServices.length === 0}>引用落地 SS 服务</SelectItem>
                   </SelectContent>
                 </Select>
-              </div>}
+              </div>
               {!isForwardGroupRouteMode && form.routeMode === "local" && (
                 <div className="space-y-2">
                   <Label>转发工具</Label>
@@ -7376,7 +7393,7 @@ function RulesContent() {
                   </Button>
                 </div>
               </div>
-              {form.targetRuleId && form.routeMode !== "chain" && form.routeMode !== "group" ? (
+              {form.targetRuleId ? (
                 <div className="space-y-2">
                   <Label>已完成转发（转发链落地）</Label>
                   <Select value={String(form.targetRuleId)} onValueChange={(value) => {
@@ -7391,6 +7408,18 @@ function RulesContent() {
                   </Select>
                   <p className="text-xs text-muted-foreground">选择后将跟随该转发链落地规则，目标地址和目标端口由链路自动解析。</p>
                 </div>
+              ) : form.targetLandingServiceId ? (
+                <div className="space-y-2 sm:col-span-2">
+                  <Label>落地服务（地址与端口由服务自动解析）</Label>
+                  <Select value={String(form.targetLandingServiceId)} onValueChange={(value) => {
+                    const service = availableLandingServices.find((item: any) => Number(item.id) === Number(value));
+                    setForm({ ...form, targetLandingServiceId: Number(value), targetRuleId: null, targetIp: String(service?.targetIp || "0.0.0.0"), targetPort: Number(service?.port || 0) });
+                  }}>
+                    <SelectTrigger><SelectValue placeholder="请选择落地服务" /></SelectTrigger>
+                    <SelectContent>{availableLandingServices.map((service: any) => <SelectItem key={service.id} value={String(service.id)}>{service.name} · {service.protocol.toUpperCase()} · :{service.port}</SelectItem>)}</SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">规则会始终转发到该落地 VPS 的 SS 监听端口。</p>
+                </div>
               ) : <>
               <div className="space-y-2">
                 <Label>目标地址</Label>
@@ -7401,7 +7430,7 @@ function RulesContent() {
                 />
               </div>
               </>}
-              {!form.targetRuleId && <div className="space-y-2 sm:col-span-2">
+              {!form.targetRuleId && !form.targetLandingServiceId && <div className="space-y-2 sm:col-span-2">
                 <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(220px,0.9fr)] sm:items-end">
                   <div className="space-y-2">
                     <Label>目标端口 <span className="text-destructive">*</span></Label>
@@ -8394,6 +8423,22 @@ function SelfTestDialog({
   const [optimisticTesting, setOptimisticTesting] = useState(false);
   const [activeTestId, setActiveTestId] = useState<number | null>(null);
   const manualTestRef = useRef(false);
+  const topologyCacheRef = useRef<{
+    sourceLabel?: string;
+    targetLabel?: string;
+    nodeMeta?: Record<string, any>;
+    plannedSegments: LinkTestPlannedSegment[];
+  } | null>(null);
+  if (plannedSegments && plannedSegments.length > 0) {
+    topologyCacheRef.current = { sourceLabel, targetLabel, nodeMeta, plannedSegments };
+  }
+  const stableTopology = topologyCacheRef.current;
+  const effectiveSourceLabel = sourceLabel || stableTopology?.sourceLabel;
+  const effectiveTargetLabel = targetLabel || stableTopology?.targetLabel;
+  const effectiveNodeMeta = nodeMeta || stableTopology?.nodeMeta;
+  const effectivePlannedSegments = plannedSegments && plannedSegments.length > 0
+    ? plannedSegments
+    : stableTopology?.plannedSegments;
   const { data: latest } = trpc.rules.latestTest.useQuery(
     { ruleId, includeActive: optimisticTesting },
     {
@@ -8462,7 +8507,7 @@ function SelfTestDialog({
   const isTimeout = status === "timeout";
   const isFailed = !!latest && !isTesting && !isSuccess && !isTimeout;
   const parsedMessage = useMemo(() => parseLinkTestMessage(latest?.message), [latest?.message]);
-  const plannedSegmentCount = plannedSegments?.length || 0;
+  const plannedSegmentCount = effectivePlannedSegments?.length || 0;
   const probeDialogSizeClass = plannedSegmentCount >= 3 ? "sm:max-w-4xl" : plannedSegmentCount >= 2 ? "sm:max-w-3xl" : "sm:max-w-xl";
   const lastFailureToastKey = useRef("");
   useEffect(() => {
@@ -8496,10 +8541,10 @@ function SelfTestDialog({
           fallbackLatencyMs={typeof latest?.latencyMs === "number" && latest.latencyMs > 0 ? latest.latencyMs : null}
           isSuccess={isSuccess}
           isTesting={isTesting}
-          sourceLabel={sourceLabel}
-          targetLabel={targetLabel}
-          nodeMeta={nodeMeta}
-          plannedSegments={plannedSegments}
+          sourceLabel={effectiveSourceLabel}
+          targetLabel={effectiveTargetLabel}
+          nodeMeta={effectiveNodeMeta}
+          plannedSegments={effectivePlannedSegments}
           ignorePlannedResultsWhenDetailsPresent
           compactFrom={3}
           roomyNodes

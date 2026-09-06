@@ -110,6 +110,7 @@ import { gateForwardRulesForRuntime } from "./linkAccessView";
 import { runAgentRuntimeRecovery } from "./agentRuntimeRecovery";
 import { observePresenceCapableHostActivity, registerPresenceCapableHost } from "./agentFastLiveness";
 import { recordAuthenticatedAgentActivity } from "./agentActivity";
+import { takeLandingPortChecks } from "./landingPortChecks";
 
 // DNS 解析缓存：ruleId → 主目标上次解析到的 IPv4 地址。
 // 备用出站策略里的域名由 Agent 的 TCP 拨号和健康检查动态解析。
@@ -177,6 +178,41 @@ const REALM_CONFIG_DIR = "/etc/forwardx/realm";
 const LEGACY_GOST_SERVICE_NAME = "forwardx-gost";
 const LEGACY_TUNNEL_SERVICE_NAME = "forwardx-tunnels";
 const MIMIC_CONFIG_DIR = "/etc/mimic";
+const LANDING_SS_RUNTIME_VERSION = "1.25.0";
+const LANDING_SS_RUNTIME_DIR = "/usr/local/lib/forwardx/shadowsocks";
+const LANDING_SS_CONFIG_DIR = "/etc/forwardx/shadowsocks";
+
+// Each landing service is an independent systemd unit. The Agent installs a
+// checksum-verified shadowsocks-rust release only when its local runtime is
+// absent, then rewrites this service's private config idempotently.
+function landingServiceAction(service: any) {
+  const id = Number(service?.id || 0);
+  const port = Number(service?.port || 0);
+  if (!Number.isInteger(id) || id <= 0 || !Number.isInteger(port) || port < 1 || port > 65535) return null;
+  const configPath = `${LANDING_SS_CONFIG_DIR}/${id}.json`;
+  const unitName = `forwardx-ss-${id}`;
+  if (service.isEnabled === false) return {
+    op: "remove", statusType: "runtime", forwardType: `landing-ss-service-${id}`, landingServiceId: id,
+    sourcePort: port, protocol: "both", reportStatus: true,
+    commands: [`systemctl disable --now ${shQuote(unitName)}.service 2>/dev/null || true; rm -f ${shQuote(`/etc/systemd/system/${unitName}.service`)} ${shQuote(configPath)}; systemctl daemon-reload`],
+  };
+  const config = JSON.stringify({ server: "0.0.0.0", server_port: port, password: String(service.password || ""), method: String(service.method || "aes-256-gcm"), mode: "tcp_and_udp" });
+  const config64 = Buffer.from(config, "utf8").toString("base64");
+  const unit64 = Buffer.from(`[Unit]\nDescription=ForwardX Shadowsocks landing service ${id}\nAfter=network-online.target\nWants=network-online.target\n[Service]\nType=simple\nExecStart=${LANDING_SS_RUNTIME_DIR}/ssserver -c ${configPath}\nRestart=always\nRestartSec=2\nLimitNOFILE=1048576\n[Install]\nWantedBy=multi-user.target\n`, "utf8").toString("base64");
+  const version = LANDING_SS_RUNTIME_VERSION;
+  const installRuntime = `if [ ! -x ${shQuote(`${LANDING_SS_RUNTIME_DIR}/ssserver`)} ]; then arch=$(uname -m); case "$arch" in x86_64|amd64) asset="shadowsocks-v${version}.x86_64-unknown-linux-musl.tar.xz";; aarch64|arm64) asset="shadowsocks-v${version}.aarch64-unknown-linux-musl.tar.xz";; *) echo "[landing] unsupported CPU architecture: $arch"; exit 1;; esac; tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT; base="https://github.com/shadowsocks/shadowsocks-rust/releases/download/v${version}"; curl -fL --retry 3 --connect-timeout 15 "$base/$asset" -o "$tmp/runtime.tar.xz"; curl -fL --retry 3 --connect-timeout 15 "$base/$asset.sha256" -o "$tmp/runtime.tar.xz.sha256"; expected=$(awk '{print $1}' "$tmp/runtime.tar.xz.sha256"); test -n "$expected"; printf '%s  %s\\n' "$expected" "$tmp/runtime.tar.xz" | sha256sum -c -; mkdir -p ${shQuote(LANDING_SS_RUNTIME_DIR)}; tar -xJf "$tmp/runtime.tar.xz" -C "$tmp"; bin=$(find "$tmp" -type f -name ssserver -perm -u+x | head -n 1); test -n "$bin"; install -m 0755 "$bin" ${shQuote(`${LANDING_SS_RUNTIME_DIR}/ssserver`)}; fi`;
+  return {
+    op: "apply", statusType: "runtime", forwardType: `landing-ss-service-${id}`, landingServiceId: id,
+    sourcePort: port, protocol: "both", reportStatus: true,
+    commands: [
+      "set -eu",
+      `if command -v ss >/dev/null 2>&1 && ss -ltnu | awk '{print $5}' | grep -Eq "[:.]${port}$" && ! systemctl is-active --quiet ${shQuote(unitName)}.service; then echo "[landing] port ${port} is already in use"; exit 1; fi`,
+      installRuntime,
+      `mkdir -p ${shQuote(LANDING_SS_CONFIG_DIR)}; printf '%s' ${shQuote(config64)} | base64 -d > ${shQuote(configPath)}; chmod 600 ${shQuote(configPath)}`,
+      `printf '%s' ${shQuote(unit64)} | base64 -d > ${shQuote(`/etc/systemd/system/${unitName}.service`)}; systemctl daemon-reload; systemctl enable --now ${shQuote(unitName)}.service; systemctl is-active --quiet ${shQuote(unitName)}.service`,
+    ],
+  };
+}
 const AGENT_FIREWALL_COUNTER_REFRESH_VERSION = "2.2.178";
 const AGENT_PROTOCOL_GUARD_BACKEND_VERSION = "2.2.127";
 export const AGENT_RATE_LIMIT_GUARD_VERSION = "2.2.187";
@@ -1794,6 +1830,20 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     ]);
     const rules = await gateForwardRulesForRuntime(rawRules as any[]);
     const actions: any[] = [];
+    // Landing services intentionally live outside forward_rules: a host can
+    // run several SS endpoints, and none of them is a forwarding listener.
+    // They still use desired-state so reconnects/restarts reconcile them.
+    for (const service of await db.getLandingServicesForHost(Number(host.id), true, true)) {
+      const action = landingServiceAction(service);
+      if (action) actions.push(action);
+    }
+    for (const check of takeLandingPortChecks(Number(host.id))) {
+      actions.push({
+        op: "apply", statusType: "runtime", forwardType: `landing-port-check-${check.id}`, landingPortCheckId: check.id,
+        sourcePort: check.port, protocol: "both", reportStatus: true, forceRuntimeSync: true,
+        commands: [`if command -v ss >/dev/null 2>&1 && ss -ltnu | awk '{print $5}' | grep -Eq "[:.]${Number(check.port)}$"; then echo "[landing] port ${Number(check.port)} is already in use"; exit 1; fi`],
+      });
+    }
     const dnsWatches = new Map<string, AgentDnsWatch>();
     const responseIssuedAt = Date.now();
 
