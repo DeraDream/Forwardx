@@ -46,6 +46,18 @@ func TestActionStatusReportsCoalesceLatestRuleState(t *testing.T) {
 	}
 }
 
+func TestRuntimeRemoveReportsNotRunningAfterSuccessfulCleanup(t *testing.T) {
+	if runtimeActionStatusRunning(action{StatusType: "runtime", Op: "remove"}, true) {
+		t.Fatal("successful runtime remove must report isRunning=false")
+	}
+	if !runtimeActionStatusRunning(action{StatusType: "runtime", Op: "apply"}, true) {
+		t.Fatal("successful runtime apply must report isRunning=true")
+	}
+	if runtimeActionStatusRunning(action{StatusType: "runtime", Op: "apply"}, false) {
+		t.Fatal("failed runtime apply must report isRunning=false")
+	}
+}
+
 func TestActionStatusReportsRejectOlderCompletion(t *testing.T) {
 	resetActionStatusReportsForTest()
 	newer := action{StatusType: "rule", RuleID: 42, SourcePort: 10042, ForwardType: "nginx", IssuedAt: 200}

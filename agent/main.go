@@ -37,7 +37,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.196"
+var Version = "2.2.197"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -5011,7 +5011,7 @@ func handleActionJobWithRuntimeSnapshot(cfg Config, a action, releaseRuntimeGate
 				}
 				actionMessage.set("%s", message)
 			}
-			reportActionStatus(cfg, a, ok, actionMessage.get())
+			reportActionStatus(cfg, a, runtimeActionStatusRunning(a, ok), actionMessage.get())
 		}
 		return ok
 	}
@@ -5574,9 +5574,19 @@ func runtimeActionKey(a action) string {
 	return key
 }
 
+// Runtime remove actions report a healthy completion as not-running. The panel
+// uses that false state to complete cleanup of resource rows such as landing SS.
+func runtimeActionStatusRunning(a action, succeeded bool) bool {
+	return succeeded && strings.TrimSpace(a.Op) != "remove"
+}
+
 func runtimeActionServicesHealthy(a action) bool {
 	if strings.HasPrefix(strings.TrimSpace(a.ForwardType), "landing-ss-service-") && a.LandingServiceID > 0 {
-		return managedServiceActive(fmt.Sprintf("forwardx-ss-%d", a.LandingServiceID))
+		active := managedServiceActive(fmt.Sprintf("forwardx-ss-%d", a.LandingServiceID))
+		if a.Op == "remove" {
+			return !active
+		}
+		return active
 	}
 	if isWireGuardRuntimeAction(a) {
 		if a.Op == "remove" {

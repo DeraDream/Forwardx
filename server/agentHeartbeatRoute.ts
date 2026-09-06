@@ -191,10 +191,14 @@ function landingServiceAction(service: any) {
   if (!Number.isInteger(id) || id <= 0 || !Number.isInteger(port) || port < 1 || port > 65535) return null;
   const configPath = `${LANDING_SS_CONFIG_DIR}/${id}.json`;
   const unitName = `forwardx-ss-${id}`;
+  const ufwComment = `ForwardX landing ${id}`;
+  const removeUfwRules = `if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi '^Status: active'; then ufw delete allow ${port}/tcp comment ${shQuote(ufwComment)} 2>/dev/null || true; ufw delete allow ${port}/udp comment ${shQuote(ufwComment)} 2>/dev/null || true; fi`;
+  const addUfwRules = `if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi '^Status: active'; then ufw allow ${port}/tcp comment ${shQuote(ufwComment)} 2>/dev/null || true; ufw allow ${port}/udp comment ${shQuote(ufwComment)} 2>/dev/null || true; fi`;
+  const verifyListeners = `if command -v ss >/dev/null 2>&1; then ss -ltnH | awk '{print $4}' | grep -Eq "[:.]${port}$"; ss -lunH | awk '{print $5}' | grep -Eq "[:.]${port}$"; fi`;
   if (service.isEnabled === false) return {
     op: "remove", statusType: "runtime", forwardType: `landing-ss-service-${id}`, landingServiceId: id,
     sourcePort: port, protocol: "both", reportStatus: true,
-    commands: [`systemctl disable --now ${shQuote(unitName)}.service 2>/dev/null || true; for bin in iptables ip6tables; do for proto in tcp udp; do $bin -t mangle -D PREROUTING -p $proto --dport ${port} -m comment --comment fwx-landing-${id}:in -j CONNMARK --restore-mark 2>/dev/null || true; $bin -t mangle -D POSTROUTING -p $proto --sport ${port} -m comment --comment fwx-landing-${id}:out -j CONNMARK --restore-mark 2>/dev/null || true; done; done; rm -f ${shQuote(`/etc/systemd/system/${unitName}.service`)} ${shQuote(configPath)}; systemctl daemon-reload`],
+    commands: [`systemctl disable --now ${shQuote(unitName)}.service 2>/dev/null || true; ${removeUfwRules}; for bin in iptables ip6tables; do for proto in tcp udp; do $bin -t mangle -D PREROUTING -p $proto --dport ${port} -m comment --comment fwx-landing-${id}:in -j CONNMARK --restore-mark 2>/dev/null || true; $bin -t mangle -D POSTROUTING -p $proto --sport ${port} -m comment --comment fwx-landing-${id}:out -j CONNMARK --restore-mark 2>/dev/null || true; done; done; rm -f ${shQuote(`/etc/systemd/system/${unitName}.service`)} ${shQuote(configPath)}; systemctl daemon-reload`],
   };
   const config = JSON.stringify({ server: "0.0.0.0", server_port: port, password: String(service.password || ""), method: String(service.method || "aes-256-gcm"), mode: "tcp_and_udp" });
   const config64 = Buffer.from(config, "utf8").toString("base64");
@@ -208,9 +212,10 @@ function landingServiceAction(service: any) {
       "set -eu",
       `if command -v ss >/dev/null 2>&1 && ss -ltnu | awk '{print $5}' | grep -Eq "[:.]${port}$" && ! systemctl is-active --quiet ${shQuote(unitName)}.service; then echo "[landing] port ${port} is already in use"; exit 1; fi`,
       installRuntime,
+      addUfwRules,
       `for bin in iptables ip6tables; do command -v $bin >/dev/null 2>&1 || continue; for proto in tcp udp; do $bin -t mangle -C PREROUTING -p $proto --dport ${port} -m comment --comment fwx-landing-${id}:in -j CONNMARK --restore-mark 2>/dev/null || $bin -t mangle -I PREROUTING -p $proto --dport ${port} -m comment --comment fwx-landing-${id}:in -j CONNMARK --restore-mark; $bin -t mangle -C POSTROUTING -p $proto --sport ${port} -m comment --comment fwx-landing-${id}:out -j CONNMARK --restore-mark 2>/dev/null || $bin -t mangle -I POSTROUTING -p $proto --sport ${port} -m comment --comment fwx-landing-${id}:out -j CONNMARK --restore-mark; done; done`,
       `mkdir -p ${shQuote(LANDING_SS_CONFIG_DIR)}; printf '%s' ${shQuote(config64)} | base64 -d > ${shQuote(configPath)}; chmod 600 ${shQuote(configPath)}`,
-      `printf '%s' ${shQuote(unit64)} | base64 -d > ${shQuote(`/etc/systemd/system/${unitName}.service`)}; systemctl daemon-reload; systemctl enable --now ${shQuote(unitName)}.service; systemctl is-active --quiet ${shQuote(unitName)}.service`,
+      `printf '%s' ${shQuote(unit64)} | base64 -d > ${shQuote(`/etc/systemd/system/${unitName}.service`)}; systemctl daemon-reload; systemctl enable --now ${shQuote(unitName)}.service; systemctl is-active --quiet ${shQuote(unitName)}.service; ${verifyListeners}`,
     ],
   };
 }
