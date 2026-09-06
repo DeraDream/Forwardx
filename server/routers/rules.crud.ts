@@ -51,9 +51,12 @@ async function resolveSavedForwardResult(actor: { id: number; role: string }, ta
   if (actor.role !== "admin" && Number(result.userId) !== Number(actor.id)) throw new Error("无权引用该已完成转发");
   const group = await db.getForwardGroupById(Number(result.forwardGroupId || 0)) as any;
   if (!group || String(group.groupMode) !== "chain" || !group.isEnabled) throw new Error("引用目标必须是已启用转发链上的规则");
-  const entries = Number(group.entryGroupId || 0)
-    ? ((await db.getForwardGroupById(Number(group.entryGroupId))) as any)?.members || []
-    : group.members || [];
+  const entryGroupId = Number(group.entryGroupId || 0);
+  const entries = entryGroupId > 0
+    ? ((await db.getForwardGroupById(entryGroupId)) as any)?.members || []
+    // An inline chain stores the entrance as its first member; the remaining
+    // members are downstream landing hosts and must not be counted as entries.
+    : (group.members || []).slice(0, 1);
   // SQLite booleans may arrive as 0/1; checking only `!== false` incorrectly
   // treats a disabled member (0) as enabled and rejects valid single-entry chains.
   const enabled = entries.filter((member: any) => dbBool(member?.isEnabled, true) && Number(member?.hostId || 0) > 0);
