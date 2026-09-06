@@ -248,7 +248,7 @@ const tables: TableDef[] = [
       c("id", "id"), c("hostId", "int", { notNull: true }), c("userId", "int", { notNull: true }), c("name", "text", { notNull: true }),
       c("protocol", "varchar", { length: 16, notNull: true, default: "ss" }), c("method", "varchar", { length: 96, notNull: true }),
       c("password", "text", { notNull: true }), c("port", "int", { notNull: true }), c("endpoint", "text"),
-      c("latencyTargetHost", "text", { notNull: true, default: "1.1.1.1" }), c("latencyTargetPort", "int", { notNull: true, default: 443 }),
+      c("latencyTargetHost", "text", { notNull: true, default: "www.gstatic.com" }), c("latencyTargetPort", "int", { notNull: true, default: 443 }),
       c("latestLatencyMs", "int"), c("latestLatencyIsTimeout", "bool", { notNull: true, default: false }), c("latestLatencyAt", "epoch"), c("isEnabled", "bool", { notNull: true, default: true }),
       c("status", "varchar", { length: 24, notNull: true, default: "pending" }), c("statusMessage", "text"),
       c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }),

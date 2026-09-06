@@ -192,13 +192,29 @@ function landingServiceAction(service: any) {
   const configPath = `${LANDING_SS_CONFIG_DIR}/${id}.json`;
   const unitName = `forwardx-ss-${id}`;
   const ufwComment = `ForwardX landing ${id}`;
+  const firewallComment = `fwx-landing-${id}:allow`;
+  const nftFirewallComment = `fwx-landing-${id}:allow`;
   const removeUfwRules = `if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi '^Status: active'; then ufw delete allow ${port}/tcp comment ${shQuote(ufwComment)} 2>/dev/null || true; ufw delete allow ${port}/udp comment ${shQuote(ufwComment)} 2>/dev/null || true; fi`;
   const addUfwRules = `if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi '^Status: active'; then ufw allow ${port}/tcp comment ${shQuote(ufwComment)} 2>/dev/null || true; ufw allow ${port}/udp comment ${shQuote(ufwComment)} 2>/dev/null || true; fi`;
-  const verifyListeners = `if command -v ss >/dev/null 2>&1; then ss -ltnH | awk '{print $4}' | grep -Eq "[:.]${port}$"; ss -lunH | awk '{print $5}' | grep -Eq "[:.]${port}$"; fi`;
+  // Landing SS is a public listener, unlike ordinary forwarding rules which
+  // may only need NAT/mangle state.  Explicitly permit it through a host with
+  // a default-drop INPUT policy (including iptables-nft installations).
+  const removeInputRules = `for bin in iptables ip6tables; do command -v $bin >/dev/null 2>&1 || continue; for proto in tcp udp; do $bin -D INPUT -p $proto --dport ${port} -m comment --comment ${shQuote(firewallComment)} -j ACCEPT 2>/dev/null || true; done; done`;
+  const addInputRules = `for bin in iptables ip6tables; do command -v $bin >/dev/null 2>&1 || continue; for proto in tcp udp; do $bin -C INPUT -p $proto --dport ${port} -m comment --comment ${shQuote(firewallComment)} -j ACCEPT 2>/dev/null || $bin -I INPUT -p $proto --dport ${port} -m comment --comment ${shQuote(firewallComment)} -j ACCEPT; done; done`;
+  // Some VPS images use an independent native nftables manager with a
+  // default-drop input chain. iptables-nft rules cannot bypass that chain, so
+  // install a tagged rule there when this well-known manager is present.
+  const addNativeNftInputRules = `if command -v nft >/dev/null 2>&1 && nft list chain inet nft_manager_firewall input >/dev/null 2>&1; then for proto in tcp udp; do if nft -a list chain inet nft_manager_firewall input 2>/dev/null | grep -Fq "$proto dport ${port} accept comment \"${nftFirewallComment}\""; then :; else nft add rule inet nft_manager_firewall input $proto dport ${port} accept comment ${shQuote(`"${nftFirewallComment}"`)}; fi; done; fi`;
+  const removeNativeNftInputRules = `if command -v nft >/dev/null 2>&1 && nft list chain inet nft_manager_firewall input >/dev/null 2>&1; then for handle in $(nft -a list chain inet nft_manager_firewall input 2>/dev/null | awk -v c=${shQuote(`comment "${nftFirewallComment}"`)} 'index($0,c) {print $NF}'); do nft delete rule inet nft_manager_firewall input handle "$handle" 2>/dev/null || true; done; fi`;
+  // `systemctl start` returns as soon as ssserver has spawned.  On a busy
+  // host the process can need a short moment before both listeners are bound;
+  // checking only once races that startup and incorrectly marks a healthy
+  // landing service as failed in the panel.
+  const verifyListeners = `if command -v ss >/dev/null 2>&1; then for i in $(seq 1 50); do tcp_ready=0; udp_ready=0; ss -ltnH | awk '{print $4}' | grep -Eq "[:.]${port}$" && tcp_ready=1; ss -lunH | awk '{print $5}' | grep -Eq "[:.]${port}$" && udp_ready=1; if [ "$tcp_ready" = 1 ] && [ "$udp_ready" = 1 ]; then exit 0; fi; sleep 0.2; done; echo "[landing] listener did not become ready on port ${port}" >&2; exit 1; fi`;
   if (service.isEnabled === false) return {
     op: "remove", statusType: "runtime", forwardType: `landing-ss-service-${id}`, landingServiceId: id,
     sourcePort: port, protocol: "both", reportStatus: true,
-    commands: [`systemctl disable --now ${shQuote(unitName)}.service 2>/dev/null || true; ${removeUfwRules}; for bin in iptables ip6tables; do for proto in tcp udp; do $bin -t mangle -D PREROUTING -p $proto --dport ${port} -m comment --comment fwx-landing-${id}:in -j CONNMARK --restore-mark 2>/dev/null || true; $bin -t mangle -D POSTROUTING -p $proto --sport ${port} -m comment --comment fwx-landing-${id}:out -j CONNMARK --restore-mark 2>/dev/null || true; done; done; rm -f ${shQuote(`/etc/systemd/system/${unitName}.service`)} ${shQuote(configPath)}; systemctl daemon-reload`],
+    commands: [`systemctl disable --now ${shQuote(unitName)}.service 2>/dev/null || true; ${removeUfwRules}; ${removeNativeNftInputRules}; ${removeInputRules}; for bin in iptables ip6tables; do command -v $bin >/dev/null 2>&1 || continue; for proto in tcp udp; do $bin -t mangle -D PREROUTING -p $proto --dport ${port} -m comment --comment fwx-landing-${id}:in -j CONNMARK --restore-mark 2>/dev/null || true; $bin -t mangle -D POSTROUTING -p $proto --sport ${port} -m comment --comment fwx-landing-${id}:out -j CONNMARK --restore-mark 2>/dev/null || true; done; done; rm -f ${shQuote(`/etc/systemd/system/${unitName}.service`)} ${shQuote(configPath)}; systemctl daemon-reload`],
   };
   const config = JSON.stringify({ server: "0.0.0.0", server_port: port, password: String(service.password || ""), method: String(service.method || "aes-256-gcm"), mode: "tcp_and_udp" });
   const config64 = Buffer.from(config, "utf8").toString("base64");
@@ -213,6 +229,8 @@ function landingServiceAction(service: any) {
       `if command -v ss >/dev/null 2>&1 && ss -ltnu | awk '{print $5}' | grep -Eq "[:.]${port}$" && ! systemctl is-active --quiet ${shQuote(unitName)}.service; then echo "[landing] port ${port} is already in use"; exit 1; fi`,
       installRuntime,
       addUfwRules,
+      addNativeNftInputRules,
+      addInputRules,
       `for bin in iptables ip6tables; do command -v $bin >/dev/null 2>&1 || continue; for proto in tcp udp; do $bin -t mangle -C PREROUTING -p $proto --dport ${port} -m comment --comment fwx-landing-${id}:in -j CONNMARK --restore-mark 2>/dev/null || $bin -t mangle -I PREROUTING -p $proto --dport ${port} -m comment --comment fwx-landing-${id}:in -j CONNMARK --restore-mark; $bin -t mangle -C POSTROUTING -p $proto --sport ${port} -m comment --comment fwx-landing-${id}:out -j CONNMARK --restore-mark 2>/dev/null || $bin -t mangle -I POSTROUTING -p $proto --sport ${port} -m comment --comment fwx-landing-${id}:out -j CONNMARK --restore-mark; done; done`,
       `mkdir -p ${shQuote(LANDING_SS_CONFIG_DIR)}; printf '%s' ${shQuote(config64)} | base64 -d > ${shQuote(configPath)}; chmod 600 ${shQuote(configPath)}`,
       `printf '%s' ${shQuote(unit64)} | base64 -d > ${shQuote(`/etc/systemd/system/${unitName}.service`)}; systemctl daemon-reload; systemctl enable --now ${shQuote(unitName)}.service; systemctl is-active --quiet ${shQuote(unitName)}.service; ${verifyListeners}`,
@@ -1764,10 +1782,17 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     const pluginInventorySignature = agentPluginInventorySignature(reportedPluginInventoryForFastPath);
     const mimicEnvironmentSignature = stableStateSignature(mimicEnvironment || null);
     const panelMigrationForFastPath = await getPanelMigrationAgentDirective(Number(host.id));
+    // A failed or pending landing deployment must never enter the compact
+    // heartbeat fast path: it needs another desired-state dispatch so the
+    // Agent can reconcile and report the eventual healthy state.
+    const landingServicesForFastPath = await db.getLandingServicesForHost(Number(host.id), true, true);
+    const hasLandingReconcileWork = landingServicesForFastPath.some((service: any) => String(service.status || "") !== "running");
     const stablePlan = agentStableHeartbeatPlanCache.match(host.id, {
       forceReconcile,
       hasBlockingWork: !!(host as any).agentUpgradeRequested
         || !!panelMigrationForFastPath
+
+        || hasLandingReconcileWork
         || hasHostTcpingRequest(host.id)
         || hasQueuedLookingGlassAgentTasks(host.id)
         || hasQueuedIperf3AgentTasks(host.id)
@@ -5968,6 +5993,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           targetPort,
           method: "tcping",
           intervalSeconds: 60,
+          sampleCount: 3,
         } as any);
       }
     }

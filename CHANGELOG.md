@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.3.296] - 2026-09-07
+
+### 落地 SS 连通性与延迟探测
+
+- 新建落地 SS 默认使用 `https://www.gstatic.com/generate_204` 作为延迟目标；编辑后会解析并下发对应主机与端口给 Agent。
+- 落地 SS 的立即延迟探测改为可见弹窗，Agent 连续采样 3 次 TCPing 后汇总回传；卡片移除实时速度，改为展示最新延迟。
+- 修复部署后监听验收过早造成的错误状态，并阻止错误/部署中的落地服务进入 Agent 稳定心跳快速路径，直到收到成功回执。
+- 识别 `nft_manager_firewall` 这类原生 nftables 默认拒绝 INPUT 链：创建时自动放行 SS 的 TCP/UDP 端口，删除时精确清理规则。
+- 面板与 APK Release `2.3.296`，Agent `2.2.198`，ForwardX FXP runtime `2.2.117`，Android APP `2.3.97`。
+
 ## [2.3.295] - 2026-09-06
 
 ### 落地 SS 连通性与清理

@@ -10,6 +10,22 @@ const METHODS = [
 ] as const;
 const randomSecret = (length = 28) => Array.from(crypto.getRandomValues(new Uint8Array(length)), (v) => "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"[v % 64]).join("");
 const isAdmin = (user: any) => String(user?.role) === "admin";
+const DEFAULT_LANDING_LATENCY_TARGET = "https://www.gstatic.com/generate_204";
+
+function parseLandingLatencyTarget(raw: string, requestedPort?: number) {
+  const value = String(raw || "").trim() || DEFAULT_LANDING_LATENCY_TARGET;
+  let parsed: URL;
+  try {
+    parsed = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(value) ? value : `tcp://${value}`);
+  } catch {
+    throw new Error("延迟测试地址格式无效，请填写域名、IP 或 https:// 地址");
+  }
+  if (!parsed.hostname) throw new Error("延迟测试地址缺少主机名");
+  const embeddedPort = Number(parsed.port || 0);
+  const port = embeddedPort || (parsed.protocol === "https:" ? 443 : Number(requestedPort || 443));
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("延迟测试端口无效");
+  return { host: parsed.hostname, port };
+}
 
 async function requireEligibleHost(user: any, hostId: number) {
   const host = await db.getHostById(hostId) as any;
@@ -133,14 +149,15 @@ export const landingRouter = router({
   create: protectedProcedure.input(z.object({
     hostId: z.number().int().positive(), name: z.string().trim().min(1).max(80), protocol: z.enum(["ss", "ss2022"]),
     method: z.enum(METHODS), password: z.string().trim().min(8).max(256), port: z.number().int().min(1).max(65535),
-    endpoint: z.string().trim().min(1).max(255).optional(), latencyTargetHost: z.string().trim().min(1).max(255).default("1.1.1.1"), latencyTargetPort: z.number().int().min(1).max(65535).default(443),
+    endpoint: z.string().trim().min(1).max(255).optional(), latencyTargetHost: z.string().trim().min(1).max(255).default(DEFAULT_LANDING_LATENCY_TARGET), latencyTargetPort: z.number().int().min(1).max(65535).default(443),
   })).mutation(async ({ input, ctx }) => {
     const host = await requireEligibleHost(ctx.user, input.hostId);
     const wants2022 = input.protocol === "ss2022";
     if (wants2022 !== input.method.startsWith("2022-")) throw new Error("SS2022 必须使用 2022 加密方式，普通 SS 不能使用 2022 加密方式");
     const port = await db.getLandingServicesForHost(input.hostId);
     if (port.some((item: any) => Number(item.port) === input.port)) throw new Error("端口已被另一个落地服务使用");
-    const id = await db.createLandingService({ ...input, endpoint: input.endpoint || publicEndpoint(host), userId: Number(host.userId), isEnabled: true, status: "pending", statusMessage: "等待 Agent 部署" });
+    const latencyTarget = parseLandingLatencyTarget(input.latencyTargetHost, input.latencyTargetPort);
+    const id = await db.createLandingService({ ...input, latencyTargetHost: latencyTarget.host, latencyTargetPort: latencyTarget.port, endpoint: input.endpoint || publicEndpoint(host), userId: Number(host.userId), isEnabled: true, status: "pending", statusMessage: "等待 Agent 部署" });
     pushAgentRefresh(input.hostId, "landing-service-create", { urgent: true });
     return { id, status: "pending" };
   }),
@@ -154,7 +171,8 @@ export const landingRouter = router({
     if (wants2022 !== input.method.startsWith("2022-")) throw new Error("SS2022 必须使用 2022 加密方式，普通 SS 不能使用 2022 加密方式");
     const peers = await db.getLandingServicesForHost(Number(service.hostId), true, true);
     if (peers.some((item: any) => Number(item.id) !== input.id && Number(item.port) === input.port)) throw new Error("端口已被另一个落地服务使用");
-    await db.updateLandingService(input.id, { ...input, status: "pending", statusMessage: "等待 Agent 更新服务" });
+    const latencyTarget = parseLandingLatencyTarget(input.latencyTargetHost, input.latencyTargetPort);
+    await db.updateLandingService(input.id, { ...input, latencyTargetHost: latencyTarget.host, latencyTargetPort: latencyTarget.port, status: "pending", statusMessage: "等待 Agent 更新服务" });
     pushAgentRefresh(Number(service.hostId), "landing-service-update", { urgent: true });
     return { success: true };
   }),

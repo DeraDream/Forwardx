@@ -512,6 +512,7 @@ type tcpingTask struct {
 	SourcePort      int
 	ProbeKey        string
 	TopologyKey     string
+	SampleCount     int
 	GroupHealth     *forwardGroupHealthSpec
 }
 
@@ -1381,6 +1382,7 @@ func collectTCPing(cfg Config, ruleProbes []ruleLatencyProbe, probes []tunnelPro
 			TargetIP:   probe.TargetIP,
 			TargetPort: probe.TargetPort,
 			ProbeKey:   fmt.Sprintf("service:%d:%s:%d:tcping", probe.ServiceID, strings.ToLower(strings.TrimSpace(probe.TargetIP)), probe.TargetPort),
+			SampleCount: probe.SampleCount,
 		})
 	}
 
@@ -1844,6 +1846,8 @@ func executeTCPingTaskWithWireGuardProbe(task tcpingTask, wireGuardProbe func(in
 			return tcpingTaskResult{}
 		}
 		reachable = status == wireGuardProbeSuccess
+	} else if task.Kind == "service" && task.SampleCount > 1 {
+		latency, reachable = tcpLatencySamples(task.TargetIP, task.TargetPort, task.SampleCount, tcpingProbeTimeout)
 	} else {
 		latency, reachable = tcpLatency(task.TargetIP, task.TargetPort, tcpingProbeTimeout)
 	}
@@ -2368,6 +2372,35 @@ func roundPositiveLatency(value string) int {
 func iptablesCounterSnapshot() map[string]trafficCounters {
 	counters, _ := iptablesCounterSnapshotWithDiagnostics()
 	return counters
+}
+
+// Landing-service checks take a short sample window so a single transient
+// dial does not become the value shown in the panel.
+func tcpLatencySamples(host string, port, count int, timeout time.Duration) (int, bool) {
+	if count < 1 {
+		count = 1
+	}
+	if count > 5 {
+		count = 5
+	}
+	values := make([]int, 0, count)
+	for attempt := 0; attempt < count; attempt++ {
+		latency, ok := tcpLatency(host, port, timeout)
+		if ok {
+			values = append(values, latency)
+		}
+		if attempt+1 < count {
+			time.Sleep(180 * time.Millisecond)
+		}
+	}
+	if len(values) == 0 {
+		return 0, false
+	}
+	total := 0
+	for _, value := range values {
+		total += value
+	}
+	return total / len(values), true
 }
 
 func landingIptablesSnapshot() map[int]trafficCounters {

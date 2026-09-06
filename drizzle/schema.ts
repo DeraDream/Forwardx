@@ -331,7 +331,7 @@ export const landingServices = table("landing_services", {
   password: text("password").notNull(),
   port: int("port").notNull(),
   endpoint: text("endpoint"),
-  latencyTargetHost: text("latencyTargetHost").notNull().default("1.1.1.1"),
+  latencyTargetHost: text("latencyTargetHost").notNull().default("www.gstatic.com"),
   latencyTargetPort: int("latencyTargetPort").notNull().default(443),
   latestLatencyMs: int("latestLatencyMs"),
   latestLatencyIsTimeout: boolean("latestLatencyIsTimeout").notNull().default(false),
