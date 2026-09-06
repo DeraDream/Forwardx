@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.3.291] - 2026-09-06
+
+### 修复
+
+- 补全落地机和落地服务的面板迁移/备份导入顺序及关联 ID 映射，确保现有 SQLite/MySQL 面板可以正常升级、备份与恢复。
+- 面板与 APK Release `2.3.291`，Agent `2.2.194`，ForwardX FXP runtime `2.2.117`，Android APP `2.3.97`。
+
 ## [2.3.290] - 2026-09-06
 
 ### 落地机与 Shadowsocks

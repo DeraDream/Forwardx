@@ -690,6 +690,8 @@ type PreparedImportRow = {
 const IMPORT_TABLE_ORDER = [
   "users",
   "hosts",
+  "landing_hosts",
+  "landing_services",
   "host_groups",
   "host_group_members",
   "tunnels",
@@ -1114,6 +1116,16 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
       row.userId = mapRequiredId(maps, "users", source.userId);
       return { row };
 
+    case "landing_hosts":
+      row.hostId = mapRequiredId(maps, "hosts", source.hostId);
+      row.userId = mapRequiredId(maps, "users", source.userId);
+      return { row, existingWhere: { hostId: row.hostId } };
+
+    case "landing_services":
+      row.hostId = mapRequiredId(maps, "hosts", source.hostId);
+      row.userId = mapRequiredId(maps, "users", source.userId);
+      return { row };
+
     case "host_group_members":
       row.groupId = mapRequiredId(maps, "host_groups", source.groupId);
       row.hostId = mapRequiredId(maps, "hosts", source.hostId);
@@ -1152,6 +1164,7 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
       row.hostId = mapRequiredId(maps, "hosts", source.hostId);
       row.userId = mapRequiredId(maps, "users", source.userId);
       row.tunnelId = mapOptionalId(maps, "tunnels", source.tunnelId);
+      row.targetLandingServiceId = mapOptionalId(maps, "landing_services", source.targetLandingServiceId);
       row.forwardGroupId = mapOptionalId(maps, "forward_groups", source.forwardGroupId);
       row.forwardGroupRuleId = null;
       row.forwardGroupMemberId = mapOptionalId(maps, "forward_group_members", source.forwardGroupMemberId);
