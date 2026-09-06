@@ -38,6 +38,48 @@ export const selfTestRulesRouter = router({
         throw new Error("无权操作此规则");
       }
       await requireRuleProtocolEnabled(rule);
+      const savedTargetRuleId = Number((rule as any).targetRuleId || 0);
+      if (savedTargetRuleId > 0) {
+        const savedTargetRule = await db.getForwardRuleById(savedTargetRuleId) as any;
+        const savedChain = savedTargetRule?.forwardGroupId
+          ? await db.getForwardGroupById(Number(savedTargetRule.forwardGroupId)) as any
+          : null;
+        if (savedTargetRule && String(savedChain?.groupMode || "") === "chain") {
+          const probes = await db.getForwardGroupChainProbes(Number(savedChain.id), { includeFinalTarget: true, templateRule: savedTargetRule });
+          if (probes.length === 0) throw new Error("引用的转发链没有可测试的有效链路");
+          const batchId = createHopTestBatch("saved-forward", Number(rule.id));
+          const testHostIds = new Set<number>();
+          const hopCount = probes.length + 1;
+          const sourceHost = await db.getHostById(Number(rule.hostId));
+          const sourceName = String((sourceHost as any)?.name || `主机${rule.hostId}`).trim();
+          const entryHost = await db.getHostById(Number(probes[0].fromHostId));
+          const entryName = String((entryHost as any)?.name || `主机${probes[0].fromHostId}`).trim();
+          const outerTestId = await db.createForwardTest({
+            ruleId: rule.id, hostId: rule.hostId, userId: rule.userId, status: "pending",
+            listenOk: false, targetReachable: false, forwardOk: false,
+            message: JSON.stringify({ kind: "forward-chain", groupId: savedChain.id, ruleId: rule.id,
+              entryIp: rule.targetIp, entrySourcePort: rule.targetPort, targetIp: rule.targetIp, targetPort: rule.targetPort,
+              method: linkProbeMethodForRule(rule), hopLabel: `1/${hopCount} ${sourceName}->${entryName}`,
+              routeLabel: `${sourceName} -> ${entryName}`, batchId, latencyMode: "sum", runtimeDependent: true }),
+          });
+          registerHopTest(batchId, Number(outerTestId));
+          testHostIds.add(Number(rule.hostId));
+          for (const [index, probe] of probes.entries()) {
+            const testId = await db.createForwardTest({
+              ruleId: rule.id, hostId: probe.fromHostId, userId: rule.userId, status: "pending",
+              listenOk: false, targetReachable: false, forwardOk: false,
+              message: JSON.stringify({ kind: "forward-chain", groupId: savedChain.id, ruleId: rule.id,
+                entryIp: probe.targetIp, entrySourcePort: probe.targetPort, targetIp: probe.targetIp, targetPort: probe.targetPort,
+                method: probe.method, hopLabel: `${index + 2}/${hopCount} ${probe.hopLabel}`, routeLabel: probe.routeLabel,
+                batchId, latencyMode: "sum", runtimeDependent: probe.runtimeDependent }),
+            });
+            registerHopTest(batchId, Number(testId));
+            testHostIds.add(Number(probe.fromHostId));
+          }
+          for (const hostId of testHostIds) pushAgentRefresh(hostId, "saved-forward-chain-selftest", { urgent: true });
+          return { id: Number(outerTestId), queued: hopCount };
+        }
+      }
       let hostId = rule.hostId;
       let message: string | null = null;
       if ((rule as any).isForwardGroupTemplate && (rule as any).forwardGroupId) {
