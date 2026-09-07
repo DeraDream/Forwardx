@@ -127,7 +127,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { toast } from "sonner";
 import { useLocation, useSearch } from "wouter";
 import { TcpingDetailDialog } from "@/components/rules/TcpingDetailDialog";
-import { LandingManagement } from "@/components/LandingManagement";
+import { LandingCreateForm, LandingManagement } from "@/components/LandingManagement";
 import { countryFeatureHasCode, normalizeCountryCode, type CountryFeatureLike } from "@/lib/countryFeatures";
 import {
   addHostNodeMeta,
@@ -2265,7 +2265,7 @@ function RulesContent() {
     storageKey: ruleCategoryStorageKey,
   });
   const [rulePageTab, setRulePageTab] = useState<RulePageTab>(ruleCategory);
-  const [landingCreateRequest, setLandingCreateRequest] = useState(0);
+  const [createDialogTab, setCreateDialogTab] = useState<RuleRouteMode | "landing">("local");
   useEffect(() => {
     if (rulePageTab !== "landing") setRulePageTab(ruleCategory);
   }, [ruleCategory, rulePageTab]);
@@ -2640,8 +2640,13 @@ function RulesContent() {
     setPortStatus("idle");
   };
 
-  const openCreate = (preferredRouteMode?: RuleRouteMode) => {
+  const openCreate = (preferredRouteMode?: RuleRouteMode | "landing") => {
     resetForm();
+    if (preferredRouteMode === "landing") {
+      setCreateDialogTab("landing");
+      setShowDialog(true);
+      return;
+    }
     const firstPortGroup = canUseSavedLocalForward ? availablePortForwardGroups[0] : null;
     const firstLocalForwardType = firstPortGroup ? getForwardGroupRuleForwardType(firstPortGroup, defaultForm.forwardType) : null;
     const firstBillingHost = canUseBillingHostLocalForward ? availableTrafficBillingHosts[0] : null;
@@ -2664,6 +2669,7 @@ function RulesContent() {
           tunnelId: null,
           forwardGroupId: Number(firstPortGroup.id),
         });
+        setCreateDialogTab("local");
         setShowDialog(true);
         return;
       }
@@ -2677,6 +2683,7 @@ function RulesContent() {
           tunnelId: null,
           forwardGroupId: null,
         });
+        setCreateDialogTab("local");
         setShowDialog(true);
         return;
       }
@@ -2711,6 +2718,7 @@ function RulesContent() {
       toast.error("暂无可用转发资源，请检查链路配置、授权或计费余额。");
       return;
     }
+    setCreateDialogTab(routeMode);
     setShowDialog(true);
   };
   const openCopyDialog = () => {
@@ -2782,6 +2790,7 @@ function RulesContent() {
     setEditingOriginalProtocol(normalizeRuleProtocol(rule.protocol));
     setLegacyLocalRuleEditId(isLegacyLocalRule ? Number(rule.id) : null);
     setPortStatus("idle");
+    setCreateDialogTab(rule.forwardGroupId ? (normalizeForwardGroupModeForRule(editForwardGroup) === "port" ? "local" : isForwardChainGroup(editForwardGroup) ? "chain" : "group") : rule.forwardType === "gost" && rule.tunnelId ? "tunnel" : "local");
     setShowDialog(true);
   };
 
@@ -3063,7 +3072,7 @@ function RulesContent() {
   const canUseForwardChain = availableForwardChainGroups.length > 0;
   const canUseFailoverGroup = availableFailoverForwardGroups.length > 0;
   const canCreateRule = canUseLocalForward || canUseGost || canUseForwardChain || canUseFailoverGroup;
-  const routeModeTabItems: SlidingTabItem<RuleRouteMode>[] = [
+  const routeModeTabItems: SlidingTabItem<RuleRouteMode | "landing">[] = [
     {
       value: "local",
       label: "端口转发",
@@ -3088,6 +3097,7 @@ function RulesContent() {
       icon: Layers3,
       disabled: !canUseFailoverGroup || (routeModeLocked && form.routeMode !== "group"),
     },
+    { value: "landing", label: "落地 SS", icon: Server },
   ];
   useEffect(() => {
     const params = new URLSearchParams(search);
@@ -6579,10 +6589,10 @@ function RulesContent() {
       <div className="space-y-6">
         <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
           <div className="min-w-0"><h1 className="text-xl sm:text-2xl font-bold tracking-tight">转发规则</h1><p className="mt-1 text-xs text-muted-foreground sm:text-sm">管理转发规则和运行状态</p></div>
-          <div className="flex w-full gap-2 sm:w-auto sm:items-center sm:justify-end"><div className="hidden items-center overflow-hidden rounded-md border border-border/40 md:flex"><Button variant={landingViewMode === "compact" ? "secondary" : "ghost"} size="icon" className="h-8 w-8 rounded-none" title="紧凑样式" onClick={() => handleDisplayModeChange("compact")}><Rows3 className="h-4 w-4" /></Button><Button variant={landingViewMode === "card" ? "secondary" : "ghost"} size="icon" className="h-8 w-8 rounded-none" title="方块样式" onClick={() => handleDisplayModeChange("standard")}><LayoutGrid className="h-4 w-4" /></Button><Button variant={landingViewMode === "table" ? "secondary" : "ghost"} size="icon" className="h-8 w-8 rounded-none" title="列表样式" onClick={() => handleDisplayModeChange("table")}><List className="h-4 w-4" /></Button></div><DropdownMenu><DropdownMenuTrigger asChild><Button className="ml-auto gap-2 sm:ml-0"><Plus className="h-4 w-4" />新建</Button></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem onSelect={() => { setRulePageTab("all"); openCreate(); }}>添加转发规则</DropdownMenuItem><DropdownMenuItem onSelect={() => setLandingCreateRequest(Date.now())}>新建落地 SS</DropdownMenuItem></DropdownMenuContent></DropdownMenu></div>
+          <div className="flex w-full gap-2 sm:w-auto sm:items-center sm:justify-end"><div className="hidden items-center overflow-hidden rounded-md border border-border/40 md:flex"><Button variant={landingViewMode === "compact" ? "secondary" : "ghost"} size="icon" className="h-8 w-8 rounded-none" title="紧凑样式" onClick={() => handleDisplayModeChange("compact")}><Rows3 className="h-4 w-4" /></Button><Button variant={landingViewMode === "card" ? "secondary" : "ghost"} size="icon" className="h-8 w-8 rounded-none" title="方块样式" onClick={() => handleDisplayModeChange("standard")}><LayoutGrid className="h-4 w-4" /></Button><Button variant={landingViewMode === "table" ? "secondary" : "ghost"} size="icon" className="h-8 w-8 rounded-none" title="列表样式" onClick={() => handleDisplayModeChange("table")}><List className="h-4 w-4" /></Button></div><DropdownMenu><DropdownMenuTrigger asChild><Button className="ml-auto gap-2 sm:ml-0"><Plus className="h-4 w-4" />新建</Button></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem onSelect={() => { setRulePageTab("all"); openCreate(); }}>添加转发规则</DropdownMenuItem><DropdownMenuItem onSelect={() => openCreate("landing")}>新建落地 SS</DropdownMenuItem></DropdownMenuContent></DropdownMenu></div>
         </div>
         <Tabs value={rulePageTab} onValueChange={handleRulePageTabChange}><SlidingTabsList items={ruleCategoryItems} activeValue={rulePageTab} ariaLabel="转发规则分类" minItemWidthRem={8.5} /></Tabs>
-        <LandingManagement viewMode={landingViewMode} createRequestKey={landingCreateRequest} />
+        <LandingManagement viewMode={landingViewMode} />
       </div>
     );
   }
@@ -6671,7 +6681,7 @@ function RulesContent() {
               权限加载中
             </Button>
           ) : canAdd ? (
-            <DropdownMenu><DropdownMenuTrigger asChild><Button className="col-span-2 gap-2 sm:col-span-1" disabled={!canCreateRule} title={!canCreateRule ? "暂无可用转发资源" : undefined}><Plus className="h-4 w-4" />新建</Button></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem onSelect={() => openCreate()}>添加转发规则</DropdownMenuItem><DropdownMenuItem onSelect={() => { setRulePageTab("landing"); setLandingCreateRequest(Date.now()); }}>新建落地 SS</DropdownMenuItem></DropdownMenuContent></DropdownMenu>
+            <DropdownMenu><DropdownMenuTrigger asChild><Button className="col-span-2 gap-2 sm:col-span-1"><Plus className="h-4 w-4" />新建</Button></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem disabled={!canCreateRule} onSelect={() => openCreate()}>添加转发规则</DropdownMenuItem><DropdownMenuItem onSelect={() => openCreate("landing")}>新建落地 SS</DropdownMenuItem></DropdownMenuContent></DropdownMenu>
           ) : (
             <Button disabled className="col-span-2 gap-2 sm:col-span-1" title="需要管理员授权后才能添加规则">
               <Plus className="h-4 w-4" />
@@ -7108,22 +7118,28 @@ function RulesContent() {
         open={showDialog}
         onOpenChange={(open) => {
           if (!open) resetForm();
+          if (!open) setCreateDialogTab("local");
           setShowDialog(open);
         }}
       >
         <DialogContent className="flex max-h-[96svh] w-[calc(100vw-1rem)] flex-col gap-3 overflow-hidden p-4 sm:max-w-2xl sm:p-5">
           <DialogHeader>
-            <DialogTitle>{editingId ? "编辑规则" : "添加转发规则"}</DialogTitle>
+            <DialogTitle>{createDialogTab === "landing" ? "新建落地服务" : editingId ? "编辑规则" : "添加转发规则"}</DialogTitle>
           </DialogHeader>
+          {createDialogTab === "landing" ? <><Tabs value={createDialogTab} onValueChange={(value) => { if (value === "landing") return; setCreateDialogTab(value as RuleRouteMode); setRouteMode(value as RuleRouteMode); }}><SlidingTabsList items={routeModeTabItems} activeValue={createDialogTab} ariaLabel="转发规则类型" minItemWidthRem={5.75} /></Tabs><LandingCreateForm onCancel={() => setShowDialog(false)} onCreated={() => setShowDialog(false)} /></> : <>
           <div className="min-h-0 flex-1 scroll-pb-28 space-y-3 overflow-y-auto pb-5 pr-1">
             <Tabs
-              value={form.routeMode}
-              onValueChange={(value) => setRouteMode(value as RuleRouteMode)}
+              value={createDialogTab}
+              onValueChange={(value) => {
+                if (value === "landing") { setCreateDialogTab("landing"); return; }
+                setCreateDialogTab(value as RuleRouteMode);
+                setRouteMode(value as RuleRouteMode);
+              }}
               className="space-y-3"
             >
               <SlidingTabsList
                 items={routeModeTabItems}
-                activeValue={form.routeMode}
+                activeValue={createDialogTab}
                 ariaLabel="转发规则类型"
                 minItemWidthRem={5.75}
               />
@@ -7441,7 +7457,7 @@ function RulesContent() {
                     setForm({ ...form, targetLandingServiceId: Number(value), targetRuleId: null, targetIp: String(service?.endpoint || service?.host?.ip || service?.targetIp || ""), targetPort: Number(service?.port || 0), sourcePort: Number(service?.port || 0) });
                   }}>
                     <SelectTrigger><SelectValue placeholder="请选择落地服务" /></SelectTrigger>
-                    <SelectContent>{availableLandingServices.map((service: any) => <SelectItem key={service.id} value={String(service.id)}>{service.name} · {service.host?.ip || service.endpoint || service.targetIp || "未解析 IP"}:{service.port}</SelectItem>)}</SelectContent>
+                    <SelectContent>{availableLandingServices.map((service: any) => <SelectItem key={service.id} value={String(service.id)}>{service.name} · {service.endpoint || service.host?.ip || service.targetIp || "未解析 IP"}:{service.port}</SelectItem>)}</SelectContent>
                   </Select>
                   <p className="text-xs text-muted-foreground">规则会始终转发到该落地 VPS 的 SS 监听端口。</p>
                 </div>
@@ -7586,6 +7602,7 @@ function RulesContent() {
               {isPending ? "处理中..." : editingId ? "保存" : "创建"}
             </Button>
           </DialogFooter>
+          </>}
         </DialogContent>
       </Dialog>
 

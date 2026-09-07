@@ -75,7 +75,9 @@ async function resolveLandingServiceTarget(actor: { id: number; role: string }, 
   if (!service || !service.isEnabled || service.status === "removing") throw new Error("引用的落地服务不存在或未启用");
   if (actor.role !== "admin" && Number(service.userId) !== Number(actor.id)) throw new Error("无权引用该落地服务");
   const host = await db.getHostById(Number(service.hostId)) as any;
-  const targetIp = String(host?.entryIp || host?.ipv4 || host?.ip || "").trim();
+  // A landing SS may have an independent inbound address.  Its configured
+  // endpoint takes precedence over the landing machine's public address.
+  const targetIp = String(service.endpoint || host?.entryIp || host?.ipv4 || host?.ip || "").trim();
   const targetPort = Number(service.port || 0);
   if (!targetIp || targetPort < 1 || targetPort > 65535) throw new Error("落地服务地址不可用");
   return { id, targetIp, targetPort };

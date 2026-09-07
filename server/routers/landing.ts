@@ -39,6 +39,9 @@ async function requireEligibleHost(user: any, hostId: number) {
 function publicEndpoint(host: any) {
   return String(host?.entryIp || host?.ipv4 || host?.ip || "").trim();
 }
+function exitEndpoint(host: any) {
+  return String(host?.ipv4 || host?.ip || host?.entryIp || "").trim();
+}
 
 function landingReferenceKind(rule: any, groupModes: Map<number, string>) {
   const groupMode = groupModes.get(Number(rule?.forwardGroupId || 0)) || "";
@@ -82,7 +85,7 @@ export const landingRouter = router({
       }
       result.push({
         ...marker,
-        host: { id: Number(host.id), name: host.name, ip: publicEndpoint(host), isOnline: !!host.isOnline, agentVersion: host.agentVersion || "" },
+        host: { id: Number(host.id), name: host.name, ip: publicEndpoint(host), exitIp: exitEndpoint(host), isOnline: !!host.isOnline, agentVersion: host.agentVersion || "" },
         landingServiceCount: hostServices.length,
         portForwardReferenceCount,
         forwardChainReferenceCount,
@@ -157,7 +160,7 @@ export const landingRouter = router({
     const port = await db.getLandingServicesForHost(input.hostId);
     if (port.some((item: any) => Number(item.port) === input.port)) throw new Error("端口已被另一个落地服务使用");
     const latencyTarget = parseLandingLatencyTarget(input.latencyTargetHost, input.latencyTargetPort);
-    const id = await db.createLandingService({ ...input, latencyTargetHost: latencyTarget.host, latencyTargetPort: latencyTarget.port, endpoint: input.endpoint || publicEndpoint(host), userId: Number(host.userId), isEnabled: true, status: "pending", statusMessage: "等待 Agent 部署" });
+    const id = await db.createLandingService({ ...input, latencyTargetHost: latencyTarget.host, latencyTargetPort: latencyTarget.port, endpoint: input.endpoint || exitEndpoint(host), userId: Number(host.userId), isEnabled: true, status: "pending", statusMessage: "等待 Agent 部署" });
     pushAgentRefresh(input.hostId, "landing-service-create", { urgent: true });
     return { id, status: "pending" };
   }),
