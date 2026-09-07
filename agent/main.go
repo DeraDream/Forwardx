@@ -2434,13 +2434,13 @@ type ruleLatencyProbe struct {
 }
 
 type hostProbeServiceProbe struct {
-	ServiceID       int    `json:"serviceId"`
+	ServiceID        int    `json:"serviceId"`
 	LandingServiceID int    `json:"landingServiceId,omitempty"`
-	TargetIP        string `json:"targetIp"`
-	TargetPort      int    `json:"targetPort"`
-	Method          string `json:"method"`
-	IntervalSeconds int    `json:"intervalSeconds"`
-	SampleCount     int    `json:"sampleCount,omitempty"`
+	TargetIP         string `json:"targetIp"`
+	TargetPort       int    `json:"targetPort"`
+	Method           string `json:"method"`
+	IntervalSeconds  int    `json:"intervalSeconds"`
+	SampleCount      int    `json:"sampleCount,omitempty"`
 }
 type forwardGroupProbe struct {
 	GroupID         int    `json:"groupId"`
@@ -4900,6 +4900,13 @@ func handleActionJobWithRuntimeSnapshot(cfg Config, a action, releaseRuntimeGate
 			if mimicAction && shouldLogAgentReport("mimic-runtime-skip", agentReportLogInterval) {
 				logf("mimic runtime sync skipped; cached state healthy diagnostics=%s", mimicRuntimeDiagnostics())
 			}
+			// The panel may still hold an earlier deployment error while this
+			// Agent has a healthy cached landing service.  A skipped action must
+			// still acknowledge that live state; otherwise the panel can remain
+			// permanently red because there is no subsequent status report.
+			if strings.HasPrefix(strings.TrimSpace(a.ForwardType), "landing-ss-service-") && a.LandingServiceID > 0 && a.ReportStatus != nil && *a.ReportStatus {
+				reportActionStatus(cfg, a, runtimeActionStatusRunning(a, true), "")
+			}
 			return true
 		}
 		if wireGuardAction {
@@ -4998,6 +5005,16 @@ func handleActionJobWithRuntimeSnapshot(cfg Config, a action, releaseRuntimeGate
 			logf("mimic runtime sync complete ok=%v diagnosticsAfter=%s", ok, mimicRuntimeDiagnostics())
 		} else if a.ForceRuntimeSync || !ok || agentVerboseLogs {
 			logf("runtime action complete forwardType=%s ok=%v", a.ForwardType, ok)
+		}
+		// Do not keep retrying a completed landing service just because a
+		// best-effort provisioning step returned non-zero. The unit's live
+		// state is authoritative: once ssserver is active, converge the action
+		// and let the panel render the real service state.
+		landingHealthyAfterApply := strings.HasPrefix(strings.TrimSpace(a.ForwardType), "landing-ss-service-") && a.LandingServiceID > 0 && strings.TrimSpace(a.Op) != "remove" && runtimeActionServicesHealthy(a)
+		if !ok && landingHealthyAfterApply {
+			logf("landing SS action had a non-critical command failure but service is active; reporting healthy service=%d", a.LandingServiceID)
+			ok = true
+			actionMessage.set("")
 		}
 		rememberRuntimeActionResult(a, ok)
 		invalidateLocalRuntimeReadinessCache()
@@ -5578,6 +5595,14 @@ func runtimeActionKey(a action) string {
 // Runtime remove actions report a healthy completion as not-running. The panel
 // uses that false state to complete cleanup of resource rows such as landing SS.
 func runtimeActionStatusRunning(a action, succeeded bool) bool {
+	// A landing SS may already be healthy when a non-critical provisioning
+	// command (for example, a firewall rule that already exists) returns a
+	// non-zero status.  Reporting that command result as the service state
+	// makes the panel show "error" while ssserver is listening and forwarding
+	// traffic.  For an apply action, the managed unit is the source of truth.
+	if strings.HasPrefix(strings.TrimSpace(a.ForwardType), "landing-ss-service-") && a.LandingServiceID > 0 && strings.TrimSpace(a.Op) != "remove" {
+		return runtimeActionServicesHealthy(a)
+	}
 	return succeeded && strings.TrimSpace(a.Op) != "remove"
 }
 
