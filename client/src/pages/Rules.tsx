@@ -6592,6 +6592,28 @@ function RulesContent() {
         </div>
         <Tabs value={rulePageTab} onValueChange={handleRulePageTabChange}><SlidingTabsList items={ruleCategoryItems} activeValue={rulePageTab} ariaLabel="转发规则分类" minItemWidthRem={8.5} /></Tabs>
         <LandingManagement viewMode={landingViewMode} />
+        <Dialog
+          open={showDialog}
+          onOpenChange={(open) => {
+            if (!open) resetForm();
+            if (!open) setCreateDialogTab("local");
+            setShowDialog(open);
+          }}
+        >
+          <DialogContent className="flex max-h-[96svh] w-[calc(100vw-1rem)] flex-col gap-3 overflow-hidden p-4 sm:max-w-2xl sm:p-5">
+            <DialogHeader>
+              <DialogTitle>新建落地服务</DialogTitle>
+            </DialogHeader>
+            <Tabs value={createDialogTab} onValueChange={(value) => {
+              if (value === "landing") return;
+              setCreateDialogTab(value as RuleRouteMode);
+              setRouteMode(value as RuleRouteMode);
+            }}>
+              <SlidingTabsList items={routeModeTabItems} activeValue={createDialogTab} ariaLabel="转发规则类型" minItemWidthRem={5.75} />
+            </Tabs>
+            <LandingCreateForm onCancel={() => setShowDialog(false)} onCreated={() => setShowDialog(false)} />
+          </DialogContent>
+        </Dialog>
       </div>
     );
   }
