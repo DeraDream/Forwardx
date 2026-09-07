@@ -125,7 +125,7 @@ import {
 } from "recharts";
 import MultiHopEditor from "@/components/MultiHopEditor";
 import { ForwardGroupsContent } from "@/pages/ForwardGroups";
-import { LandingHostManagement } from "@/components/LandingManagement";
+import { LandingHostCreateForm, LandingHostManagement } from "@/components/LandingManagement";
 
 const loadReactGlobe = () => import("react-globe.gl");
 const ReactGlobe = lazy(loadReactGlobe) as typeof import("react-globe.gl").default;
@@ -2235,6 +2235,7 @@ function TunnelsContent() {
   });
   const [linkSearchQuery, setLinkSearchQuery] = useState("");
   const [showCreateTypeDialog, setShowCreateTypeDialog] = useState(false);
+  const [showLandingCreateDialog, setShowLandingCreateDialog] = useState(false);
   const [selectedCreateType, setSelectedCreateType] = useState<LinkCreateType>("chain");
   const [chainCreateForm, setChainCreateForm] = useState<ChainCreateForm>(defaultChainCreateForm);
   const [chainAdvancedOpen, setChainAdvancedOpen] = useState(false);
@@ -3766,7 +3767,7 @@ function TunnelsContent() {
         ? canCreatePort
         : activeSectionCreatesGroup
           ? canCreateGroup
-          : false;
+          : activeSection === "landing";
   const createDisabledTitle = hostsQueryFailed
     ? "主机列表加载失败，请重试后再创建"
     : hostsQueryLoading
@@ -3780,6 +3781,10 @@ function TunnelsContent() {
         : undefined;
 
   const openCreateTypeDialog = () => {
+    if (activeSection === "landing") {
+      setShowLandingCreateDialog(true);
+      return;
+    }
     if (activeSectionCreatesGroup) {
       if (activeSection === "ports" ? !canCreatePort : !canCreateGroup) return;
       setGroupCreateRequest({
@@ -4793,6 +4798,18 @@ function TunnelsContent() {
               {isCreateTypePending ? "保存中..." : "创建"}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showLandingCreateDialog} onOpenChange={setShowLandingCreateDialog}>
+        <DialogContent className="flex max-h-[96svh] w-[calc(100vw-1rem)] flex-col gap-3 overflow-hidden p-4 sm:max-w-2xl sm:p-5">
+          <DialogHeader>
+            <DialogTitle>新建落地服务</DialogTitle>
+          </DialogHeader>
+          <LandingHostCreateForm
+            onCancel={() => setShowLandingCreateDialog(false)}
+            onCreated={() => setShowLandingCreateDialog(false)}
+          />
         </DialogContent>
       </Dialog>
 
