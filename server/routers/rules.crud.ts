@@ -1576,6 +1576,10 @@ export const crudRulesRouter = router({
             sourcePort: nextSourcePort,
             targetIp: normalizeRuleTargetIp(input.targetIp ?? (rule as any).targetIp, { tunnelId: nextTunnelId }),
             targetPort: Number(input.targetPort ?? (rule as any).targetPort),
+            // Keep a selected managed target when a port-forward template is
+            // converted back into a direct rule.
+            targetRuleId: input.targetRuleId !== undefined ? input.targetRuleId : ((rule as any).targetRuleId ?? null),
+            targetLandingServiceId: input.targetLandingServiceId !== undefined ? input.targetLandingServiceId : ((rule as any).targetLandingServiceId ?? null),
             telegramErrorNotifyEnabled: input.telegramErrorNotifyEnabled ?? (rule as any).telegramErrorNotifyEnabled,
             blockHttp: false,
             blockSocks: false,
@@ -1729,7 +1733,10 @@ export const crudRulesRouter = router({
           forwardGroupRuleId: null,
           forwardGroupMemberId: null,
           isForwardGroupTemplate: true,
-          targetRuleId: null,
+          // Port-forward templates can target a saved completed forward or a
+          // landing SS. Chains cannot, so only clear those references there.
+          targetRuleId: isPortGroup ? (input.targetRuleId !== undefined ? input.targetRuleId : ((rule as any).targetRuleId ?? null)) : null,
+          targetLandingServiceId: isPortGroup ? (input.targetLandingServiceId !== undefined ? input.targetLandingServiceId : ((rule as any).targetLandingServiceId ?? null)) : null,
         };
         delete data.id;
         delete data.blockHttp;

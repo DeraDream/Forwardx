@@ -141,10 +141,3 @@ jobs:
             attempt=$((attempt + 1))
             delay=$((delay * 2))
           done
-
-  docker-image:
-    needs: release-panel
-    uses: ./.github/workflows/docker-image.yml
-    permissions:
-      contents: read
-      packages: write
