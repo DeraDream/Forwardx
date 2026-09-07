@@ -2690,8 +2690,8 @@ function RulesContent() {
       toast.error("暂无可用端口转发，请检查链路配置、授权或计费余额");
       return;
     }
+    const routeMode: RuleRouteMode = hasSavedLocalForward || hasBillingHostLocalForward ? "local" : firstTunnel ? "tunnel" : firstChain ? "chain" : "group";
     if (hasSavedLocalForward || hasBillingHostLocalForward || firstTunnel || firstChain || firstGroup) {
-      const routeMode: RuleRouteMode = hasSavedLocalForward || hasBillingHostLocalForward ? "local" : firstTunnel ? "tunnel" : firstChain ? "chain" : "group";
       const localUsesSavedForward = routeMode === "local" && hasSavedLocalForward;
       setForm({
         ...defaultForm,

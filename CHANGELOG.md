@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.3.299] - 2026-09-07
+
+### 修复
+
+- 修复新建规则弹窗切换类型时的 TypeScript 编译错误。
+- 面板与 APK Release `2.3.299`，Agent `2.2.198`，ForwardX FXP runtime `2.2.117`，Android APP `2.3.97`。
+
 ## [2.3.298] - 2026-09-07
 
 ### 落地 SS 入口地址
