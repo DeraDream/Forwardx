@@ -176,6 +176,18 @@ export const landingRouter = router({
     pushAgentRefresh(Number(service.hostId), "landing-service-update", { urgent: true });
     return { success: true };
   }),
+  toggle: protectedProcedure.input(z.object({ id: z.number().int().positive(), isEnabled: z.boolean() })).mutation(async ({ input, ctx }) => {
+    const service = await db.getLandingServiceById(input.id, true) as any;
+    if (!service) throw new Error("落地服务不存在");
+    if (!isAdmin(ctx.user) && Number(service.userId) !== Number(ctx.user.id)) throw new Error("无权操作此服务");
+    await db.updateLandingService(input.id, {
+      isEnabled: input.isEnabled,
+      status: input.isEnabled ? "pending" : "removing",
+      statusMessage: input.isEnabled ? "等待 Agent 启动服务" : "等待 Agent 停止服务",
+    });
+    pushAgentRefresh(Number(service.hostId), input.isEnabled ? "landing-service-enable" : "landing-service-disable", { urgent: true });
+    return { success: true };
+  }),
   random: protectedProcedure.query(() => ({ password: randomSecret(), port: Math.floor(20000 + Math.random() * 30000) })),
   remove: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ input, ctx }) => {
     const service = await db.getLandingServiceById(input.id, true) as any;
