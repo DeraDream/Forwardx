@@ -394,8 +394,9 @@ test("Nginx certificate cleanup preserves only active TLS server files", () => {
 
 test("traffic reports use the steady window unless live metrics or strict accounting require it", () => {
   assert.equal(selectAgentTrafficReportInterval({ metricsWatching: false, strictAccounting: false }), 30);
-  assert.equal(selectAgentTrafficReportInterval({ metricsWatching: true, strictAccounting: false }), 10);
-  assert.equal(selectAgentTrafficReportInterval({ metricsWatching: false, strictAccounting: true }), 10);
+  assert.equal(selectAgentTrafficReportInterval({ metricsWatching: true, strictAccounting: false }), 3);
+  assert.equal(selectAgentTrafficReportInterval({ metricsWatching: false, strictAccounting: true }), 3);
+  assert.equal(selectAgentTrafficReportInterval({ metricsWatching: false, strictAccounting: false, landingTrafficActive: true }), 3);
 });
 
 test("traffic reports return to the steady window when a metrics watcher expires", () => {
@@ -404,7 +405,7 @@ test("traffic reports return to the steady window when a metrics watcher expires
   assert.equal(selectAgentTrafficReportInterval({
     metricsWatching: isHostMetricsWatching(hostId, 15_999),
     strictAccounting: false,
-  }), 10);
+  }), 3);
   assert.equal(selectAgentTrafficReportInterval({
     metricsWatching: isHostMetricsWatching(hostId, 16_000),
     strictAccounting: false,
