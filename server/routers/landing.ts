@@ -2,6 +2,7 @@ import { protectedProcedure, router } from "../_core/trpc";
 import { z } from "zod";
 import * as db from "../db";
 import { pushAgentRefresh, requestHostTcping } from "../agentEvents";
+import { pushTunnelEndpointRefresh } from "./helpers";
 import { getLandingPortCheck, requestLandingPortCheck } from "../landingPortChecks";
 
 const METHODS = [
@@ -175,7 +176,17 @@ export const landingRouter = router({
     const peers = await db.getLandingServicesForHost(Number(service.hostId), true, true);
     if (peers.some((item: any) => Number(item.id) !== input.id && Number(item.port) === input.port)) throw new Error("端口已被另一个落地服务使用");
     const latencyTarget = parseLandingLatencyTarget(input.latencyTargetHost, input.latencyTargetPort);
-    await db.updateLandingService(input.id, { ...input, latencyTargetHost: latencyTarget.host, latencyTargetPort: latencyTarget.port, status: "pending", statusMessage: "等待 Agent 更新服务" });
+    await db.updateLandingService(input.id, { ...input, previousPort: Number(service.port), recreatePending: true, latencyTargetHost: latencyTarget.host, latencyTargetPort: latencyTarget.port, status: "pending", statusMessage: "等待 Agent 删除旧服务并创建新服务" });
+    const referencedRules = (await db.getForwardRules()).filter((rule: any) => Number(rule.targetLandingServiceId) === input.id && !rule.pendingDelete);
+    for (const rule of referencedRules as any[]) {
+      await db.updateForwardRule(Number(rule.id), { targetIp: input.endpoint, targetPort: input.port, isRunning: false });
+      if (rule.tunnelId) {
+        const tunnel = await db.getTunnelById(Number(rule.tunnelId));
+        if (tunnel) await pushTunnelEndpointRefresh(tunnel, "landing-service-updated");
+      } else {
+        pushAgentRefresh(Number(rule.hostId), "landing-service-updated");
+      }
+    }
     pushAgentRefresh(Number(service.hostId), "landing-service-update", { urgent: true });
     return { success: true };
   }),

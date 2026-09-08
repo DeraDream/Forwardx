@@ -62,20 +62,20 @@ export async function getLandingServices(userId?: number, includeSecret = false)
   const rows = userId ? await db.select().from(landingServices).where(eq(landingServices.userId, userId)).orderBy(asc(landingServices.hostId), asc(landingServices.port)) : await db.select().from(landingServices).orderBy(asc(landingServices.hostId), asc(landingServices.port));
   const mapped = rows.map((row: any) => mapLandingService(row, includeSecret));
   const summaries = await getLandingServiceTrafficSummaries(mapped.map((row: any) => row.id));
-  return mapped.map((row: any) => ({ ...row, traffic: summaries.get(row.id) || { bytesIn24h: 0, bytesOut24h: 0, bytesInTotal: 0, bytesOutTotal: 0 } }));
+  return mapped.map((row: any) => ({ ...row, traffic: summaries.get(row.id) || { bytesIn24h: 0, bytesOut24h: 0, connections24h: 0, bytesInTotal: 0, bytesOutTotal: 0, connectionsTotal: 0 } }));
 }
 
 async function getLandingServiceTrafficSummaries(ids: number[]) {
   const result = new Map<number, any>(); const db = await getDb(); if (!db || ids.length === 0) return result;
   const q = quoteIdentifier; const marks = ids.map(() => "?").join(","); const cutoff = Math.floor((Date.now() - 24 * 60 * 60 * 1000) / 1000);
-  const rows = await queryRaw<any>(`SELECT ${q("serviceId")} serviceId, SUM(CASE WHEN ${q("recordedAt")} >= ? THEN ${q("bytesIn")} ELSE 0 END) bytesIn24h, SUM(CASE WHEN ${q("recordedAt")} >= ? THEN ${q("bytesOut")} ELSE 0 END) bytesOut24h, SUM(${q("bytesIn")}) bytesInTotal, SUM(${q("bytesOut")}) bytesOutTotal FROM ${q("landing_service_traffic_stats")} WHERE ${q("serviceId")} IN (${marks}) GROUP BY ${q("serviceId")}`, [cutoff, cutoff, ...ids]).catch(() => []);
+  const rows = await queryRaw<any>(`SELECT ${q("serviceId")} serviceId, SUM(CASE WHEN ${q("recordedAt")} >= ? THEN ${q("bytesIn")} ELSE 0 END) bytesIn24h, SUM(CASE WHEN ${q("recordedAt")} >= ? THEN ${q("bytesOut")} ELSE 0 END) bytesOut24h, SUM(CASE WHEN ${q("recordedAt")} >= ? THEN ${q("connections")} ELSE 0 END) connections24h, SUM(${q("bytesIn")}) bytesInTotal, SUM(${q("bytesOut")}) bytesOutTotal, SUM(${q("connections")}) connectionsTotal FROM ${q("landing_service_traffic_stats")} WHERE ${q("serviceId")} IN (${marks}) GROUP BY ${q("serviceId")}`, [cutoff, cutoff, cutoff, ...ids]).catch(() => []);
   const samples = await queryRaw<any>(`SELECT ${q("serviceId")} serviceId, ${q("bytesIn")} bytesIn, ${q("bytesOut")} bytesOut, ${q("recordedAt")} recordedAt FROM ${q("landing_service_traffic_stats")} WHERE ${q("serviceId")} IN (${marks}) ORDER BY ${q("recordedAt")} DESC, ${q("id")} DESC`, ids).catch(() => []);
   const newest = new Map<number, any>(); const previous = new Map<number, any>();
   for (const sample of samples) { const id = Number(sample.serviceId); if (!newest.has(id)) newest.set(id, sample); else if (!previous.has(id)) previous.set(id, sample); }
   for (const row of rows) {
     const id = Number(row.serviceId), latest = newest.get(id), before = previous.get(id);
     const seconds = latest && before ? Math.max(1, Number(latest.recordedAt || 0) - Number(before.recordedAt || 0)) : 0;
-    result.set(id, { bytesIn24h: Number(row.bytesIn24h || 0), bytesOut24h: Number(row.bytesOut24h || 0), bytesInTotal: Number(row.bytesInTotal || 0), bytesOutTotal: Number(row.bytesOutTotal || 0), bytesInRate: seconds ? Number(latest.bytesIn || 0) / seconds : 0, bytesOutRate: seconds ? Number(latest.bytesOut || 0) / seconds : 0 });
+    result.set(id, { bytesIn24h: Number(row.bytesIn24h || 0), bytesOut24h: Number(row.bytesOut24h || 0), connections24h: Number(row.connections24h || 0), bytesInTotal: Number(row.bytesInTotal || 0), bytesOutTotal: Number(row.bytesOutTotal || 0), connectionsTotal: Number(row.connectionsTotal || 0), bytesInRate: seconds ? Number(latest.bytesIn || 0) / seconds : 0, bytesOutRate: seconds ? Number(latest.bytesOut || 0) / seconds : 0 });
   }
   return result;
 }
@@ -112,12 +112,12 @@ export async function deleteLandingService(id: number) {
   await db.delete(landingServices).where(eq(landingServices.id, id));
 }
 
-export async function recordLandingServiceTraffic(items: Array<{ serviceId: number; hostId: number; userId: number; bytesIn: number; bytesOut: number }>) {
+export async function recordLandingServiceTraffic(items: Array<{ serviceId: number; hostId: number; userId: number; bytesIn: number; bytesOut: number; connections: number }>) {
   const q = quoteIdentifier; const now = epochSeconds(nowDate());
   for (const item of items) {
-    await executeRaw(`INSERT INTO ${q("landing_service_traffic_stats")} (${q("serviceId")},${q("hostId")},${q("bytesIn")},${q("bytesOut")},${q("recordedAt")}) VALUES (?,?,?,?,?)`, [item.serviceId,item.hostId,item.bytesIn,item.bytesOut,now]);
-    const suffix = getDatabaseKind() === "mysql" ? `ON DUPLICATE KEY UPDATE ${q("bytesIn")}=${q("bytesIn")}+VALUES(${q("bytesIn")}),${q("bytesOut")}=${q("bytesOut")}+VALUES(${q("bytesOut")}),${q("updatedAt")} = VALUES(${q("updatedAt")})` : `ON CONFLICT (${q("serviceId")},${q("hostId")}) DO UPDATE SET ${q("bytesIn")}=${q("landing_service_traffic_counters")}.${q("bytesIn")}+excluded.${q("bytesIn")},${q("bytesOut")}=${q("landing_service_traffic_counters")}.${q("bytesOut")}+excluded.${q("bytesOut")},${q("updatedAt")}=excluded.${q("updatedAt")}`;
-    await executeRaw(`INSERT INTO ${q("landing_service_traffic_counters")} (${q("serviceId")},${q("hostId")},${q("userId")},${q("bytesIn")},${q("bytesOut")},${q("updatedAt")}) VALUES (?,?,?,?,?,?) ${suffix}`, [item.serviceId,item.hostId,item.userId,item.bytesIn,item.bytesOut,now]);
+    await executeRaw(`INSERT INTO ${q("landing_service_traffic_stats")} (${q("serviceId")},${q("hostId")},${q("bytesIn")},${q("bytesOut")},${q("connections")},${q("recordedAt")}) VALUES (?,?,?,?,?,?)`, [item.serviceId,item.hostId,item.bytesIn,item.bytesOut,item.connections,now]);
+    const suffix = getDatabaseKind() === "mysql" ? `ON DUPLICATE KEY UPDATE ${q("bytesIn")}=${q("bytesIn")}+VALUES(${q("bytesIn")}),${q("bytesOut")}=${q("bytesOut")}+VALUES(${q("bytesOut")}),${q("connections")}=${q("connections")}+VALUES(${q("connections")}),${q("updatedAt")} = VALUES(${q("updatedAt")})` : `ON CONFLICT (${q("serviceId")},${q("hostId")}) DO UPDATE SET ${q("bytesIn")}=${q("landing_service_traffic_counters")}.${q("bytesIn")}+excluded.${q("bytesIn")},${q("bytesOut")}=${q("landing_service_traffic_counters")}.${q("bytesOut")}+excluded.${q("bytesOut")},${q("connections")}=${q("landing_service_traffic_counters")}.${q("connections")}+excluded.${q("connections")},${q("updatedAt")}=excluded.${q("updatedAt")}`;
+    await executeRaw(`INSERT INTO ${q("landing_service_traffic_counters")} (${q("serviceId")},${q("hostId")},${q("userId")},${q("bytesIn")},${q("bytesOut")},${q("connections")},${q("updatedAt")}) VALUES (?,?,?,?,?,?,?) ${suffix}`, [item.serviceId,item.hostId,item.userId,item.bytesIn,item.bytesOut,item.connections,now]);
   }
 }
 

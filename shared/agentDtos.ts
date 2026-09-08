@@ -9,7 +9,7 @@ export type AgentHostTrafficStat = {
   bytesIn?: number;
   bytesOut?: number;
 };
-export type AgentLandingTrafficStat = { landingServiceId: number; bytesIn?: number; bytesOut?: number; };
+export type AgentLandingTrafficStat = { landingServiceId: number; bytesIn?: number; bytesOut?: number; connections?: number; };
 export function isAgentLandingTrafficStat(value: unknown): value is AgentLandingTrafficStat {
   const item = value as Partial<AgentLandingTrafficStat>;
   return !!item && Number.isInteger(Number(item.landingServiceId)) && Number(item.landingServiceId) > 0 && isAgentHostTrafficStat(item);

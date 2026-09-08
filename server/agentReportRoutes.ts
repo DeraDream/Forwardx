@@ -619,7 +619,7 @@ agentRouter.post("/api/agent/traffic", async (req: Request, res: Response) => {
       const services = await Promise.all(landingStats.map((stat: any) => db.getLandingServiceById(stat.landingServiceId)));
       await db.recordLandingServiceTraffic(landingStats.flatMap((stat: any, index: number) => {
         const service: any = services[index];
-        return service && Number(service.hostId) === Number(host.id) ? [{ serviceId: service.id, hostId: Number(host.id), userId: Number(service.userId), bytesIn: Math.max(0, Number(stat.bytesIn) || 0), bytesOut: Math.max(0, Number(stat.bytesOut) || 0) }] : [];
+        return service && Number(service.hostId) === Number(host.id) ? [{ serviceId: service.id, hostId: Number(host.id), userId: Number(service.userId), bytesIn: Math.max(0, Number(stat.bytesIn) || 0), bytesOut: Math.max(0, Number(stat.bytesOut) || 0), connections: Math.max(0, Number(stat.connections) || 0) }] : [];
       }));
     }
     if (!Array.isArray(req.body?.stats) && !Array.isArray(req.body?.s) && !hostTraffic) {

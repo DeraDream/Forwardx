@@ -1112,8 +1112,8 @@ func collectTraffic(cfg Config) time.Duration {
 	stats := []map[string]any{}
 	landingStats := []map[string]any{}
 	for serviceID, counters := range landingIptablesSnapshot() {
-		in, out := landingTrafficDelta(serviceID, counters)
-		if in > 0 || out > 0 { landingStats = append(landingStats, map[string]any{"landingServiceId": serviceID, "bytesIn": in, "bytesOut": out}) }
+		in, out, connections := landingTrafficDelta(serviceID, counters)
+		if in > 0 || out > 0 || connections > 0 { landingStats = append(landingStats, map[string]any{"landingServiceId": serviceID, "bytesIn": in, "bytesOut": out, "connections": connections}) }
 	}
 	pendingBaselines := make([]trafficBaselineUpdate, 0, len(states))
 	watched := len(states)
@@ -2407,26 +2407,26 @@ func landingIptablesSnapshot() map[int]trafficCounters {
 	out := map[int]trafficCounters{}
 	raw, err := commandOutputWithTimeout(5*time.Second, "iptables", "-t", "mangle", "-nvxL")
 	if err != nil { return out }
-	pattern := regexp.MustCompile(`fwx-landing-([0-9]+):(in|out)`)
+	pattern := regexp.MustCompile(`fwx-landing-([0-9]+):(in|out|conn)`)
 	for _, line := range strings.Split(string(raw), "\n") {
 		match := pattern.FindStringSubmatch(line); if len(match) < 3 { continue }
 		fields := strings.Fields(strings.TrimSpace(line)); if len(fields) < 2 { continue }
 		value, parseErr := strconv.ParseUint(fields[1], 10, 64); if parseErr != nil { continue }
 		id, _ := strconv.Atoi(match[1]); current := out[id]
-		if match[2] == "in" { current.In += value } else { current.Out += value }; out[id] = current
+		if match[2] == "in" { current.In += value } else if match[2] == "out" { current.Out += value } else { current.Connections += value }; out[id] = current
 	}
 	return out
 }
 
-func landingTrafficDelta(id int, current trafficCounters) (uint64, uint64) {
+func landingTrafficDelta(id int, current trafficCounters) (uint64, uint64, uint64) {
 	path := trafficStateDir + fmt.Sprintf("/landing_%d.prev", id)
 	var previous trafficPrevState
 	if raw, err := os.ReadFile(path); err == nil {
 		lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
-		if len(lines) >= 2 { previous.in, _ = strconv.ParseUint(lines[0], 10, 64); previous.out, _ = strconv.ParseUint(lines[1], 10, 64) }
+		if len(lines) >= 2 { previous.in, _ = strconv.ParseUint(lines[0], 10, 64); previous.out, _ = strconv.ParseUint(lines[1], 10, 64); if len(lines) >= 3 { previous.conns, _ = strconv.ParseUint(lines[2], 10, 64) } }
 	}
-	_ = writeTrafficStateFile(path, []byte(fmt.Sprintf("%d\n%d\n", current.In, current.Out)), 0644)
-	return delta(current.In, previous.in), delta(current.Out, previous.out)
+	_ = writeTrafficStateFile(path, []byte(fmt.Sprintf("%d\n%d\n%d\n", current.In, current.Out, current.Connections)), 0644)
+	return delta(current.In, previous.in), delta(current.Out, previous.out), delta(current.Connections, previous.conns)
 }
 
 func iptablesCounterSnapshotWithDiagnostics() (map[string]trafficCounters, trafficDiagnosticsSnapshot) {

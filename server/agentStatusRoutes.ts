@@ -181,6 +181,7 @@ async function applyAgentRuleStatus(host: any, payload: any): Promise<AgentStatu
       await db.updateLandingService(landingServiceId, {
         status: isRunning ? "running" : "error",
         statusMessage: message || (isRunning ? "Agent 已启动 Shadowsocks 服务" : "Agent 未能启动 Shadowsocks 服务"),
+        ...(isRunning ? { previousPort: null, recreatePending: false } : {}),
       });
       if (shouldLogStatus(`landing:${landingServiceId}:${host.id}`, `running=${!!isRunning}`, !isRunning || !!message)) {
         appendPanelLog(isRunning ? "info" : "warn", `[Landing] service=${landingServiceId} host=${host.id} running=${!!isRunning}${logMessage !== "-" ? ` message=${logMessage}` : ""}`);

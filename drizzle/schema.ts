@@ -330,6 +330,8 @@ export const landingServices = table("landing_services", {
   method: varchar("method", { length: 96 }).notNull(),
   password: text("password").notNull(),
   port: int("port").notNull(),
+  previousPort: int("previousPort"),
+  recreatePending: boolean("recreatePending").notNull().default(false),
   endpoint: text("endpoint"),
   latencyTargetHost: text("latencyTargetHost").notNull().default("www.gstatic.com"),
   latencyTargetPort: int("latencyTargetPort").notNull().default(443),
@@ -347,11 +349,13 @@ export type LandingService = typeof landingServices.$inferSelect;
 export const landingServiceTrafficCounters = table("landing_service_traffic_counters", {
   id: serial("id"), serviceId: int("serviceId").notNull(), hostId: int("hostId").notNull(), userId: int("userId").notNull(),
   bytesIn: bigint("bytesIn", { mode: "number" }).notNull().default(0), bytesOut: bigint("bytesOut", { mode: "number" }).notNull().default(0),
+  connections: bigint("connections", { mode: "number" }).notNull().default(0),
   updatedAt: epoch("updatedAt").notNull().default(nowDefault()),
 });
 export const landingServiceTrafficStats = table("landing_service_traffic_stats", {
   id: serial("id"), serviceId: int("serviceId").notNull(), hostId: int("hostId").notNull(),
   bytesIn: bigint("bytesIn", { mode: "number" }).notNull().default(0), bytesOut: bigint("bytesOut", { mode: "number" }).notNull().default(0), recordedAt: epoch("recordedAt").notNull().default(nowDefault()),
+  connections: bigint("connections", { mode: "number" }).notNull().default(0),
 });
 export const landingServiceLatencyStats = table("landing_service_latency_stats", {
   id: serial("id"), serviceId: int("serviceId").notNull(), hostId: int("hostId").notNull(),
