@@ -1251,6 +1251,9 @@ func collectTraffic(cfg Config) time.Duration {
 		if hostTraffic != nil {
 			payload["h"] = []any{hostTraffic["bytesIn"], hostTraffic["bytesOut"]}
 		}
+		if len(landingStats) > 0 {
+			payload["landingStats"] = landingStats
+		}
 	}
 	if reportRuleTraffic || hostTraffic != nil || len(landingStats) > 0 {
 		payload["reportId"] = newTrafficReportID()
@@ -2415,7 +2418,7 @@ func landingIptablesSnapshot() map[int]trafficCounters {
 		fields := strings.Fields(strings.TrimSpace(line)); if len(fields) < 2 { continue }
 		value, parseErr := strconv.ParseUint(fields[1], 10, 64); if parseErr != nil { continue }
 		id, _ := strconv.Atoi(match[1]); current := out[id]
-		if match[2] == "in" { current.In += value } else if match[2] == "out" { current.Out += value } else { current.Connections += value }; out[id] = current
+		if match[2] == "in" { current.In += value } else if match[2] == "out" { current.Out += value } else if packets, err := strconv.ParseUint(fields[0], 10, 64); err == nil { current.Connections += packets }; out[id] = current
 	}
 	return out
 }
