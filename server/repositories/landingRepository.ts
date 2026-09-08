@@ -112,6 +112,15 @@ export async function deleteLandingService(id: number) {
   await db.delete(landingServices).where(eq(landingServices.id, id));
 }
 
+export async function resetLandingServiceTraffic(serviceId: number) {
+  const id = Math.floor(Number(serviceId) || 0);
+  if (id <= 0) return { serviceId: id, deletedStats: 0, deletedCounters: 0 };
+  const q = quoteIdentifier;
+  const stats = await executeRaw(`DELETE FROM ${q("landing_service_traffic_stats")} WHERE ${q("serviceId")} = ?`, [id]);
+  const counters = await executeRaw(`DELETE FROM ${q("landing_service_traffic_counters")} WHERE ${q("serviceId")} = ?`, [id]);
+  return { serviceId: id, deletedStats: Number((stats as any)?.changes || 0), deletedCounters: Number((counters as any)?.changes || 0) };
+}
+
 export async function recordLandingServiceTraffic(items: Array<{ serviceId: number; hostId: number; userId: number; bytesIn: number; bytesOut: number; connections: number }>) {
   const q = quoteIdentifier; const now = epochSeconds(nowDate());
   for (const item of items) {

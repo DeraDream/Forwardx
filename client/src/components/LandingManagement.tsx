@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import QRCode from "qrcode";
-import { Activity, ArrowDownToLine, ArrowRightLeft, ArrowUpFromLine, CheckCircle2, Copy, GitBranch, Link2, Loader2, Pencil, QrCode, Server, Stethoscope, Trash2, XCircle } from "lucide-react";
+import { Activity, ArrowDownToLine, ArrowRightLeft, ArrowUpFromLine, CheckCircle2, Copy, GitBranch, Link2, Loader2, Pencil, QrCode, RotateCcw, Server, Stethoscope, Trash2, XCircle } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -177,6 +177,7 @@ export function LandingManagement({ viewMode = "card" }: { viewMode?: LandingVie
   const update = trpc.landing.update.useMutation({ onSuccess: () => { void servicesQuery.refetch(); setOpen(false); setEditing(null); toast.success("已下发给 Agent 更新"); }, onError: error => toast.error(error.message) });
   const toggle = trpc.landing.toggle.useMutation({ onSuccess: () => { void servicesQuery.refetch(); toast.success("已下发给 Agent 执行"); }, onError: error => toast.error(error.message) });
   const remove = trpc.landing.remove.useMutation({ onSuccess: () => { void servicesQuery.refetch(); toast.success("已下发删除任务，正在等待 Agent 清理"); }, onError: error => toast.error(error.message) });
+  const resetTraffic = trpc.landing.resetTraffic.useMutation({ onSuccess: () => { void servicesQuery.refetch(); toast.success("该落地 SS 的流量统计已清除"); }, onError: error => toast.error(error.message) });
   const selectedEndpoint = eligible.find((entry: any) => Number(entry.hostId) === hostId)?.host?.exitIp || eligible.find((entry: any) => Number(entry.hostId) === hostId)?.host?.ip || "";
   const isSaving = update.isPending;
   const trafficTotals = useMemo(() => services.reduce((total: any, service: any) => ({
@@ -209,9 +210,13 @@ export function LandingManagement({ viewMode = "card" }: { viewMode?: LandingVie
     if (!await confirmDialog({ title: "删除落地 SS 服务", description: <>确定删除“{service.name}”吗？这会通知 Agent 停止服务并清理监听端口，已引用的规则将保留但无法连接。</>, confirmText: "删除", tone: "destructive" })) return;
     remove.mutate({ id: service.id });
   };
+  const confirmResetTraffic = async (service: any) => {
+    if (!await confirmDialog({ title: "重置落地 SS 数据", description: <>确认清除落地 SS“{service.name}”的所有流量统计？其他 SS 的统计不会被清除。</>, confirmText: "确认重置", tone: "destructive" })) return;
+    resetTraffic.mutate({ id: Number(service.id) });
+  };
   const copyService = (service: any) => void copyTextToClipboard(ssUri(service)).then(() => toast.success("SS 链接已复制")).catch(() => toast.error("复制失败"));
   const copyAddress = (address: string, label: string) => void copyTextToClipboard(address).then(() => toast.success(`已复制${label}: ${address}`)).catch(() => toast.error("复制失败"));
-  const actionButtons = (service: any, table = false) => <div className={table ? "flex justify-end gap-1" : "flex flex-wrap justify-end gap-1"}><Button size="icon" variant="ghost" title="TCP 延迟探测历史" onClick={() => setHistoryService(service)}><Activity className="h-3.5 w-3.5" /></Button><Button size="icon" variant="ghost" title="立即 TCP 延迟探测" disabled={service.status === "removing"} onClick={() => setTestingService(service)}><Stethoscope className="h-3.5 w-3.5" /></Button>{table && <Button size="icon" variant="ghost" title="编辑" onClick={() => openEdit(service)}><Pencil className="h-4 w-4" /></Button>}<Button size="icon" variant="ghost" title="复制 SS 链接" onClick={() => copyService(service)}><Copy className="h-4 w-4" /></Button><Button size="icon" variant="ghost" title="显示二维码" onClick={() => setQrService(service)}><QrCode className="h-4 w-4" /></Button><Button size="icon" variant="ghost" title="删除" className="text-destructive" disabled={remove.isPending || service.status === "removing"} onClick={() => void confirmRemove(service)}><Trash2 className="h-4 w-4" /></Button>{testingService && Number(testingService.id) === Number(service.id) && <LandingProbeDialog open service={testingService} onOpenChange={value => { if (!value) setTestingService(null); }} />}</div>;
+  const actionButtons = (service: any, table = false) => <div className={table ? "flex justify-end gap-1" : "flex flex-wrap justify-end gap-1"}><Button size="icon" variant="ghost" title="TCP 延迟探测历史" onClick={() => setHistoryService(service)}><Activity className="h-3.5 w-3.5" /></Button><Button size="icon" variant="ghost" title="立即 TCP 延迟探测" disabled={service.status === "removing"} onClick={() => setTestingService(service)}><Stethoscope className="h-3.5 w-3.5" /></Button>{table && <Button size="icon" variant="ghost" title="编辑" onClick={() => openEdit(service)}><Pencil className="h-4 w-4" /></Button>}<Button size="icon" variant="ghost" title="复制 SS 链接" onClick={() => copyService(service)}><Copy className="h-4 w-4" /></Button><Button size="icon" variant="ghost" title="显示二维码" onClick={() => setQrService(service)}><QrCode className="h-4 w-4" /></Button><Button size="icon" variant="ghost" title="重置流量统计" disabled={resetTraffic.isPending} onClick={() => void confirmResetTraffic(service)}><RotateCcw className="h-4 w-4" /></Button><Button size="icon" variant="ghost" title="删除" className="text-destructive" disabled={remove.isPending || service.status === "removing"} onClick={() => void confirmRemove(service)}><Trash2 className="h-4 w-4" /></Button>{testingService && Number(testingService.id) === Number(service.id) && <LandingProbeDialog open service={testingService} onOpenChange={value => { if (!value) setTestingService(null); }} />}</div>;
   const card = (service: any) => {
     const entry = `${endpointOf(service) || "-"}:${service.port}`;
     const exit = `${service.host?.exitIp || service.host?.ip || "-"}:${service.port}`;

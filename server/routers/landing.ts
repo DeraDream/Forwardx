@@ -121,6 +121,12 @@ export const landingRouter = router({
     return { success: true };
   }),
   list: protectedProcedure.query(async ({ ctx }) => db.getLandingServices(isAdmin(ctx.user) ? undefined : ctx.user.id, true)),
+  resetTraffic: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ input, ctx }) => {
+    const service = await db.getLandingServiceById(input.id, false) as any;
+    if (!service) throw new Error("落地服务不存在");
+    if (!isAdmin(ctx.user) && Number(service.userId) !== Number(ctx.user.id)) throw new Error("无权重置此服务流量");
+    return db.resetLandingServiceTraffic(input.id);
+  }),
   latencySeries: protectedProcedure.input(z.object({ id: z.number().int().positive(), hours: z.number().min(0.5).max(72).default(24) })).query(async ({ input, ctx }) => {
     const service = await db.getLandingServiceById(input.id, false) as any;
     if (!service) throw new Error("落地服务不存在");
