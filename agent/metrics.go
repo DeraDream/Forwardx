@@ -39,7 +39,7 @@ const (
 	// positive/negative DNS cache bounded so a long-lived Agent does not retain
 	// one entry for every hostname it has ever probed.
 	networkTargetDNSCacheMaxEntries = 1024
-	activeTrafficReportEvery        = 10 * time.Second
+	activeTrafficReportEvery        = 3 * time.Second
 	steadyTrafficReportEvery        = 30 * time.Second
 	idleHostTrafficReportEvery      = 5 * time.Minute
 )
