@@ -482,38 +482,46 @@ type persistedTrafficBaseline struct {
 }
 
 type pendingTrafficReport struct {
-	Payload        map[string]any             `json:"payload"`
-	Baselines      []persistedTrafficBaseline `json:"baselines,omitempty"`
-	Identity       string                     `json:"identity"`
-	HasRuleTraffic bool                       `json:"hasRuleTraffic"`
-	HasHostTraffic bool                       `json:"hasHostTraffic"`
-	StatCount      int                        `json:"statCount"`
+	Payload          map[string]any             `json:"payload"`
+	Baselines        []persistedTrafficBaseline `json:"baselines,omitempty"`
+	LandingBaselines []persistedLandingBaseline `json:"landingBaselines,omitempty"`
+	Identity         string                     `json:"identity"`
+	HasRuleTraffic   bool                       `json:"hasRuleTraffic"`
+	HasHostTraffic   bool                       `json:"hasHostTraffic"`
+	StatCount        int                        `json:"statCount"`
+}
+
+type persistedLandingBaseline struct {
+	ServiceID int    `json:"serviceId"`
+	In        uint64 `json:"in"`
+	Out       uint64 `json:"out"`
+	Conns     uint64 `json:"conns"`
 }
 
 type tcpingTask struct {
-	Kind            string
-	RuleID          int
-	TunnelID        int
-	GroupID         int
-	MemberID        int
-	ProbeType       string
-	ServiceID       int
+	Kind             string
+	RuleID           int
+	TunnelID         int
+	GroupID          int
+	MemberID         int
+	ProbeType        string
+	ServiceID        int
 	LandingServiceID int
-	Method          string
-	TargetIP        string
-	TargetPort      int
-	HopIndex        int
-	HopCount        int
-	FailoverSeconds int
-	RecoverSeconds  int
-	SeriesKey       string
-	SeriesLabel     string
-	WireGuardPeerID string
-	SourcePort      int
-	ProbeKey        string
-	TopologyKey     string
-	SampleCount     int
-	GroupHealth     *forwardGroupHealthSpec
+	Method           string
+	TargetIP         string
+	TargetPort       int
+	HopIndex         int
+	HopCount         int
+	FailoverSeconds  int
+	RecoverSeconds   int
+	SeriesKey        string
+	SeriesLabel      string
+	WireGuardPeerID  string
+	SourcePort       int
+	ProbeKey         string
+	TopologyKey      string
+	SampleCount      int
+	GroupHealth      *forwardGroupHealthSpec
 }
 
 type tcpingTaskResult struct {
@@ -1001,6 +1009,15 @@ func completePendingTrafficReport(report pendingTrafficReport) error {
 	if err := commitTrafficBaselines(true, currentUpdates); err != nil {
 		return err
 	}
+	for _, baseline := range report.LandingBaselines {
+		if baseline.ServiceID <= 0 {
+			continue
+		}
+		path := trafficStateDir + fmt.Sprintf("/landing_%d.prev", baseline.ServiceID)
+		if err := writeTrafficStateFile(path, []byte(fmt.Sprintf("%d\n%d\n%d\n", baseline.In, baseline.Out, baseline.Conns)), 0644); err != nil {
+			return fmt.Errorf("commit landing traffic baseline service %d: %w", baseline.ServiceID, err)
+		}
+	}
 	if err := removeTrafficStateFile(pendingTrafficReportPath(), trafficStateDir); err != nil {
 		return err
 	}
@@ -1100,8 +1117,7 @@ func collectTraffic(cfg Config) time.Duration {
 	started := time.Now()
 	discoveredStates := readLocalRuleStates()
 	states := collectableRuleTrafficStates(discoveredStates)
-	landingCounters := landingIptablesSnapshot()
-	activeSources := len(states) + len(landingCounters)
+	activeSources := len(states)
 	nextInterval := trafficCollectionIntervalForRuleCount(activeSources)
 	defer func() {
 		elapsed := time.Since(started)
@@ -1113,10 +1129,7 @@ func collectTraffic(cfg Config) time.Duration {
 	}()
 	stats := []map[string]any{}
 	landingStats := []map[string]any{}
-	for serviceID, counters := range landingCounters {
-		in, out, connections := landingTrafficDelta(serviceID, counters)
-		if in > 0 || out > 0 || connections > 0 { landingStats = append(landingStats, map[string]any{"landingServiceId": serviceID, "bytesIn": in, "bytesOut": out, "connections": connections}) }
-	}
+	landingBaselines := []persistedLandingBaseline{}
 	pendingBaselines := make([]trafficBaselineUpdate, 0, len(states))
 	watched := len(states)
 	reportPanelURL := currentPanelURL(cfg)
@@ -1156,6 +1169,18 @@ func collectTraffic(cfg Config) time.Duration {
 		}
 		nextInterval = trafficCollectionIntervalForRuleCount(activeSources)
 		return trafficCollectBackoffInterval(nextInterval, time.Since(started))
+	}
+	// Read landing counters only after any pending report has been delivered.
+	// Otherwise landingTrafficDelta would advance its baseline, then the early
+	// pending-report return above would discard that delta permanently.
+	landingCounters := landingIptablesSnapshot()
+	activeSources = len(states) + len(landingCounters)
+	for serviceID, counters := range landingCounters {
+		in, out, connections, _ := landingTrafficDelta(serviceID, counters)
+		landingBaselines = append(landingBaselines, persistedLandingBaseline{ServiceID: serviceID, In: counters.In, Out: counters.Out, Conns: counters.Connections})
+		if in > 0 || out > 0 || connections > 0 {
+			landingStats = append(landingStats, map[string]any{"landingServiceId": serviceID, "bytesIn": in, "bytesOut": out, "connections": connections})
+		}
 	}
 	if len(states) > 0 {
 		requirements := trafficSnapshotRequirementsForStates(states)
@@ -1238,7 +1263,9 @@ func collectTraffic(cfg Config) time.Duration {
 		}
 	}
 	payload := map[string]any{"stats": stats}
-	if len(landingStats) > 0 { payload["landingStats"] = landingStats }
+	if len(landingStats) > 0 {
+		payload["landingStats"] = landingStats
+	}
 	if hostTraffic != nil {
 		payload["hostTraffic"] = hostTraffic
 	}
@@ -1259,7 +1286,7 @@ func collectTraffic(cfg Config) time.Duration {
 		payload["reportId"] = newTrafficReportID()
 		payload["reportProducerId"] = trafficReportProducerID(reportIdentity)
 		pending := pendingTrafficReport{
-			Payload: payload, Baselines: persistedTrafficBaselines(pendingBaselines),
+			Payload: payload, Baselines: persistedTrafficBaselines(pendingBaselines), LandingBaselines: landingBaselines,
 			Identity: reportIdentity, HasRuleTraffic: len(stats) > 0,
 			HasHostTraffic: hostTraffic != nil, StatCount: len(stats),
 		}
@@ -1289,6 +1316,11 @@ func collectTraffic(cfg Config) time.Duration {
 			} else if shouldLogAgentReport("traffic-report-ok", 5*time.Minute) {
 				logf("traffic report ok watched=%d collectable=%d stats=%d bytes=%d/%d hostTraffic=%v", watched, len(states), len(stats), reportBytesIn, reportBytesOut, hostTraffic != nil)
 			}
+		}
+	} else {
+		for _, baseline := range landingBaselines {
+			path := trafficStateDir + fmt.Sprintf("/landing_%d.prev", baseline.ServiceID)
+			_ = writeTrafficStateFile(path, []byte(fmt.Sprintf("%d\n%d\n%d\n", baseline.In, baseline.Out, baseline.Conns)), 0644)
 		}
 	}
 	if len(states) > 0 && len(stats) == 0 && hostTraffic == nil && shouldLogAgentReport("traffic-collect-empty", 5*time.Minute) {
@@ -1367,12 +1399,12 @@ func collectTCPing(cfg Config, ruleProbes []ruleLatencyProbe, probes []tunnelPro
 		method := strings.ToLower(strings.TrimSpace(probe.Method))
 		if method == "ping" {
 			serviceTasks = append(serviceTasks, tcpingTask{
-				Kind:      "service",
-				ServiceID: probe.ServiceID,
+				Kind:             "service",
+				ServiceID:        probe.ServiceID,
 				LandingServiceID: probe.LandingServiceID,
-				Method:    method,
-				TargetIP:  probe.TargetIP,
-				ProbeKey:  fmt.Sprintf("service:%d:%s:ping", probe.ServiceID, strings.ToLower(strings.TrimSpace(probe.TargetIP))),
+				Method:           method,
+				TargetIP:         probe.TargetIP,
+				ProbeKey:         fmt.Sprintf("service:%d:%s:ping", probe.ServiceID, strings.ToLower(strings.TrimSpace(probe.TargetIP))),
 			})
 			continue
 		}
@@ -1380,14 +1412,14 @@ func collectTCPing(cfg Config, ruleProbes []ruleLatencyProbe, probes []tunnelPro
 			continue
 		}
 		serviceTasks = append(serviceTasks, tcpingTask{
-			Kind:       "service",
-			ServiceID:  probe.ServiceID,
+			Kind:             "service",
+			ServiceID:        probe.ServiceID,
 			LandingServiceID: probe.LandingServiceID,
-			Method:     "tcping",
-			TargetIP:   probe.TargetIP,
-			TargetPort: probe.TargetPort,
-			ProbeKey:   fmt.Sprintf("service:%d:%s:%d:tcping", probe.ServiceID, strings.ToLower(strings.TrimSpace(probe.TargetIP)), probe.TargetPort),
-			SampleCount: probe.SampleCount,
+			Method:           "tcping",
+			TargetIP:         probe.TargetIP,
+			TargetPort:       probe.TargetPort,
+			ProbeKey:         fmt.Sprintf("service:%d:%s:%d:tcping", probe.ServiceID, strings.ToLower(strings.TrimSpace(probe.TargetIP)), probe.TargetPort),
+			SampleCount:      probe.SampleCount,
 		})
 	}
 
@@ -2411,27 +2443,51 @@ func tcpLatencySamples(host string, port, count int, timeout time.Duration) (int
 func landingIptablesSnapshot() map[int]trafficCounters {
 	out := map[int]trafficCounters{}
 	raw, err := commandOutputWithTimeout(5*time.Second, "iptables", "-t", "mangle", "-nvxL")
-	if err != nil { return out }
+	if err != nil {
+		return out
+	}
 	pattern := regexp.MustCompile(`fwx-landing-([0-9]+):(in|out|conn)`)
 	for _, line := range strings.Split(string(raw), "\n") {
-		match := pattern.FindStringSubmatch(line); if len(match) < 3 { continue }
-		fields := strings.Fields(strings.TrimSpace(line)); if len(fields) < 2 { continue }
-		value, parseErr := strconv.ParseUint(fields[1], 10, 64); if parseErr != nil { continue }
-		id, _ := strconv.Atoi(match[1]); current := out[id]
-		if match[2] == "in" { current.In += value } else if match[2] == "out" { current.Out += value } else if packets, err := strconv.ParseUint(fields[0], 10, 64); err == nil { current.Connections += packets }; out[id] = current
+		match := pattern.FindStringSubmatch(line)
+		if len(match) < 3 {
+			continue
+		}
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) < 2 {
+			continue
+		}
+		value, parseErr := strconv.ParseUint(fields[1], 10, 64)
+		if parseErr != nil {
+			continue
+		}
+		id, _ := strconv.Atoi(match[1])
+		current := out[id]
+		if match[2] == "in" {
+			current.In += value
+		} else if match[2] == "out" {
+			current.Out += value
+		} else if packets, err := strconv.ParseUint(fields[0], 10, 64); err == nil {
+			current.Connections += packets
+		}
+		out[id] = current
 	}
 	return out
 }
 
-func landingTrafficDelta(id int, current trafficCounters) (uint64, uint64, uint64) {
+func landingTrafficDelta(id int, current trafficCounters) (uint64, uint64, uint64, trafficPrevState) {
 	path := trafficStateDir + fmt.Sprintf("/landing_%d.prev", id)
 	var previous trafficPrevState
 	if raw, err := os.ReadFile(path); err == nil {
 		lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
-		if len(lines) >= 2 { previous.in, _ = strconv.ParseUint(lines[0], 10, 64); previous.out, _ = strconv.ParseUint(lines[1], 10, 64); if len(lines) >= 3 { previous.conns, _ = strconv.ParseUint(lines[2], 10, 64) } }
+		if len(lines) >= 2 {
+			previous.in, _ = strconv.ParseUint(lines[0], 10, 64)
+			previous.out, _ = strconv.ParseUint(lines[1], 10, 64)
+			if len(lines) >= 3 {
+				previous.conns, _ = strconv.ParseUint(lines[2], 10, 64)
+			}
+		}
 	}
-	_ = writeTrafficStateFile(path, []byte(fmt.Sprintf("%d\n%d\n%d\n", current.In, current.Out, current.Connections)), 0644)
-	return delta(current.In, previous.in), delta(current.Out, previous.out), delta(current.Connections, previous.conns)
+	return delta(current.In, previous.in), delta(current.Out, previous.out), delta(current.Connections, previous.conns), previous
 }
 
 func iptablesCounterSnapshotWithDiagnostics() (map[string]trafficCounters, trafficDiagnosticsSnapshot) {
