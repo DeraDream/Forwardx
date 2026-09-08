@@ -417,7 +417,9 @@ func TestForwardXUDPDirectRoundTrip(t *testing.T) {
 	if reply := udpRoundTrip(t, client, []byte("udp-forwardx")); string(reply) != "udp-forwardx" {
 		t.Fatalf("unexpected udp echo %q", string(reply))
 	}
-	largePayload := make([]byte, 32*1024+137)
+	// macOS loopback rejects UDP datagrams above its smaller socket limit.
+	// This still exceeds FXP's 1200-byte wire frame and exercises fragmentation.
+	largePayload := make([]byte, 8*1024+137)
 	for i := range largePayload {
 		largePayload[i] = byte(i % 251)
 	}
@@ -612,7 +614,7 @@ func TestForwardXRelayUDPDirectRoundTrip(t *testing.T) {
 	if reply := udpRoundTrip(t, client, []byte("udp-relay-forwardx")); string(reply) != "udp-relay-forwardx" {
 		t.Fatalf("unexpected udp relay echo %q", string(reply))
 	}
-	largePayload := make([]byte, 24*1024+73)
+	largePayload := make([]byte, 8*1024+73)
 	for i := range largePayload {
 		largePayload[i] = byte((i * 7) % 251)
 	}

@@ -1100,7 +1100,9 @@ func collectTraffic(cfg Config) time.Duration {
 	started := time.Now()
 	discoveredStates := readLocalRuleStates()
 	states := collectableRuleTrafficStates(discoveredStates)
-	nextInterval := trafficCollectionIntervalForRuleCount(len(states))
+	landingCounters := landingIptablesSnapshot()
+	activeSources := len(states) + len(landingCounters)
+	nextInterval := trafficCollectionIntervalForRuleCount(activeSources)
 	defer func() {
 		elapsed := time.Since(started)
 		if elapsed >= nextInterval/2 {
@@ -1111,7 +1113,7 @@ func collectTraffic(cfg Config) time.Duration {
 	}()
 	stats := []map[string]any{}
 	landingStats := []map[string]any{}
-	for serviceID, counters := range landingIptablesSnapshot() {
+	for serviceID, counters := range landingCounters {
 		in, out, connections := landingTrafficDelta(serviceID, counters)
 		if in > 0 || out > 0 || connections > 0 { landingStats = append(landingStats, map[string]any{"landingServiceId": serviceID, "bytesIn": in, "bytesOut": out, "connections": connections}) }
 	}
@@ -1152,7 +1154,7 @@ func collectTraffic(cfg Config) time.Duration {
 				logf("traffic report retry ok stats=%d hostTraffic=%v", pending.StatCount, pending.HasHostTraffic)
 			}
 		}
-		nextInterval = trafficCollectionIntervalForRuleCount(len(states))
+		nextInterval = trafficCollectionIntervalForRuleCount(activeSources)
 		return trafficCollectBackoffInterval(nextInterval, time.Since(started))
 	}
 	if len(states) > 0 {
@@ -1262,7 +1264,7 @@ func collectTraffic(cfg Config) time.Duration {
 			if shouldLogAgentReport("traffic-report-persist-failed", agentReportLogInterval) {
 				logf("traffic report pending state failed stats=%d: %v", len(stats), err)
 			}
-			nextInterval = trafficCollectionIntervalForRuleCount(len(states))
+			nextInterval = trafficCollectionIntervalForRuleCount(activeSources)
 			return trafficCollectBackoffInterval(nextInterval, time.Since(started))
 		}
 		response := map[string]any{}
@@ -1289,7 +1291,7 @@ func collectTraffic(cfg Config) time.Duration {
 	if len(states) > 0 && len(stats) == 0 && hostTraffic == nil && shouldLogAgentReport("traffic-collect-empty", 5*time.Minute) {
 		logf("traffic collect no deltas watched=%d collectable=%d discovered=%d", watched, len(states), len(discoveredStates))
 	}
-	nextInterval = trafficCollectionIntervalForRuleCount(len(states))
+	nextInterval = trafficCollectionIntervalForRuleCount(activeSources)
 	return trafficCollectBackoffInterval(nextInterval, time.Since(started))
 }
 
