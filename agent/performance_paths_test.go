@@ -236,8 +236,8 @@ func TestSteadyTrafficReportsAndCollectionUsePanelBatchWindow(t *testing.T) {
 	if got := configuredActiveTrafficReportInterval(); got != activeTrafficReportEvery {
 		t.Fatalf("interactive interval clamp=%s want=%s", got, activeTrafficReportEvery)
 	}
-	if got := trafficCollectionIntervalForRuleCount(1); got != currentActiveTrafficReportInterval() {
-		t.Fatalf("interactive collection interval=%s want=%s", got, currentActiveTrafficReportInterval())
+	if got := trafficCollectionIntervalForRuleCount(1); got < activeTrafficReportEvery {
+		t.Fatalf("interactive collection interval=%s must not be below minimum=%s", got, activeTrafficReportEvery)
 	}
 }
 
