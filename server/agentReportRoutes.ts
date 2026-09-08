@@ -910,6 +910,7 @@ agentRouter.post("/api/agent/traffic", async (req: Request, res: Response) => {
       trafficReportInterval: selectAgentTrafficReportInterval({
         metricsWatching: isHostMetricsWatching(Number(host.id)),
         strictAccounting: strictTrafficAccounting,
+        landingTrafficActive: landingStats.length > 0,
       }),
     });
   } catch (error) {

@@ -151,8 +151,9 @@ export const AGENT_STABLE_PLAN_AUDIT_INTERVAL_MS = 5 * 60 * 1000;
 export function selectAgentTrafficReportInterval(input: {
   metricsWatching: boolean;
   strictAccounting: boolean;
+  landingTrafficActive?: boolean;
 }) {
-  return input.metricsWatching || input.strictAccounting
+  return input.metricsWatching || input.strictAccounting || input.landingTrafficActive === true
     ? AGENT_TRAFFIC_REPORT_INTERACTIVE_SECONDS
     : AGENT_TRAFFIC_REPORT_STEADY_SECONDS;
 }
