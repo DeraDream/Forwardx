@@ -98,18 +98,32 @@ function ChainNodes({
   disabled,
   setNodes,
   runtime,
+  fixedLast = false,
 }: {
   nodes: any[];
   hosts: Map<number, Host>;
   disabled?: boolean;
   setNodes?: (next: Node[]) => void;
   runtime?: boolean;
+  fixedLast?: boolean;
 }) {
   const sortable = useSortableReorder({
     items: nodes,
     getId: (node) => node.hostId,
     disabled: !!disabled || !setNodes,
-    onReorder: (items) => setNodes?.(items as Node[]),
+    onReorder: (items) => {
+      const exit = fixedLast ? nodes.at(-1) : undefined;
+      setNodes?.(
+        exit
+          ? [
+              ...(items as Node[]).filter(
+                (node) => node.hostId !== exit.hostId,
+              ),
+              exit,
+            ]
+          : (items as Node[]),
+      );
+    },
   });
   return (
     <SortableReorderContext
@@ -119,7 +133,14 @@ function ChainNodes({
     >
       {nodes.map((node: any, index: number) => (
         <div key={node.id ?? node.hostId}>
-          <SortableItem id={node.hostId} disabled={!!disabled || !setNodes}>
+          <SortableItem
+            id={node.hostId}
+            disabled={
+              !!disabled ||
+              !setNodes ||
+              (fixedLast && index === nodes.length - 1)
+            }
+          >
             {({ itemProps, handleProps }) => (
               <div
                 {...itemProps}
@@ -127,7 +148,11 @@ function ChainNodes({
               >
                 <SortableDragHandle
                   dragHandleProps={handleProps}
-                  visible={!!setNodes && !disabled}
+                  visible={
+                    !!setNodes &&
+                    !disabled &&
+                    !(fixedLast && index === nodes.length - 1)
+                  }
                 />
                 <span className="w-5 text-center text-xs text-muted-foreground">
                   {index + 1}
@@ -146,10 +171,10 @@ function ChainNodes({
                   <span
                     className={`rounded-full border px-2 py-1 text-xs font-medium ${index === 0 ? "border-emerald-400/50 bg-emerald-500/10 text-emerald-600" : index === nodes.length - 1 ? "border-cyan-400/50 bg-cyan-500/10 text-cyan-600" : "border-amber-400/50 bg-amber-500/10 text-amber-600"}`}
                   >
-                    {index === 0
-                      ? "入口"
-                      : index === nodes.length - 1
-                        ? "出口"
+                    {index === nodes.length - 1
+                      ? "出口"
+                      : index === 0
+                        ? "入口"
                         : "中转"}
                   </span>
                 )}
@@ -157,7 +182,11 @@ function ChainNodes({
                 {setNodes && (
                   <div className="flex items-center gap-1">
                     <Button
-                      disabled={disabled || index === 0}
+                      disabled={
+                        disabled ||
+                        index === 0 ||
+                        (fixedLast && index === nodes.length - 1)
+                      }
                       size="icon"
                       variant="ghost"
                       onClick={() =>
@@ -175,7 +204,11 @@ function ChainNodes({
                       ↑
                     </Button>
                     <Button
-                      disabled={disabled || index === nodes.length - 1}
+                      disabled={
+                        disabled ||
+                        index === nodes.length - 1 ||
+                        (fixedLast && index === nodes.length - 1)
+                      }
                       size="icon"
                       variant="ghost"
                       onClick={() =>
@@ -193,7 +226,11 @@ function ChainNodes({
                       ↓
                     </Button>
                     <Button
-                      disabled={disabled || index === nodes.length - 1}
+                      disabled={
+                        disabled ||
+                        index === nodes.length - 1 ||
+                        (fixedLast && index === nodes.length - 1)
+                      }
                       size="icon"
                       variant="ghost"
                       onClick={() =>
@@ -283,11 +320,17 @@ function CreateDialog({
   };
   const add = (value: string) => {
     const host = hosts.get(Number(value));
-    if (host)
-      setNodes((old) => [
-        ...old.filter((node) => node.hostId !== landingHostId),
+    if (!host || host.isLanding) return;
+    setNodes((old) => {
+      const exit = old.find((node) => node.hostId === landingHostId);
+      return [
+        ...old.filter(
+          (node) => node.hostId !== host.id && node.hostId !== landingHostId,
+        ),
         { hostId: host.id, ingressIp: "" },
-      ]);
+        ...(exit ? [exit] : []),
+      ];
+    });
   };
   const selectLandingHost = (value: string) => {
     const hostId = Number(value);
@@ -332,6 +375,7 @@ function CreateDialog({
     setPassword("");
     setEntryIp("");
     setNodes([]);
+    setLandingHostId(0);
     setPortCheck(null);
     close();
     if (draftId)
@@ -660,6 +704,7 @@ function CreateDialog({
                     .filter(
                       (host: Host) =>
                         host.id !== landingHostId &&
+                        !host.isLanding &&
                         !nodes.some((node) => node.hostId === host.id),
                     )
                     .map((host: Host) => (
@@ -672,7 +717,12 @@ function CreateDialog({
               </Select>
             </div>
             <div className="order-5 rounded-lg border p-2">
-              <ChainNodes nodes={nodes} hosts={hosts} setNodes={setNodes} />
+              <ChainNodes
+                nodes={nodes}
+                hosts={hosts}
+                setNodes={setNodes}
+                fixedLast
+              />
             </div>
           </>
           {active && (
