@@ -98,6 +98,21 @@ export async function startFullChain(chainId: number) {
   pushAgentRefresh(Number(nodes[0].hostId), "full-chain-port-check", { urgent: true });
 }
 
+export async function startFullChainProtocolCheck(chainId: number) {
+  const chain = await db.getFullChainById(chainId) as any;
+  if (!chain) throw new Error("全链路不存在");
+  if (String(chain.protocol) === "tcp") {
+    await db.updateFullChain(chainId, { status: "ready-to-deploy", statusMessage: "TCP 无需协议检查，可以开始部署" });
+    return;
+  }
+  const nodes = await db.getFullChainNodes(chainId);
+  if (!nodes.length || nodes.some((node: any) => node.portStatus !== "available")) throw new Error("请先完成端口检查");
+  for (const node of nodes) await db.updateFullChainNode(Number(node.id), { protocolStatus: "pending", protocolMessage: null });
+  await db.updateFullChainNode(Number(nodes[0].id), { protocolStatus: "checking", protocolMessage: "协议检查中" });
+  await db.updateFullChain(chainId, { status: "checking-protocol", statusMessage: "正在逐台检查 UDP 协议" });
+  pushAgentRefresh(Number(nodes[0].hostId), "full-chain-protocol-check", { urgent: true });
+}
+
 export async function applyFullChainRuntimeStatus(hostId: number, forwardType: string, isRunning: boolean, rawMessage: string) {
   const match = new RegExp(`^${runtimePrefix}(port|protocol|latency|firewall)-(\\d+)-(\\d+)$`).exec(forwardType);
   if (!match) return false;
@@ -140,11 +155,12 @@ export async function applyFullChainRuntimeStatus(hostId: number, forwardType: s
     await db.updateFullChainNode(Number(next.id), { [statusColumn]: "checking", [messageColumn]: phase === "port" ? "端口检查中" : "协议检查中" });
     pushAgentRefresh(Number(next.hostId), `full-chain-${phase}-check`, { urgent: true });
   } else if (phase === "port") {
-    await db.updateFullChainNode(Number(nodes[0].id), { protocolStatus: "checking", protocolMessage: "协议检查中" });
-    await db.updateFullChain(chainId, { status: "checking-protocol", statusMessage: "正在逐台检查协议" });
-    pushAgentRefresh(Number(nodes[0].hostId), "full-chain-protocol-check", { urgent: true });
+    const chain = await db.getFullChainById(chainId) as any;
+    await db.updateFullChain(chainId, String(chain?.protocol) === "tcp"
+      ? { status: "ready-to-deploy", statusMessage: "端口检查完毕，可以开始部署" }
+      : { status: "ports-ready", statusMessage: "端口检查完毕，可以检查协议" });
   } else {
-    await beginDeploy(chainId);
+    await db.updateFullChain(chainId, { status: "ready-to-deploy", statusMessage: "检查完毕，可以开始部署" });
   }
   return true;
 }
@@ -157,6 +173,13 @@ export async function applyFullChainRuleStatus(ruleId: number, isRunning: boolea
   await db.updateFullChainNode(Number(node.id), { deployStatus: "done", deployMessage: detail });
   await beginDeploy(Number(node.chainId));
   return true;
+}
+
+export async function deployFullChain(chainId: number) {
+  const chain = await db.getFullChainById(chainId) as any;
+  if (!chain) throw new Error("全链路不存在");
+  if (String(chain.status) !== "ready-to-deploy") throw new Error("请先完成端口和协议检查");
+  await beginDeploy(chainId);
 }
 
 export async function applyFullChainLandingStatus(serviceId: number, isRunning: boolean, rawMessage: string) {

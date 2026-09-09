@@ -1,7 +1,7 @@
 import { protectedProcedure, router } from "../_core/trpc";
 import { z } from "zod";
 import * as db from "../db";
-import { cancelFullChain, startFullChain } from "../fullChainRuntime";
+import { cancelFullChain, deployFullChain, startFullChain, startFullChainProtocolCheck } from "../fullChainRuntime";
 import { pushAgentRefresh } from "../agentEvents";
 
 const methods = ["aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305", "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"] as const;
@@ -42,7 +42,6 @@ export const fullChainsRouter = router({
     const last = input.nodes[input.nodes.length - 1];
     if (!await db.getLandingHostByHostId(last.hostId)) throw new Error("末端 SS 必须选择已标记的落地机");
     const id = await db.createFullChain({ ...input, userId: Number(ctx.user.id) });
-    await startFullChain(id);
     return { id };
   }),
   replace: protectedProcedure.input(createInput.extend({ id: z.number().int().positive() })).mutation(async ({ input, ctx }) => {
@@ -67,6 +66,23 @@ export const fullChainsRouter = router({
     await cancelFullChain(input.id);
     await db.updateFullChain(input.id, { isEnabled: true, status: "draft", statusMessage: "准备重试", landingServiceId: null });
     await startFullChain(input.id);
+    return { success: true };
+  }),
+  check: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ input, ctx }) => {
+    const chain = await requireChain(ctx.user, input.id);
+    if (["checking-port", "checking-protocol", "deploying"].includes(String(chain.status))) throw new Error("全链路正在执行");
+    await startFullChain(input.id);
+    return { success: true };
+  }),
+  checkProtocol: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ input, ctx }) => {
+    const chain = await requireChain(ctx.user, input.id);
+    if (String(chain.status) === "checking-protocol" || String(chain.status) === "deploying") throw new Error("全链路正在执行");
+    await startFullChainProtocolCheck(input.id);
+    return { success: true };
+  }),
+  deploy: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ input, ctx }) => {
+    await requireChain(ctx.user, input.id);
+    await deployFullChain(input.id);
     return { success: true };
   }),
   cancel: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ input, ctx }) => {

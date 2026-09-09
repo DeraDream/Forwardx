@@ -32,9 +32,13 @@ test("panel can create only a unique chain ending at a marked landing host", () 
       assert.ok(created.id > 0);
       const [chain] = await caller.list();
       assert.equal(chain.name, "HK-JP");
-      assert.equal(chain.status, "checking-port");
+      assert.equal(chain.status, "draft");
       assert.deepEqual(chain.nodes.map((node) => Number(node.hostId)), [11, 12, 13]);
-      assert.equal(chain.nodes[0].portStatus, "checking");
+      assert.equal(chain.nodes[0].portStatus, "pending");
+      await caller.check({ id: created.id });
+      const [checking] = await caller.list();
+      assert.equal(checking.status, "checking-port");
+      assert.equal(checking.nodes[0].portStatus, "checking");
     } finally { await runtime.closeDatabase(); }
   `;
   try {
