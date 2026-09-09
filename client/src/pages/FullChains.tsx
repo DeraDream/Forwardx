@@ -290,6 +290,62 @@ function CreateDialog({
         .mutateAsync({ id: draftId })
         .then(() => utils.fullChains.list.invalidate());
   };
+  useEffect(() => {
+    if (
+      !open ||
+      active ||
+      !last?.isLanding ||
+      Number(port) < 1 ||
+      Number(port) > 65535
+    )
+      return;
+    const timer = window.setTimeout(
+      () =>
+        void (async () => {
+          setPortCheck({ available: null, message: "检测中" });
+          try {
+            const result = await utils.landing.checkPort.fetch({
+              hostId: last.id,
+              port: Number(port),
+            });
+            if (result.complete) {
+              setPortCheck({
+                available: result.available,
+                message:
+                  result.message || (result.available ? "可用" : "不可用"),
+              });
+              return;
+            }
+            for (let i = 0; i < 20; i++) {
+              await new Promise((resolve) => window.setTimeout(resolve, 500));
+              const next = await utils.landing.portCheckStatus.fetch({
+                checkId: result.checkId!,
+              });
+              if (next.complete) {
+                setPortCheck({
+                  available: next.available,
+                  message: next.message || (next.available ? "可用" : "不可用"),
+                });
+                return;
+              }
+            }
+            setPortCheck({ available: false, message: "检测超时" });
+          } catch {
+            setPortCheck({ available: false, message: "检测失败" });
+          }
+        })(),
+      450,
+    );
+    return () => window.clearTimeout(timer);
+  }, [
+    open,
+    active,
+    last?.id,
+    last?.isLanding,
+    port,
+    utils.landing.checkPort,
+    utils.landing.portCheckStatus,
+  ]);
   const ensureDraft = async () => id || save();
   const run = async (kind: "port" | "protocol" | "latency" | "deploy") => {
     try {
@@ -304,7 +360,21 @@ function CreateDialog({
     }
   };
   useEffect(() => {
-    if (!open || active || !first || Number(port) < 1 || Number(port) > 65535) {
+    if (!open) return;
+    if (active) {
+      const node = active.nodes?.[0];
+      if (node?.portStatus === "available")
+        setPortCheck({ available: true, message: "端口可用" });
+      else if (node?.portStatus === "error")
+        setPortCheck({
+          available: false,
+          message: node.portMessage || "端口不可用",
+        });
+      else if (node?.portStatus === "checking")
+        setPortCheck({ available: null, message: "检测中" });
+      return;
+    }
+    if (!active) {
       setPortCheck(null);
       return;
     }
@@ -314,7 +384,7 @@ function CreateDialog({
           setPortCheck({ available: null, message: "检测中" });
           try {
             const result = await utils.landing.checkPort.fetch({
-              hostId: first.id,
+              hostId: first?.id || 0,
               port: Number(port),
             });
             if (result.complete) {
@@ -354,7 +424,7 @@ function CreateDialog({
     utils.landing.checkPort,
     utils.landing.portCheckStatus,
   ]);
-  const configReady = active ? valid : valid && portCheck?.available === true;
+  const configReady = valid && portCheck?.available === true;
   const primary =
     !active || active.status === "draft" || active.status === "error"
       ? "开始检查"
@@ -384,10 +454,10 @@ function CreateDialog({
             先完成检查，再确认部署。入口在首位，末端为公网直连落地 SS。
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-5 px-6 py-5">
+        <div className="grid gap-3 px-6 py-4">
           <>
-            <div className="grid grid-cols-12 gap-3">
-              <div className="col-span-6 space-y-2">
+            <div className="order-2 grid grid-cols-12 gap-3">
+              <div className="col-span-6 min-w-0 space-y-1.5">
                 <Label>链路名称</Label>
                 <Input
                   value={name}
@@ -395,7 +465,7 @@ function CreateDialog({
                   placeholder="HK → JP 落地"
                 />
               </div>
-              <div className="col-span-3 space-y-2">
+              <div className="col-span-4 min-w-0 space-y-1.5">
                 <Label>端口</Label>
                 <div className="flex gap-2">
                   <div className="relative min-w-0 flex-1">
@@ -424,7 +494,7 @@ function CreateDialog({
                   </Button>
                 </div>
               </div>
-              <div className="col-span-3 space-y-2">
+              <div className="col-span-2 min-w-0 space-y-1.5">
                 <Label>协议</Label>
                 <Select value={protocol} onValueChange={setProtocol}>
                   <SelectTrigger>
@@ -437,8 +507,8 @@ function CreateDialog({
                 </Select>
               </div>
             </div>
-            <div className="grid grid-cols-12 gap-3">
-              <div className="col-span-3 space-y-2">
+            <div className="order-3 grid grid-cols-12 gap-3">
+              <div className="col-span-3 min-w-0 space-y-1.5">
                 <Label>SS 类型</Label>
                 <Select
                   value={type}
@@ -456,7 +526,7 @@ function CreateDialog({
                   </SelectContent>
                 </Select>
               </div>
-              <div className="col-span-4 space-y-2">
+              <div className="col-span-4 min-w-0 space-y-1.5">
                 <Label>加密方式</Label>
                 <Select value={method} onValueChange={setMethod}>
                   <SelectTrigger>
@@ -471,7 +541,7 @@ function CreateDialog({
                   </SelectContent>
                 </Select>
               </div>
-              <div className="col-span-5 space-y-2">
+              <div className="col-span-5 min-w-0 space-y-1.5">
                 <Label>密码</Label>
                 <div className="flex gap-2">
                   <Input
@@ -481,14 +551,14 @@ function CreateDialog({
                   <Button
                     size="icon"
                     variant="outline"
-                    onClick={() => setPassword(random.data?.password || "")}
+                    onClick={() => void randomize()}
                   >
                     <RefreshCw className="h-4 w-4" />
                   </Button>
                 </div>
               </div>
             </div>
-            <div className="flex items-center justify-between rounded-lg bg-muted/50 px-3 py-2">
+            <div className="order-4 flex items-center justify-between rounded-lg bg-muted/50 px-3 py-2">
               <div>
                 <div className="text-sm font-medium">中转端口允许公网访问</div>
                 <div className="text-xs text-muted-foreground">
@@ -500,7 +570,7 @@ function CreateDialog({
                 onCheckedChange={setPublicAccess}
               />
             </div>
-            <div className="flex items-center justify-between">
+            <div className="order-0 flex items-center justify-between">
               <Label>机器顺序</Label>
               <Select value="" onValueChange={add}>
                 <SelectTrigger className="h-8 w-52">
@@ -521,7 +591,9 @@ function CreateDialog({
                 </SelectContent>
               </Select>
             </div>
-            <ChainNodes nodes={nodes} hosts={hosts} setNodes={setNodes} />
+            <div className="order-1">
+              <ChainNodes nodes={nodes} hosts={hosts} setNodes={setNodes} />
+            </div>
           </>
           {active && (
             <div className="rounded-lg bg-muted/50 px-3 py-2 text-sm">
