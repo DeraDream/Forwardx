@@ -217,7 +217,7 @@ function CreateDialog({
   const checkProtocol = trpc.fullChains.checkProtocol.useMutation();
   const checkLatency = trpc.fullChains.checkLatency.useMutation();
   const deploy = trpc.fullChains.deploy.useMutation();
-  const [id, setId] = useState<number>();
+  const [id, setId] = useState<number | undefined>(undefined);
   const [name, setName] = useState("");
   const [port, setPort] = useState("");
   const [protocol, setProtocol] = useState("both");
@@ -227,7 +227,7 @@ function CreateDialog({
   const [publicAccess, setPublicAccess] = useState(true);
   const [nodes, setNodes] = useState<Node[]>([]);
   const [portCheck, setPortCheck] = useState<PortCheck>(null);
-  const createdDraft = useRef<number>();
+  const createdDraft = useRef<number | undefined>(undefined);
   const remove = trpc.fullChains.remove.useMutation();
   const hosts = useMemo(
     () =>
