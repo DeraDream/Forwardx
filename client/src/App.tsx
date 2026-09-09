@@ -17,6 +17,7 @@ import BillingPage from "@/pages/Billing";
 import CustomSidebarPage from "@/pages/CustomSidebarPage";
 import EmailSettingsPage from "@/pages/EmailSettings";
 import ForwardGroupsPage from "@/pages/ForwardGroups";
+import FullChainsPage from "@/pages/FullChains";
 import HomePage from "@/pages/Home";
 import HomepagePreviewPage from "@/pages/HomepagePreview";
 import HostMonitorPage from "@/pages/HostMonitor";
@@ -100,6 +101,7 @@ function Router() {
       <Route path="/rules">{routeComponent(RulesPage)}</Route>
       <Route path="/looking-glass" component={LookingGlassRoute} />
       <Route path="/forward-groups">{() => <AdminRoute component={ForwardGroupsPage} />}</Route>
+      <Route path="/full-chains">{() => <AdminRoute component={FullChainsPage} />}</Route>
       <Route path="/tunnels">{() => <AdminRoute component={TunnelsPage} />}</Route>
       <Route path="/users">{() => <AdminRoute component={UsersPage} />}</Route>
       <Route path="/email-settings">{() => <AdminRoute component={EmailSettingsPage} />}</Route>

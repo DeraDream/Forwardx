@@ -15,6 +15,7 @@ import { withKeyedTaskLock } from "./keyedTaskLock";
 import { agentStatusOrderGuard, agentStatusOrderingKey } from "./agentStatusOrdering";
 import { pruneMapEntries, setBoundedMapValue } from "./boundedCache";
 import { completeLandingPortCheck } from "./landingPortChecks";
+import { applyFullChainLandingStatus, applyFullChainRuleStatus, applyFullChainRuntimeStatus } from "./fullChainRuntime";
 
 function isForwardXTunnel(tunnel: any) {
   return String(tunnel?.mode || "").toLowerCase() === "forwardx";
@@ -164,6 +165,9 @@ async function applyAgentRuleStatus(host: any, payload: any): Promise<AgentStatu
       const result = completeLandingPortCheck(Number(host.id), landingPortCheckId, !!isRunning, message || (isRunning ? "Agent 确认端口可用" : "Agent 检测到端口已占用"));
       return result ? { status: 200, body: { success: true } } : { status: 404, body: { error: "landing port check not found" } };
     }
+    if (await applyFullChainRuntimeStatus(Number(host.id), runtimeType, !!isRunning, message)) {
+      return { status: 200, body: { success: true } };
+    }
     const landingServiceId = Number(payload?.landingServiceId || 0);
     if (runtimeType.startsWith("landing-ss-service-") && Number.isInteger(landingServiceId) && landingServiceId > 0) {
       const service = await db.getLandingServiceById(landingServiceId, true) as any;
@@ -183,6 +187,7 @@ async function applyAgentRuleStatus(host: any, payload: any): Promise<AgentStatu
         statusMessage: message || (isRunning ? "Agent 已启动 Shadowsocks 服务" : "Agent 未能启动 Shadowsocks 服务"),
         ...(isRunning ? { previousPort: null, recreatePending: false } : {}),
       });
+      await applyFullChainLandingStatus(landingServiceId, !!isRunning, message);
       if (shouldLogStatus(`landing:${landingServiceId}:${host.id}`, `running=${!!isRunning}`, !isRunning || !!message)) {
         appendPanelLog(isRunning ? "info" : "warn", `[Landing] service=${landingServiceId} host=${host.id} running=${!!isRunning}${logMessage !== "-" ? ` message=${logMessage}` : ""}`);
       }
@@ -362,6 +367,7 @@ async function applyAgentRuleStatus(host: any, payload: any): Promise<AgentStatu
 
   const wasRunning = !!(rule as any).isRunning;
   await db.updateRuleRunningStatus(ruleId, !!isRunning);
+  await applyFullChainRuleStatus(ruleId, !!isRunning, message);
   if (
     (wasRunning || !!message)
     && !isRunning

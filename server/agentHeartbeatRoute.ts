@@ -111,6 +111,7 @@ import { runAgentRuntimeRecovery } from "./agentRuntimeRecovery";
 import { observePresenceCapableHostActivity, registerPresenceCapableHost } from "./agentFastLiveness";
 import { recordAuthenticatedAgentActivity } from "./agentActivity";
 import { takeLandingPortChecks } from "./landingPortChecks";
+import { getFullChainRuntimeTasks, getFullChainNodes } from "./repositories/fullChainRepository";
 
 // DNS 解析缓存：ruleId → 主目标上次解析到的 IPv4 地址。
 // 备用出站策略里的域名由 Agent 的 TCP 拨号和健康检查动态解析。
@@ -1883,6 +1884,46 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         sourcePort: check.port, protocol: "both", reportStatus: true, forceRuntimeSync: true,
         commands: [`if command -v ss >/dev/null 2>&1 && ss -ltnu | awk '{print $5}' | grep -Eq "[:.]${Number(check.port)}$"; then echo "[landing] port ${Number(check.port)} is already in use"; exit 1; fi`],
       });
+    }
+    // Full-chain validation is intentionally a separate desired-state task.
+    // It only probes a listener/capability; it never creates a normal rule.
+    for (const task of await getFullChainRuntimeTasks(Number(host.id))) {
+      const port = Number(task.chainPort);
+      const chainId = Number(task.chainId);
+      const nodeId = Number(task.id);
+      if (task.portStatus === "checking") actions.push({
+        op: "apply", statusType: "runtime", forwardType: `full-chain-port-${chainId}-${nodeId}`,
+        sourcePort: port, protocol: task.chainProtocol, reportStatus: true, forceRuntimeSync: true,
+        commands: [`port_hex=$(printf '%04X' ${port}); if { command -v ss >/dev/null 2>&1 && ss -ltnu | awk '{print $5}' | grep -Eq "[:.]${port}$"; } || grep -qi ":$port_hex " /proc/net/tcp /proc/net/tcp6 /proc/net/udp /proc/net/udp6 2>/dev/null; then echo "端口不可用: ${port}" >&2; exit 1; fi`],
+      });
+      if (task.protocolStatus === "checking") actions.push({
+        op: "apply", statusType: "runtime", forwardType: `full-chain-protocol-${chainId}-${nodeId}`,
+        sourcePort: port, protocol: task.chainProtocol, reportStatus: true, forceRuntimeSync: true,
+        commands: [task.chainProtocol === "both"
+          ? "test -r /proc/net/udp || { echo 'UDP 不支持' >&2; exit 1; }"
+          : "test -r /proc/net/tcp || { echo 'TCP 不支持' >&2; exit 1; }"],
+      });
+      if (task.latencyStatus === "checking") {
+        const nodes = await getFullChainNodes(chainId);
+        const index = nodes.findIndex((node: any) => Number(node.id) === nodeId);
+        const target = nodes[index + 1] as any;
+        const targetIp = String(target?.ingressIp || target?.publicIp || "").trim();
+        if (targetIp) actions.push({ op: "apply", statusType: "runtime", forwardType: `full-chain-latency-${chainId}-${nodeId}`,
+          sourcePort: port, targetIp, targetPort: port, reportStatus: true, forceRuntimeSync: true, captureOutput: true,
+          commands: [`ping -n -c 1 -W 3 ${shQuote(targetIp)} 2>/dev/null | awk -F'time=' '/time=/{split($2,a," "); print "latency_ms=" a[1]; exit}' | grep -q '^latency_ms='`], });
+      }
+      if (task.firewallStatus === "checking" || task.firewallStatus === "removing") {
+        const nodes = await getFullChainNodes(chainId);
+        const index = nodes.findIndex((node: any) => Number(node.id) === nodeId);
+        const previousIp = String(nodes[index - 1]?.publicIp || "").trim();
+        const tag = `fwx-full-chain-${chainId}-${nodeId}`;
+        const protocols = task.chainProtocol === "both" ? "tcp udp" : "tcp";
+        const bins = previousIp.includes(":") ? "ip6tables" : "iptables";
+        const remove = `for bin in ${bins}; do command -v $bin >/dev/null 2>&1 || continue; for proto in ${protocols}; do $bin -t raw -D PREROUTING -p $proto --dport ${port} ! -s ${shQuote(previousIp)} -m comment --comment ${shQuote(tag)} -j DROP 2>/dev/null || true; done; done`;
+        const apply = `${remove}; for bin in ${bins}; do command -v $bin >/dev/null 2>&1 || continue; for proto in ${protocols}; do $bin -t raw -C PREROUTING -p $proto --dport ${port} ! -s ${shQuote(previousIp)} -m comment --comment ${shQuote(tag)} -j DROP 2>/dev/null || $bin -t raw -I PREROUTING -p $proto --dport ${port} ! -s ${shQuote(previousIp)} -m comment --comment ${shQuote(tag)} -j DROP; done; done`;
+        actions.push({ op: task.firewallStatus === "removing" ? "remove" : "apply", statusType: "runtime", forwardType: `full-chain-firewall-${chainId}-${nodeId}`,
+          sourcePort: port, protocol: task.chainProtocol, reportStatus: true, forceRuntimeSync: true, commands: [task.firewallStatus === "removing" ? remove : apply] });
+      }
     }
     const dnsWatches = new Map<string, AgentDnsWatch>();
     const responseIssuedAt = Date.now();

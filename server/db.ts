@@ -47,6 +47,7 @@ export * from "./repositories/forwardGroupRepository";
 export * from "./repositories/hostProbeServiceRepository";
 export * from "./repositories/hostGroupRepository";
 export * from "./repositories/landingRepository";
+export * from "./repositories/fullChainRepository";
 export * from "./repositories/pluginRepository";
 
 // ==================== Initialization ====================

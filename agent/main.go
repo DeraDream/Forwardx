@@ -37,7 +37,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.205"
+var Version = "2.2.206"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -2353,6 +2353,7 @@ type action struct {
 	ReportStatus              *bool               `json:"reportStatus,omitempty"`
 	FailureMessage            string              `json:"failureMessage,omitempty"`
 	ForceRuntimeSync          bool                `json:"forceRuntimeSync,omitempty"`
+	CaptureOutput             bool                `json:"captureOutput,omitempty"`
 	RequiresMimicEnvironment  bool                `json:"requiresMimicEnvironment,omitempty"`
 	HandoffOnly               bool                `json:"-"`
 }
@@ -4952,7 +4953,14 @@ func handleActionJobWithRuntimeSnapshot(cfg Config, a action, releaseRuntimeGate
 			}
 		}
 		if ok {
-			ok = runRuntimeShellBatch(append(append([]string{}, a.Commands...), a.PostCommands...), "sync") && ok
+			commands := append(append([]string{}, a.Commands...), a.PostCommands...)
+			if a.CaptureOutput {
+				var output string
+				ok, output = runShellBatchWithOutput(commands)
+				if strings.TrimSpace(output) != "" { actionMessage.set("%s", strings.TrimSpace(output)) }
+			} else {
+				ok = runRuntimeShellBatch(commands, "sync") && ok
+			}
 		}
 		if ok && shouldVerifyManagedRuntimeSync(a) {
 			invalidateLocalRuntimeReadinessCache()

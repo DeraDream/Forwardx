@@ -48,6 +48,7 @@ import {
   Megaphone,
   Send,
   Copy,
+  Link2,
   Link2Off,
   CheckCircle2,
   AlertTriangle,
@@ -100,6 +101,7 @@ const mainMenuItems: SidebarNavItem[] = [
   { icon: LayoutDashboard, label: "仪表盘", path: "/", menuKey: "dashboard" },
   { icon: Server, label: "主机管理", path: "/hosts" },
   { icon: Route, label: "链路管理", path: "/tunnels" },
+  { icon: Link2, label: "全链路", path: "/full-chains" },
   { icon: ArrowRightLeft, label: "转发规则", path: "/rules" },
 ];
 const profileMenuItem: SidebarNavItem = { icon: UserRound, label: "个人资料", path: "/profile", menuKey: "profile" };

@@ -75,6 +75,7 @@ export async function getForwardRules(userId?: number, hostId?: number) {
     sql`COALESCE(${forwardRules.pendingDelete}, ${sqlBool(false)}) = ${sqlBool(false)}`,
     sql`COALESCE(${forwardRules.forwardGroupRuleId}, 0) = 0`,
     sql`${forwardRules.id} NOT IN (SELECT ${forwardGroupMembers.ruleId} FROM ${forwardGroupMembers} WHERE ${forwardGroupMembers.ruleId} IS NOT NULL)`,
+    sql`${forwardRules.id} NOT IN (SELECT "generatedRuleId" FROM "full_chain_nodes" WHERE "generatedRuleId" IS NOT NULL)`,
   ];
   if (userId) conds.push(eq(forwardRules.userId, userId));
   if (hostId) conds.push(eq(forwardRules.hostId, hostId));
@@ -266,6 +267,7 @@ function buildForwardRuleSqlFilter(
   const conditions = [
     "COALESCE(" + ruleColumn("r", "pendingDelete") + ", " + boolLiteral(false) + ") = " + boolLiteral(false),
     "COALESCE(" + ruleColumn("r", "forwardGroupRuleId") + ", 0) = 0",
+    ruleColumn("r", "id") + " NOT IN (SELECT " + quoteIdentifier("generatedRuleId") + " FROM " + quoteIdentifier("full_chain_nodes") + " WHERE " + quoteIdentifier("generatedRuleId") + " IS NOT NULL)",
     "NOT EXISTS (SELECT 1 FROM " + quoteIdentifier("forward_group_members") + " linked_member"
       + " WHERE " + ruleColumn("linked_member", "ruleId") + " = " + ruleColumn("r", "id") + ")",
   ];
@@ -1252,4 +1254,3 @@ export async function disableForwardRulesOutsideHostPortRange(
   );
   return affected.length;
 }
-
