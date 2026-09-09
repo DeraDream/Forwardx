@@ -167,9 +167,9 @@ function ChainNodes({
                       hosts.get(Number(node.hostId))?.ip}
                   </div>
                 </div>
-                {setNodes && (
+                {(setNodes || runtime) && (
                   <span
-                    className={`rounded-full border px-2 py-1 text-xs font-medium ${index === 0 ? "border-emerald-400/50 bg-emerald-500/10 text-emerald-600" : index === nodes.length - 1 ? "border-cyan-400/50 bg-cyan-500/10 text-cyan-600" : "border-amber-400/50 bg-amber-500/10 text-amber-600"}`}
+                    className={`rounded-full border px-2 py-1 text-xs font-medium ${index === nodes.length - 1 ? "border-cyan-400/50 bg-cyan-500/10 text-cyan-600" : index === 0 ? "border-emerald-400/50 bg-emerald-500/10 text-emerald-600" : "border-amber-400/50 bg-amber-500/10 text-amber-600"}`}
                   >
                     {index === nodes.length - 1
                       ? "出口"
@@ -178,7 +178,6 @@ function ChainNodes({
                         : "中转"}
                   </span>
                 )}
-                {runtime && <Status node={node} />}
                 {setNodes && (
                   <div className="flex items-center gap-1">
                     <Button
@@ -243,6 +242,7 @@ function ChainNodes({
                     </Button>
                   </div>
                 )}
+                {runtime && <Status node={node} />}
               </div>
             )}
           </SortableItem>
@@ -251,11 +251,16 @@ function ChainNodes({
               <span className="h-3 border-l border-dashed" />
               <span>
                 下一跳延迟：
-                {node.latencyMs
-                  ? `${node.latencyMs} ms`
-                  : node.latencyStatus === "checking"
-                    ? "检测中…"
-                    : "待检测"}
+                {node.latencyMs ? (
+                  `${node.latencyMs} ms`
+                ) : node.latencyStatus === "checking" ? (
+                  <span className="inline-flex items-center gap-1">
+                    <Loader2 className="inline h-3 w-3 animate-spin" />
+                    检测中…
+                  </span>
+                ) : (
+                  "待检测"
+                )}
               </span>
               <span className="h-3 border-l border-dashed" />
             </div>
@@ -283,6 +288,7 @@ function CreateDialog({
   const create = trpc.fullChains.create.useMutation();
   const check = trpc.fullChains.check.useMutation();
   const checkProtocol = trpc.fullChains.checkProtocol.useMutation();
+  const checkLatency = trpc.fullChains.checkLatency.useMutation();
   const deploy = trpc.fullChains.deploy.useMutation();
   const [id, setId] = useState<number | undefined>(undefined);
   const [name, setName] = useState("");
@@ -308,14 +314,14 @@ function CreateDialog({
   const locked = !!active && busy.has(active.status);
   const last = hosts.get(nodes.at(-1)?.hostId || 0);
   const randomPort = async () => {
-    const result = random.data || (await random.refetch()).data;
+    const result = (await random.refetch()).data;
     if (result) {
       setPort(String(result.port));
       setPortCheck(null);
     }
   };
   const randomPassword = async () => {
-    const result = random.data || (await random.refetch()).data;
+    const result = (await random.refetch()).data;
     if (result) setPassword(result.password);
   };
   const add = (value: string) => {
@@ -446,6 +452,7 @@ function CreateDialog({
       if (!chainId) return;
       if (kind === "port") await check.mutateAsync({ id: chainId });
       if (kind === "protocol") await checkProtocol.mutateAsync({ id: chainId });
+      if (kind === "latency") await checkLatency.mutateAsync({ id: chainId });
       if (kind === "deploy") await deploy.mutateAsync({ id: chainId });
     } catch (error: any) {
       toast.error(error.message);
@@ -571,8 +578,8 @@ function CreateDialog({
                 </SelectContent>
               </Select>
             </div>
-            <div className="order-1 grid grid-cols-12 gap-3">
-              <div className="col-span-6 min-w-0 space-y-1.5">
+            <div className="order-1 grid grid-cols-3 gap-3">
+              <div className="min-w-0 space-y-1.5">
                 <Label>链路名称</Label>
                 <Input
                   value={name}
@@ -580,7 +587,7 @@ function CreateDialog({
                   placeholder="HK → JP 落地"
                 />
               </div>
-              <div className="col-span-4 min-w-0 space-y-1.5">
+              <div className="min-w-0 space-y-1.5">
                 <Label>端口</Label>
                 <div className="flex gap-2">
                   <div className="relative min-w-0 flex-1">
@@ -613,7 +620,7 @@ function CreateDialog({
                   </Button>
                 </div>
               </div>
-              <div className="col-span-2 min-w-0 space-y-1.5">
+              <div className="min-w-0 space-y-1.5">
                 <Label>协议</Label>
                 <Select value={protocol} onValueChange={setProtocol}>
                   <SelectTrigger>
@@ -695,32 +702,46 @@ function CreateDialog({
             </div>
             <div className="order-4 flex items-center justify-between border-t pt-3">
               <Label>链路主机顺序</Label>
-              <Select value="" onValueChange={add}>
-                <SelectTrigger className="h-8 w-52">
-                  <SelectValue placeholder="添加机器" />
-                </SelectTrigger>
-                <SelectContent>
-                  {(hostsQuery.data || [])
-                    .filter(
-                      (host: Host) =>
-                        host.id !== landingHostId &&
-                        !host.isLanding &&
-                        !nodes.some((node) => node.hostId === host.id),
-                    )
-                    .map((host: Host) => (
-                      <SelectItem key={host.id} value={String(host.id)}>
-                        {host.name} · {host.ip}
-                        {host.isLanding ? " · 落地机" : ""}
-                      </SelectItem>
-                    ))}
-                </SelectContent>
-              </Select>
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={locked || checkLatency.isPending || !valid}
+                  onClick={() => void run("latency")}
+                >
+                  {checkLatency.isPending && (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  )}
+                  检查延迟
+                </Button>
+                <Select value="" onValueChange={add}>
+                  <SelectTrigger className="h-8 w-52">
+                    <SelectValue placeholder="添加机器" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(hostsQuery.data || [])
+                      .filter(
+                        (host: Host) =>
+                          host.id !== landingHostId &&
+                          !host.isLanding &&
+                          !nodes.some((node) => node.hostId === host.id),
+                      )
+                      .map((host: Host) => (
+                        <SelectItem key={host.id} value={String(host.id)}>
+                          {host.name} · {host.ip}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
             <div className="order-5 rounded-lg border p-2">
               <ChainNodes
-                nodes={nodes}
+                nodes={active?.nodes || nodes}
                 hosts={hosts}
                 setNodes={setNodes}
+                disabled={!!active || locked}
+                runtime={!!active}
                 fixedLast
               />
             </div>

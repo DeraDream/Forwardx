@@ -66,6 +66,12 @@ test("full-chain checks do not deploy, while TCP and TCP+UDP follow their requir
       for (const [id, name, ip] of [[11, "入口", "198.51.100.11"], [12, "落地", "198.51.100.12"]]) await runtime.executeRaw('INSERT INTO "hosts" ("id", "name", "ip", "ipv4", "userId") VALUES (?, ?, ?, ?, 1)', [id, name, ip, ip]);
       await runtime.executeRaw('INSERT INTO "landing_hosts" ("hostId", "userId") VALUES (12, 1)');
       const caller = fullChainsRouter.createCaller({ req: { headers: {} }, res: { clearCookie() {} }, user: { id: 1, username: "chain-user", role: "user", accountEnabled: true }, authSession: null, authFailureReason: null });
+      const randomOne = await caller.random();
+      const randomTwo = await caller.random();
+      assert.match(randomOne.password, /^[A-Za-z0-9_-]{28}$/);
+      assert.notEqual(randomOne.password, randomTwo.password, "each random-password request must produce a new value");
+      assert.ok(randomOne.port >= 20000 && randomOne.port < 50000);
+      assert.ok(randomTwo.port >= 20000 && randomTwo.port < 50000);
       const create = async (protocol, port) => caller.create({ name: "chain-" + protocol, port, protocol, ssProtocol: "ss", method: "aes-256-gcm", password: "12345678", allowPublicIntermediate: true, nodes: [{ hostId: 11 }, { hostId: 12 }] });
       const finishPorts = async (id) => { for (const node of (await caller.list()).find((item) => item.id === id).nodes) await applyFullChainRuntimeStatus(node.hostId, "full-chain-port-" + id + "-" + node.id, true, "端口可用"); };
 
@@ -81,15 +87,27 @@ test("full-chain checks do not deploy, while TCP and TCP+UDP follow their requir
       assert.ok(Number(tcpChain.nodes[0].generatedRuleId) > 0, "deployment creates the first forwarding rule");
 
       const both = await create("both", 32125);
+      await caller.checkLatency({ id: both.id });
+      let latencyChain = (await caller.list()).find((item) => item.id === both.id);
+      assert.equal(latencyChain.nodes[0].latencyStatus, "checking", "latency checks are tracked per hop");
+      assert.equal(latencyChain.nodes[0].generatedRuleId, null, "latency checks must not deploy");
       await caller.check({ id: both.id });
+      let portChain = (await caller.list()).find((item) => item.id === both.id);
+      assert.equal(portChain.nodes[0].portStatus, "checking", "port checks begin at the first node");
+      assert.ok(portChain.nodes.slice(1).every((node) => node.portStatus === "pending"), "remaining nodes wait for their turn");
       await finishPorts(both.id);
       let bothChain = (await caller.list()).find((item) => item.id === both.id);
       assert.equal(bothChain.status, "ports-ready");
+      assert.ok(bothChain.nodes.every((node) => node.portStatus === "available"), "every node reports port availability");
       assert.equal(bothChain.nodes[0].generatedRuleId, null);
       await caller.checkProtocol({ id: both.id });
+      let protocolChain = (await caller.list()).find((item) => item.id === both.id);
+      assert.equal(protocolChain.nodes[0].protocolStatus, "checking", "protocol checks begin at the first node");
+      assert.ok(protocolChain.nodes.slice(1).every((node) => node.protocolStatus === "pending"), "remaining nodes wait for their turn");
       for (const node of (await caller.list()).find((item) => item.id === both.id).nodes) await applyFullChainRuntimeStatus(node.hostId, "full-chain-protocol-" + both.id + "-" + node.id, true, "协议可用");
       bothChain = (await caller.list()).find((item) => item.id === both.id);
       assert.equal(bothChain.status, "ready-to-deploy");
+      assert.ok(bothChain.nodes.every((node) => node.protocolStatus === "available"), "every node reports protocol availability");
       assert.equal(bothChain.nodes[0].generatedRuleId, null, "protocol checks must not deploy");
     } finally { await runtime.closeDatabase(); }
   `;
