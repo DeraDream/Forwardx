@@ -185,7 +185,7 @@ export const landingRouter = router({
     await db.updateLandingService(input.id, { ...input, previousPort: Number(service.port), recreatePending: true, latencyTargetHost: latencyTarget.host, latencyTargetPort: latencyTarget.port, status: "pending", statusMessage: "等待 Agent 删除旧服务并创建新服务" });
     const referencedRules = (await db.getForwardRules()).filter((rule: any) => Number(rule.targetLandingServiceId) === input.id && !rule.pendingDelete);
     for (const rule of referencedRules as any[]) {
-      await db.updateForwardRule(Number(rule.id), { targetIp: input.endpoint, targetPort: input.port, isRunning: false });
+      await db.updateForwardRule(Number(rule.id), { targetLandingServiceId: input.id, targetRuleId: null, targetIp: input.endpoint, targetPort: input.port, isRunning: false });
       if (rule.tunnelId) {
         const tunnel = await db.getTunnelById(Number(rule.tunnelId));
         if (tunnel) await pushTunnelEndpointRefresh(tunnel, "landing-service-updated");
