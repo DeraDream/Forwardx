@@ -20,7 +20,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import {
   SortableDragHandle,
   SortableItem,
@@ -124,7 +123,7 @@ function ChainNodes({
             {({ itemProps, handleProps }) => (
               <div
                 {...itemProps}
-                className="flex min-h-14 items-center gap-3 rounded-xl border bg-card px-3"
+                className="flex min-h-14 items-center gap-3 rounded-lg border bg-card px-3"
               >
                 <SortableDragHandle
                   dragHandleProps={handleProps}
@@ -144,36 +143,68 @@ function ChainNodes({
                   </div>
                 </div>
                 {setNodes && (
-                  <Input
-                    disabled={disabled}
-                    className="h-8 w-44"
-                    value={node.ingressIp || ""}
-                    onChange={(event) =>
-                      setNodes(
-                        nodes.map((item: Node, i: number) =>
-                          i === index
-                            ? { ...item, ingressIp: event.target.value }
-                            : item,
-                        ),
-                      )
-                    }
-                    placeholder="本机入口 IP（可选）"
-                  />
+                  <span
+                    className={`rounded-full border px-2 py-1 text-xs font-medium ${index === 0 ? "border-emerald-400/50 bg-emerald-500/10 text-emerald-600" : index === nodes.length - 1 ? "border-cyan-400/50 bg-cyan-500/10 text-cyan-600" : "border-amber-400/50 bg-amber-500/10 text-amber-600"}`}
+                  >
+                    {index === 0
+                      ? "入口"
+                      : index === nodes.length - 1
+                        ? "出口"
+                        : "中转"}
+                  </span>
                 )}
                 {runtime && <Status node={node} />}
                 {setNodes && (
-                  <Button
-                    disabled={disabled}
-                    size="icon"
-                    variant="ghost"
-                    onClick={() =>
-                      setNodes(
-                        nodes.filter((_: Node, i: number) => i !== index),
-                      )
-                    }
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      disabled={disabled || index === 0}
+                      size="icon"
+                      variant="ghost"
+                      onClick={() =>
+                        setNodes(
+                          nodes.map((item, i, all) =>
+                            i === index
+                              ? all[i - 1]
+                              : i === index - 1
+                                ? all[index]
+                                : item,
+                          ),
+                        )
+                      }
+                    >
+                      ↑
+                    </Button>
+                    <Button
+                      disabled={disabled || index === nodes.length - 1}
+                      size="icon"
+                      variant="ghost"
+                      onClick={() =>
+                        setNodes(
+                          nodes.map((item, i, all) =>
+                            i === index
+                              ? all[i + 1]
+                              : i === index + 1
+                                ? all[index]
+                                : item,
+                          ),
+                        )
+                      }
+                    >
+                      ↓
+                    </Button>
+                    <Button
+                      disabled={disabled || index === nodes.length - 1}
+                      size="icon"
+                      variant="ghost"
+                      onClick={() =>
+                        setNodes(
+                          nodes.filter((_: Node, i: number) => i !== index),
+                        )
+                      }
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
                 )}
               </div>
             )}
@@ -215,7 +246,6 @@ function CreateDialog({
   const create = trpc.fullChains.create.useMutation();
   const check = trpc.fullChains.check.useMutation();
   const checkProtocol = trpc.fullChains.checkProtocol.useMutation();
-  const checkLatency = trpc.fullChains.checkLatency.useMutation();
   const deploy = trpc.fullChains.deploy.useMutation();
   const [id, setId] = useState<number | undefined>(undefined);
   const [name, setName] = useState("");
@@ -224,8 +254,9 @@ function CreateDialog({
   const [type, setType] = useState("ss");
   const [method, setMethod] = useState(normal[1]);
   const [password, setPassword] = useState("");
-  const [publicAccess, setPublicAccess] = useState(true);
+  const [entryIp, setEntryIp] = useState("");
   const [nodes, setNodes] = useState<Node[]>([]);
+  const [landingHostId, setLandingHostId] = useState(0);
   const [portCheck, setPortCheck] = useState<PortCheck>(null);
   const createdDraft = useRef<number | undefined>(undefined);
   const remove = trpc.fullChains.remove.useMutation();
@@ -238,19 +269,36 @@ function CreateDialog({
   );
   const active = chains.find((item: any) => item.id === id);
   const locked = !!active && busy.has(active.status);
-  const first = hosts.get(nodes[0]?.hostId || 0);
   const last = hosts.get(nodes.at(-1)?.hostId || 0);
-  const randomize = async () => {
+  const randomPort = async () => {
     const result = random.data || (await random.refetch()).data;
     if (result) {
       setPort(String(result.port));
-      setPassword(result.password);
       setPortCheck(null);
     }
   };
+  const randomPassword = async () => {
+    const result = random.data || (await random.refetch()).data;
+    if (result) setPassword(result.password);
+  };
   const add = (value: string) => {
     const host = hosts.get(Number(value));
-    if (host) setNodes((old) => [...old, { hostId: host.id, ingressIp: "" }]);
+    if (host)
+      setNodes((old) => [
+        ...old.filter((node) => node.hostId !== landingHostId),
+        { hostId: host.id, ingressIp: "" },
+      ]);
+  };
+  const selectLandingHost = (value: string) => {
+    const hostId = Number(value);
+    setLandingHostId(hostId);
+    setNodes((old) => [
+      ...old.filter(
+        (node) => node.hostId !== hostId && node.hostId !== landingHostId,
+      ),
+      { hostId, ingressIp: "" },
+    ]);
+    setPortCheck(null);
   };
   const valid =
     nodes.length >= 2 &&
@@ -268,7 +316,7 @@ function CreateDialog({
       ssProtocol: type as "ss" | "ss2022",
       method: method as any,
       password,
-      allowPublicIntermediate: publicAccess,
+      allowPublicIntermediate: true,
       nodes,
     });
     setId(result.id);
@@ -282,6 +330,7 @@ function CreateDialog({
     setName("");
     setPort("");
     setPassword("");
+    setEntryIp("");
     setNodes([]);
     setPortCheck(null);
     close();
@@ -353,7 +402,6 @@ function CreateDialog({
       if (!chainId) return;
       if (kind === "port") await check.mutateAsync({ id: chainId });
       if (kind === "protocol") await checkProtocol.mutateAsync({ id: chainId });
-      if (kind === "latency") await checkLatency.mutateAsync({ id: chainId });
       if (kind === "deploy") await deploy.mutateAsync({ id: chainId });
     } catch (error: any) {
       toast.error(error.message);
@@ -384,7 +432,7 @@ function CreateDialog({
           setPortCheck({ available: null, message: "检测中" });
           try {
             const result = await utils.landing.checkPort.fetch({
-              hostId: first?.id || 0,
+              hostId: last?.id || 0,
               port: Number(port),
             });
             if (result.complete) {
@@ -419,7 +467,7 @@ function CreateDialog({
   }, [
     open,
     active,
-    first?.id,
+    last?.id,
     port,
     utils.landing.checkPort,
     utils.landing.portCheckStatus,
@@ -427,21 +475,24 @@ function CreateDialog({
   const configReady = valid && portCheck?.available === true;
   const primary =
     !active || active.status === "draft" || active.status === "error"
-      ? "开始检查"
-      : active.status === "ports-ready"
+      ? "检查链路端口"
+      : active.status === "ports-ready" && active.protocol === "both"
         ? "请先检查协议"
-        : active.status === "ready-to-deploy"
+        : active.status === "ports-ready"
           ? "开始部署"
-          : active.status === "running"
-            ? "已部署"
-            : active.statusMessage || "处理中";
+          : active.status === "ready-to-deploy"
+            ? "开始部署"
+            : active.status === "running"
+              ? "已部署"
+              : active.statusMessage || "处理中";
   const primaryAction =
     active?.status === "ready-to-deploy"
       ? "deploy"
       : active?.status === "ports-ready" && active.protocol === "both"
         ? "protocol"
-        : "port";
-  const canDeploy = active?.status === "ready-to-deploy";
+        : active?.status === "ports-ready"
+          ? "deploy"
+          : "port";
   return (
     <Dialog
       open={open}
@@ -456,7 +507,27 @@ function CreateDialog({
         </DialogHeader>
         <div className="grid gap-3 px-6 py-4">
           <>
-            <div className="order-2 grid grid-cols-12 gap-3">
+            <div className="order-0 rounded-md border border-emerald-500/20 bg-emerald-500/5 p-3">
+              <Label>使用落地机</Label>
+              <Select
+                value={landingHostId ? String(landingHostId) : ""}
+                onValueChange={selectLandingHost}
+              >
+                <SelectTrigger className="mt-2">
+                  <SelectValue placeholder="请选择落地机" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(hostsQuery.data || [])
+                    .filter((host: Host) => host.isLanding)
+                    .map((host: Host) => (
+                      <SelectItem key={host.id} value={String(host.id)}>
+                        {host.name} · {host.ip}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="order-1 grid grid-cols-12 gap-3">
               <div className="col-span-6 min-w-0 space-y-1.5">
                 <Label>链路名称</Label>
                 <Input
@@ -489,7 +560,11 @@ function CreateDialog({
                       </span>
                     )}
                   </div>
-                  <Button size="icon" variant="outline" onClick={randomize}>
+                  <Button
+                    size="icon"
+                    variant="outline"
+                    onClick={() => void randomPort()}
+                  >
                     <Shuffle className="h-4 w-4" />
                   </Button>
                 </div>
@@ -507,7 +582,7 @@ function CreateDialog({
                 </Select>
               </div>
             </div>
-            <div className="order-3 grid grid-cols-12 gap-3">
+            <div className="order-2 grid grid-cols-12 gap-3">
               <div className="col-span-3 min-w-0 space-y-1.5">
                 <Label>SS 类型</Label>
                 <Select
@@ -551,27 +626,31 @@ function CreateDialog({
                   <Button
                     size="icon"
                     variant="outline"
-                    onClick={() => void randomize()}
+                    onClick={() => void randomPassword()}
                   >
                     <RefreshCw className="h-4 w-4" />
                   </Button>
                 </div>
               </div>
             </div>
-            <div className="order-4 flex items-center justify-between rounded-lg bg-muted/50 px-3 py-2">
-              <div>
-                <div className="text-sm font-medium">中转端口允许公网访问</div>
-                <div className="text-xs text-muted-foreground">
-                  关闭后，仅允许上一跳 VPS 连接。
-                </div>
-              </div>
-              <Switch
-                checked={publicAccess}
-                onCheckedChange={setPublicAccess}
+            <div className="order-3 space-y-1.5">
+              <Label>入口 IP</Label>
+              <Input
+                value={entryIp}
+                placeholder="默认使用入口机公网 IP"
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setEntryIp(value);
+                  setNodes((old) =>
+                    old.map((node, index) =>
+                      index === 0 ? { ...node, ingressIp: value } : node,
+                    ),
+                  );
+                }}
               />
             </div>
-            <div className="order-0 flex items-center justify-between">
-              <Label>机器顺序</Label>
+            <div className="order-4 flex items-center justify-between border-t pt-3">
+              <Label>链路主机顺序</Label>
               <Select value="" onValueChange={add}>
                 <SelectTrigger className="h-8 w-52">
                   <SelectValue placeholder="添加机器" />
@@ -580,6 +659,7 @@ function CreateDialog({
                   {(hostsQuery.data || [])
                     .filter(
                       (host: Host) =>
+                        host.id !== landingHostId &&
                         !nodes.some((node) => node.hostId === host.id),
                     )
                     .map((host: Host) => (
@@ -591,7 +671,7 @@ function CreateDialog({
                 </SelectContent>
               </Select>
             </div>
-            <div className="order-1">
+            <div className="order-5 rounded-lg border p-2">
               <ChainNodes nodes={nodes} hosts={hosts} setNodes={setNodes} />
             </div>
           </>
@@ -600,34 +680,6 @@ function CreateDialog({
               {active.statusMessage || active.status}
             </div>
           )}
-          <div className="flex flex-wrap gap-2 border-t pt-4">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={locked || !configReady}
-              onClick={() => void run("latency")}
-            >
-              检查各跳延迟
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={locked || !configReady}
-              onClick={() => void run("port")}
-            >
-              检查端口可用性
-            </Button>
-            {active && (
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={locked || !active || active.status !== "ports-ready"}
-                onClick={() => void run("protocol")}
-              >
-                检查协议可用性
-              </Button>
-            )}
-          </div>
         </div>
         <DialogFooter className="border-t px-6 py-4">
           <Button variant="outline" disabled={locked} onClick={closeDialog}>
@@ -641,9 +693,9 @@ function CreateDialog({
               deploy.isPending ||
               !configReady ||
               (!!active &&
-                !canDeploy &&
-                active.status !== "draft" &&
-                active.status !== "error")
+                !["draft", "error", "ports-ready", "ready-to-deploy"].includes(
+                  active.status,
+                ))
             }
             onClick={() => void run(primaryAction)}
           >

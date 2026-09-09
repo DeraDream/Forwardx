@@ -214,6 +214,13 @@ export async function startFullChain(chainId: number) {
 export async function startFullChainProtocolCheck(chainId: number) {
   const chain = (await db.getFullChainById(chainId)) as any;
   if (!chain) throw new Error("全链路不存在");
+  if (String(chain.protocol) === "tcp") {
+    await db.updateFullChain(chainId, {
+      status: "ready-to-deploy",
+      statusMessage: "TCP 端口检查完成，可以开始部署",
+    });
+    return;
+  }
   const nodes = await db.getFullChainNodes(chainId);
   if (
     !nodes.length ||
