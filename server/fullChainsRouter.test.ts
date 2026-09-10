@@ -37,8 +37,9 @@ test("panel can create only a unique chain ending at a marked landing host", () 
       assert.equal(chain.nodes[0].portStatus, "pending");
       await caller.check({ id: created.id });
       const [checking] = await caller.list();
-      assert.equal(checking.status, "checking-port");
-      assert.equal(checking.nodes[0].portStatus, "checking");
+      assert.equal(checking.status, "checking-link");
+      assert.ok(checking.nodes.every((node) => node.portStatus === "checking"));
+      assert.ok(checking.nodes.every((node) => node.protocolStatus === "checking"));
     } finally { await runtime.closeDatabase(); }
   `;
   try {
@@ -47,7 +48,7 @@ test("panel can create only a unique chain ending at a marked landing host", () 
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
 
-test("full-chain checks do not deploy, while TCP and TCP+UDP follow their required gates", () => {
+test("full-chain checks all nodes before deployment", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-full-chain-lifecycle-"));
   const databasePath = path.join(directory, "full-chain.db");
   const script = String.raw`
@@ -93,17 +94,14 @@ test("full-chain checks do not deploy, while TCP and TCP+UDP follow their requir
       assert.equal(latencyChain.nodes[0].generatedRuleId, null, "latency checks must not deploy");
       await caller.check({ id: both.id });
       let portChain = (await caller.list()).find((item) => item.id === both.id);
-      assert.equal(portChain.nodes[0].portStatus, "checking", "port checks begin at the first node");
-      assert.ok(portChain.nodes.slice(1).every((node) => node.portStatus === "pending"), "remaining nodes wait for their turn");
+      assert.equal(portChain.status, "checking-link");
+      assert.ok(portChain.nodes.every((node) => node.portStatus === "checking"), "port checks start on every node");
+      assert.ok(portChain.nodes.every((node) => node.protocolStatus === "checking"), "UDP checks start on every node");
       await finishPorts(both.id);
       let bothChain = (await caller.list()).find((item) => item.id === both.id);
-      assert.equal(bothChain.status, "ports-ready");
+      assert.equal(bothChain.status, "checking-link");
       assert.ok(bothChain.nodes.every((node) => node.portStatus === "available"), "every node reports port availability");
       assert.equal(bothChain.nodes[0].generatedRuleId, null);
-      await caller.checkProtocol({ id: both.id });
-      let protocolChain = (await caller.list()).find((item) => item.id === both.id);
-      assert.equal(protocolChain.nodes[0].protocolStatus, "checking", "protocol checks begin at the first node");
-      assert.ok(protocolChain.nodes.slice(1).every((node) => node.protocolStatus === "pending"), "remaining nodes wait for their turn");
       for (const node of (await caller.list()).find((item) => item.id === both.id).nodes) await applyFullChainRuntimeStatus(node.hostId, "full-chain-protocol-" + both.id + "-" + node.id, true, "协议可用");
       bothChain = (await caller.list()).find((item) => item.id === both.id);
       assert.equal(bothChain.status, "ready-to-deploy");

@@ -46,7 +46,7 @@ export const fullChainsRouter = router({
   }),
   replace: protectedProcedure.input(createInput.extend({ id: z.number().int().positive() })).mutation(async ({ input, ctx }) => {
     const old = await requireChain(ctx.user, input.id);
-    if (["checking-port", "checking-protocol", "deploying"].includes(String(old.status))) throw new Error("原全链路正在执行，暂不能替换");
+    if (["checking-link", "checking-port", "checking-protocol", "deploying"].includes(String(old.status))) throw new Error("原全链路正在执行，暂不能替换");
     if (Number(input.port) === Number(old.port)) throw new Error("无损替换必须使用新端口；同端口无法同时保留旧监听和新监听");
     if (new Set(input.nodes.map((node) => node.hostId)).size !== input.nodes.length) throw new Error("同一台机器只能出现一次");
     if ((input.ssProtocol === "ss2022") !== input.method.startsWith("2022-")) throw new Error("SS 类型与加密方式不匹配");
@@ -62,7 +62,7 @@ export const fullChainsRouter = router({
   }),
   start: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ input, ctx }) => {
     const chain = await requireChain(ctx.user, input.id);
-    if (["checking-port", "checking-protocol", "deploying"].includes(String(chain.status))) throw new Error("全链路正在执行，暂不可重试");
+    if (["checking-link", "checking-port", "checking-protocol", "deploying"].includes(String(chain.status))) throw new Error("全链路正在执行，暂不可重试");
     await cancelFullChain(input.id);
     await db.updateFullChain(input.id, { isEnabled: true, status: "draft", statusMessage: "准备重试", landingServiceId: null });
     await startFullChain(input.id);
@@ -70,13 +70,13 @@ export const fullChainsRouter = router({
   }),
   check: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ input, ctx }) => {
     const chain = await requireChain(ctx.user, input.id);
-    if (["checking-port", "checking-protocol", "deploying"].includes(String(chain.status))) throw new Error("全链路正在执行");
+    if (["checking-link", "checking-port", "checking-protocol", "deploying"].includes(String(chain.status))) throw new Error("全链路正在执行");
     await startFullChain(input.id);
     return { success: true };
   }),
   checkProtocol: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ input, ctx }) => {
     const chain = await requireChain(ctx.user, input.id);
-    if (String(chain.status) === "checking-protocol" || String(chain.status) === "deploying") throw new Error("全链路正在执行");
+    if (["checking-link", "checking-protocol", "deploying"].includes(String(chain.status))) throw new Error("全链路正在执行");
     await startFullChainProtocolCheck(input.id);
     return { success: true };
   }),

@@ -41,7 +41,7 @@ import { toast } from "sonner";
 type Host = { id: number; name: string; ip: string; isLanding: boolean };
 type Node = { hostId: number; ingressIp: string };
 type PortCheck = { available: boolean | null; message: string } | null;
-const busy = new Set(["checking-port", "checking-protocol", "deploying"]);
+const busy = new Set(["checking-link", "checking-port", "checking-protocol", "deploying"]);
 const normal = ["aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305"];
 const ss2022 = [
   "2022-blake3-aes-128-gcm",
@@ -49,36 +49,16 @@ const ss2022 = [
   "2022-blake3-chacha20-poly1305",
 ];
 
-function Status({ node }: { node: any }) {
-  const failed =
-    node.deployStatus === "error" ||
-    node.portStatus === "error" ||
-    node.protocolStatus === "error";
-  const [kind, text] = failed
-    ? [
-        "error",
-        node.deployMessage ||
-          node.portMessage ||
-          node.protocolMessage ||
-          "失败",
-      ]
-    : node.deployStatus === "done"
-      ? ["ok", "部署完毕"]
-      : node.deployStatus === "checking"
-        ? ["busy", "部署中"]
-        : node.protocolStatus === "available"
-          ? ["ok", "协议可用"]
-          : node.protocolStatus === "checking"
-            ? ["busy", "协议检查中"]
-            : node.portStatus === "available"
-              ? ["ok", "端口可用"]
-              : node.portStatus === "checking"
-                ? ["busy", "端口检查中"]
-                : ["idle", "待检查"];
+function StatusBadge({ status, available, checking, unavailable, message }: {
+  status: string; available: string; checking: string; unavailable: string; message?: string;
+}) {
+  const kind = status === "available" ? "ok" : status === "checking" ? "busy" : status === "error" ? "error" : "idle";
+  const text = kind === "ok" ? available : kind === "busy" ? checking : kind === "error" ? unavailable : "待检查";
   return (
     <span
-      title={kind === "error" ? text : undefined}
-      className={`flex w-28 justify-end gap-1 text-xs font-medium ${kind === "error" ? "text-destructive" : kind === "idle" ? "text-muted-foreground" : "text-emerald-600"}`}
+      key={status}
+      title={kind === "error" ? message : undefined}
+      className={`inline-flex animate-in fade-in-0 zoom-in-95 items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium duration-200 motion-reduce:animate-none ${kind === "error" ? "border-destructive/50 bg-destructive/5 text-destructive" : kind === "idle" ? "border-muted-foreground/30 text-muted-foreground" : "border-emerald-500/50 bg-emerald-500/5 text-emerald-600"}`}
     >
       {kind === "busy" ? (
         <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -92,6 +72,15 @@ function Status({ node }: { node: any }) {
   );
 }
 
+function Status({ node, protocol }: { node: any; protocol?: string }) {
+  if (["checking", "done", "error"].includes(node.deployStatus))
+    return <StatusBadge status={node.deployStatus === "done" ? "available" : node.deployStatus} available="已创建" checking="创建中" unavailable="创建失败" message={node.deployMessage} />;
+  return <div className="flex items-center gap-2">
+    <StatusBadge status={node.portStatus} available="端口可用" checking="检查端口中" unavailable="端口不可用" message={node.portMessage} />
+    {protocol === "both" && <StatusBadge status={node.protocolStatus} available="UDP 可用" checking="检查 UDP 中" unavailable="UDP 不可用" message={node.protocolMessage} />}
+  </div>;
+}
+
 function ChainNodes({
   nodes,
   hosts,
@@ -99,6 +88,7 @@ function ChainNodes({
   setNodes,
   runtime,
   fixedLast = false,
+  protocol,
 }: {
   nodes: any[];
   hosts: Map<number, Host>;
@@ -106,6 +96,7 @@ function ChainNodes({
   setNodes?: (next: Node[]) => void;
   runtime?: boolean;
   fixedLast?: boolean;
+  protocol?: string;
 }) {
   const sortable = useSortableReorder({
     items: nodes,
@@ -242,7 +233,7 @@ function ChainNodes({
                     </Button>
                   </div>
                 )}
-                {runtime && <Status node={node} />}
+                {runtime && <Status node={node} protocol={protocol} />}
               </div>
             )}
           </SortableItem>
@@ -287,7 +278,6 @@ function CreateDialog({
   const random = trpc.fullChains.random.useQuery(undefined, { enabled: open });
   const create = trpc.fullChains.create.useMutation();
   const check = trpc.fullChains.check.useMutation();
-  const checkProtocol = trpc.fullChains.checkProtocol.useMutation();
   const checkLatency = trpc.fullChains.checkLatency.useMutation();
   const deploy = trpc.fullChains.deploy.useMutation();
   const [id, setId] = useState<number | undefined>(undefined);
@@ -446,12 +436,11 @@ function CreateDialog({
     utils.landing.portCheckStatus,
   ]);
   const ensureDraft = async () => id || save();
-  const run = async (kind: "port" | "protocol" | "latency" | "deploy") => {
+  const run = async (kind: "port" | "latency" | "deploy") => {
     try {
       const chainId = kind === "deploy" ? id : await ensureDraft();
       if (!chainId) return;
       if (kind === "port") await check.mutateAsync({ id: chainId });
-      if (kind === "protocol") await checkProtocol.mutateAsync({ id: chainId });
       if (kind === "latency") await checkLatency.mutateAsync({ id: chainId });
       if (kind === "deploy") await deploy.mutateAsync({ id: chainId });
     } catch (error: any) {
@@ -523,27 +512,19 @@ function CreateDialog({
     utils.landing.checkPort,
     utils.landing.portCheckStatus,
   ]);
-  const configReady = valid && portCheck?.available === true;
+  const configReady = valid && portCheck?.available !== false;
   const primary =
-    !active || active.status === "draft" || active.status === "error"
-      ? "检查链路端口"
-      : active.status === "ports-ready" && active.protocol === "both"
-        ? "请先检查协议"
-        : active.status === "ports-ready"
-          ? "开始部署"
-          : active.status === "ready-to-deploy"
-            ? "开始部署"
-            : active.status === "running"
-              ? "已部署"
-              : active.statusMessage || "处理中";
+    active?.status === "ready-to-deploy"
+      ? "创建链路"
+      : active?.status === "running"
+        ? "已创建"
+        : !active || active.status === "draft" || active.status === "error"
+          ? "检查链路"
+          : active.statusMessage || "检查链路中";
   const primaryAction =
     active?.status === "ready-to-deploy"
       ? "deploy"
-      : active?.status === "ports-ready" && active.protocol === "both"
-        ? "protocol"
-        : active?.status === "ports-ready"
-          ? "deploy"
-          : "port";
+      : "port";
   return (
     <Dialog
       open={open}
@@ -671,6 +652,7 @@ function CreateDialog({
                 <Label>密码</Label>
                 <div className="flex gap-2">
                   <Input
+                    className={password.length < 8 ? "border-destructive" : undefined}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                   />
@@ -743,6 +725,7 @@ function CreateDialog({
                 disabled={!!active || locked}
                 runtime={!!active}
                 fixedLast
+                protocol={active?.protocol || protocol}
               />
             </div>
           </>
@@ -764,7 +747,7 @@ function CreateDialog({
               deploy.isPending ||
               !configReady ||
               (!!active &&
-                !["draft", "error", "ports-ready", "ready-to-deploy"].includes(
+                !["draft", "error", "ready-to-deploy"].includes(
                   active.status,
                 ))
             }

@@ -187,28 +187,23 @@ export async function startFullChain(chainId: number) {
   }
   for (const node of nodes) {
     await db.updateFullChainNode(Number(node.id), {
-      portStatus: "pending",
+      portStatus: "checking",
       portMessage: null,
-      protocolStatus: "pending",
+      protocolStatus: String(chain.protocol) === "both" ? "checking" : "pending",
       protocolMessage: null,
       deployStatus: "pending",
       deployMessage: null,
       firewallStatus: "pending",
     });
   }
-  await db.updateFullChainNode(Number(nodes[0].id), {
-    portStatus: "checking",
-    portMessage: "端口检查中",
-  });
   await db.updateFullChain(chainId, {
-    status: "checking-port",
-    statusMessage: "正在逐台检查端口",
+    status: "checking-link",
+    statusMessage: "正在检查链路端口和 UDP",
     landingServiceId: null,
     isEnabled: true,
   });
-  pushAgentRefresh(Number(nodes[0].hostId), "full-chain-port-check", {
-    urgent: true,
-  });
+  for (const node of nodes)
+    pushAgentRefresh(Number(node.hostId), "full-chain-check", { urgent: true });
 }
 
 export async function startFullChainProtocolCheck(chainId: number) {
@@ -229,20 +224,17 @@ export async function startFullChainProtocolCheck(chainId: number) {
     throw new Error("请先完成端口检查");
   for (const node of nodes)
     await db.updateFullChainNode(Number(node.id), {
-      protocolStatus: "pending",
+      protocolStatus: "checking",
       protocolMessage: null,
     });
-  await db.updateFullChainNode(Number(nodes[0].id), {
-    protocolStatus: "checking",
-    protocolMessage: "协议检查中",
-  });
   await db.updateFullChain(chainId, {
     status: "checking-protocol",
     statusMessage: "正在逐台检查 UDP 协议",
   });
-  pushAgentRefresh(Number(nodes[0].hostId), "full-chain-protocol-check", {
-    urgent: true,
-  });
+  for (const node of nodes)
+    pushAgentRefresh(Number(node.hostId), "full-chain-protocol-check", {
+      urgent: true,
+    });
 }
 
 export async function applyFullChainRuntimeStatus(
@@ -343,34 +335,24 @@ export async function applyFullChainRuntimeStatus(
     [statusColumn]: "available",
     [messageColumn]: detail,
   });
-  const index = nodes.findIndex((item: any) => Number(item.id) === nodeId);
-  const next = nodes[index + 1];
-  if (next) {
-    await db.updateFullChainNode(Number(next.id), {
-      [statusColumn]: "checking",
-      [messageColumn]: phase === "port" ? "端口检查中" : "协议检查中",
-    });
-    pushAgentRefresh(Number(next.hostId), `full-chain-${phase}-check`, {
-      urgent: true,
-    });
-  } else if (phase === "port") {
-    const chain = (await db.getFullChainById(chainId)) as any;
-    await db.updateFullChain(
-      chainId,
-      String(chain?.protocol) === "tcp"
-        ? {
-            status: "ready-to-deploy",
-            statusMessage: "端口检查完毕，可以开始部署",
-          }
-        : {
-            status: "ports-ready",
-            statusMessage: "端口检查完毕，可以检查协议",
-          },
-    );
-  } else {
+  const fresh = await db.getFullChainNodes(chainId);
+  const chain = (await db.getFullChainById(chainId)) as any;
+  if (
+    phase === "port" &&
+    fresh.every((item: any) => item.portStatus === "available") &&
+    String(chain?.protocol) === "tcp"
+  ) {
     await db.updateFullChain(chainId, {
       status: "ready-to-deploy",
-      statusMessage: "检查完毕，可以开始部署",
+      statusMessage: "端口检查完成，可以创建链路",
+    });
+  } else if (
+    phase === "protocol" &&
+    fresh.every((item: any) => item.protocolStatus === "available")
+  ) {
+    await db.updateFullChain(chainId, {
+      status: "ready-to-deploy",
+      statusMessage: "链路检查完成，可以创建链路",
     });
   }
   return true;
@@ -478,7 +460,7 @@ const fullChainWatchdog = setInterval(() => {
   void (async () => {
     for (const chain of await db.listFullChains()) {
       if (
-        !["checking-port", "checking-protocol", "deploying"].includes(
+        !["checking-link", "checking-port", "checking-protocol", "deploying"].includes(
           String((chain as any).status),
         )
       )
