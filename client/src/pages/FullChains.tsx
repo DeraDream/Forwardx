@@ -249,6 +249,8 @@ function ChainNodes({
                     <Loader2 className="inline h-3 w-3 animate-spin" />
                     检测中…
                   </span>
+                ) : node.latencyStatus === "error" ? (
+                  "检测失败"
                 ) : (
                   "待检测"
                 )}
@@ -303,12 +305,23 @@ function CreateDialog({
   const active = chains.find((item: any) => item.id === id);
   const locked = !!active && busy.has(active.status);
   const last = hosts.get(nodes.at(-1)?.hostId || 0);
+  const discardCheckedDraft = () => {
+    const draftId = createdDraft.current;
+    if (!draftId) return;
+    createdDraft.current = undefined;
+    setId(undefined);
+    void remove
+      .mutateAsync({ id: draftId })
+      .then(() => utils.fullChains.list.invalidate());
+  };
+  const changePort = (value: string) => {
+    if (value !== port) discardCheckedDraft();
+    setPort(value);
+    setPortCheck(null);
+  };
   const randomPort = async () => {
     const result = (await random.refetch()).data;
-    if (result) {
-      setPort(String(result.port));
-      setPortCheck(null);
-    }
+    if (result) changePort(String(result.port));
   };
   const randomPassword = async () => {
     const result = (await random.refetch()).data;
@@ -443,75 +456,11 @@ function CreateDialog({
       if (kind === "port") await check.mutateAsync({ id: chainId });
       if (kind === "latency") await checkLatency.mutateAsync({ id: chainId });
       if (kind === "deploy") await deploy.mutateAsync({ id: chainId });
+      await utils.fullChains.list.invalidate();
     } catch (error: any) {
       toast.error(error.message);
     }
   };
-  useEffect(() => {
-    if (!open) return;
-    if (active) {
-      const node = active.nodes?.[0];
-      if (node?.portStatus === "available")
-        setPortCheck({ available: true, message: "端口可用" });
-      else if (node?.portStatus === "error")
-        setPortCheck({
-          available: false,
-          message: node.portMessage || "端口不可用",
-        });
-      else if (node?.portStatus === "checking")
-        setPortCheck({ available: null, message: "检测中" });
-      return;
-    }
-    if (!active) {
-      setPortCheck(null);
-      return;
-    }
-    const timer = window.setTimeout(
-      () =>
-        void (async () => {
-          setPortCheck({ available: null, message: "检测中" });
-          try {
-            const result = await utils.landing.checkPort.fetch({
-              hostId: last?.id || 0,
-              port: Number(port),
-            });
-            if (result.complete) {
-              setPortCheck({
-                available: result.available,
-                message:
-                  result.message || (result.available ? "可用" : "不可用"),
-              });
-              return;
-            }
-            for (let i = 0; i < 20; i++) {
-              await new Promise((resolve) => window.setTimeout(resolve, 500));
-              const next = await utils.landing.portCheckStatus.fetch({
-                checkId: result.checkId!,
-              });
-              if (next.complete) {
-                setPortCheck({
-                  available: next.available,
-                  message: next.message || (next.available ? "可用" : "不可用"),
-                });
-                return;
-              }
-            }
-            setPortCheck({ available: false, message: "检测超时" });
-          } catch {
-            setPortCheck({ available: false, message: "检测失败" });
-          }
-        })(),
-      450,
-    );
-    return () => window.clearTimeout(timer);
-  }, [
-    open,
-    active,
-    last?.id,
-    port,
-    utils.landing.checkPort,
-    utils.landing.portCheckStatus,
-  ]);
   const configReady = valid && portCheck?.available !== false;
   const primary =
     active?.status === "ready-to-deploy"
@@ -582,7 +531,8 @@ function CreateDialog({
                             : "pr-16"
                       }
                       value={port}
-                      onChange={(e) => setPort(e.target.value)}
+                      disabled={locked || active?.status === "running"}
+                      onChange={(e) => changePort(e.target.value)}
                     />
                     {portCheck && (
                       <span
@@ -595,6 +545,7 @@ function CreateDialog({
                   <Button
                     size="icon"
                     variant="outline"
+                    disabled={locked || active?.status === "running"}
                     onClick={() => void randomPort()}
                   >
                     <Shuffle className="h-4 w-4" />
@@ -723,7 +674,7 @@ function CreateDialog({
                 hosts={hosts}
                 setNodes={setNodes}
                 disabled={!!active || locked}
-                runtime={!!active}
+                runtime
                 fixedLast
                 protocol={active?.protocol || protocol}
               />
