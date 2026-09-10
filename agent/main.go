@@ -37,7 +37,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.206"
+var Version = "2.2.207"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -13990,7 +13990,7 @@ func runShellWithOutput(cmd string) (bool, string) {
 	if elapsed >= actionShellSlowThreshold {
 		logf("exec slow duration=%s temp=%v retriedTemp=%v outputBytes=%d %s", elapsed.Round(time.Millisecond), viaTemp, retriedViaTemp, len(out), shellCommandLogSummary(cmd))
 	}
-	return true, ""
+	return true, compactLogOutput(string(out))
 }
 
 func runShellQuiet(cmd string) bool {

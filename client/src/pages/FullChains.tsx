@@ -454,7 +454,11 @@ function CreateDialog({
       if (!chainId) return;
       if (kind === "port") await check.mutateAsync({ id: chainId });
       if (kind === "latency") await checkLatency.mutateAsync({ id: chainId });
-      if (kind === "deploy") await deploy.mutateAsync({ id: chainId });
+      if (kind === "deploy") {
+        await deploy.mutateAsync({ id: chainId });
+        createdDraft.current = undefined;
+        closeDialog();
+      }
       await utils.fullChains.list.invalidate();
     } catch (error: any) {
       toast.error(error.message);
