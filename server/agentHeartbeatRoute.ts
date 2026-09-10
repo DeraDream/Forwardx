@@ -1910,7 +1910,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         const targetIp = String(target?.ingressIp || target?.publicIp || "").trim();
         if (targetIp) actions.push({ op: "apply", statusType: "runtime", forwardType: `full-chain-latency-${chainId}-${nodeId}`,
           sourcePort: port, targetIp, targetPort: port, reportStatus: true, forceRuntimeSync: true, captureOutput: true,
-          commands: [`ping -n -c 1 -W 3 ${shQuote(targetIp)} 2>/dev/null | awk -F'time=' '/time=/{split($2,a," "); print "latency_ms=" a[1]; exit}' | grep -q '^latency_ms='`], });
+          commands: [`ping -n -c 1 -W 3 ${shQuote(targetIp)} 2>/dev/null | awk '/time[=<]/{sub(/.*time[=<]/, ""); split($0,a," "); print "latency_ms=" a[1]; found=1; exit} END {if (!found) exit 1}'`], });
       }
       if (task.firewallStatus === "checking" || task.firewallStatus === "removing") {
         const nodes = await getFullChainNodes(chainId);

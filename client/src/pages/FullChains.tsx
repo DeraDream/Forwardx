@@ -413,8 +413,7 @@ function CreateDialog({
             if (result.complete) {
               setPortCheck({
                 available: result.available,
-                message:
-                  result.message || (result.available ? "可用" : "不可用"),
+                message: result.available ? "端口可用" : "端口不可用",
               });
               return;
             }
@@ -426,14 +425,14 @@ function CreateDialog({
               if (next.complete) {
                 setPortCheck({
                   available: next.available,
-                  message: next.message || (next.available ? "可用" : "不可用"),
+                  message: next.available ? "端口可用" : "端口不可用",
                 });
                 return;
               }
             }
-            setPortCheck({ available: false, message: "检测超时" });
+            setPortCheck({ available: false, message: "端口不可用" });
           } catch {
-            setPortCheck({ available: false, message: "检测失败" });
+            setPortCheck({ available: false, message: "端口不可用" });
           }
         })(),
       450,
