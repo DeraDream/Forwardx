@@ -39,6 +39,12 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
+import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { LatencyStabilityStats } from "@/components/LatencyStabilityStats";
+import { LatencyPeakCutToggle } from "@/components/LatencyPeakCutToggle";
+import { DEFAULT_LATENCY_TIME_RANGE_HOURS, filterLatencySeriesByTimeRange, latencyTimeRangeLabel, LatencyTimeRangeSelect, type LatencyTimeRangeHours } from "@/components/LatencyTimeRangeSelect";
+import { Skeleton } from "@/components/ui/skeleton";
+import { applyLatencyPeakCut, clipLatencyForChart, getLatencyStabilityStats, getLatencyYAxisMax, getLatencyYAxisTicks } from "@/lib/latencyChart";
 
 type Host = { id: number; name: string; ip: string; isLanding: boolean };
 type Node = { hostId: number; ingressIp: string };
@@ -266,14 +272,25 @@ function ChainNodes({
   );
 }
 
-function FullChainLatencyHistory({ chainId }: { chainId: number | null }) {
-  const { data = [], isLoading } = trpc.fullChains.latencySeries.useQuery({ id: Number(chainId || 0), hours: 72 }, { enabled: !!chainId });
-  if (isLoading) return <div className="py-8 text-center text-sm text-muted-foreground">加载中...</div>;
-  if (!data.length) return <div className="py-8 text-center text-sm text-muted-foreground">暂无全链路延迟记录</div>;
-  return <div className="space-y-3">{data.slice().reverse().map((record: any) => {
-    const details = (() => { try { return JSON.parse(record.details || "[]"); } catch { return []; } })();
-    return <Card key={record.id}><CardContent className="space-y-2 p-3 text-sm"><div className="flex justify-between"><span>{new Date(record.recordedAt).toLocaleString()}</span><span className={record.isTimeout ? "text-destructive" : "text-emerald-600"}>{record.isTimeout ? "探测失败" : `${record.latencyMs} ms`}</span></div><div className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground">{details.map((item: any, index: number) => <span key={item.hostId}>{index > 0 && " → "}{item.name || `主机 #${item.hostId}`}{index < details.length - 1 && ` (${item.isTimeout ? "失败" : `${item.latencyMs} ms`})`}</span>)}</div></CardContent></Card>;
-  })}</div>;
+type FullChainLatencyPoint = { label: string; fullLabel: string; latency: number; latencyMs: number; chartLatency: number; isTimeout: boolean };
+
+function FullChainLatencyHistory({ chainId, chainName, open, onOpenChange }: { chainId: number | null; chainName: string; open: boolean; onOpenChange: (open: boolean) => void }) {
+  const [timeRangeHours, setTimeRangeHours] = useState<LatencyTimeRangeHours>(DEFAULT_LATENCY_TIME_RANGE_HOURS);
+  const [peakCutEnabled, setPeakCutEnabled] = useState(false);
+  const { data = [], isLoading } = trpc.fullChains.latencySeries.useQuery({ id: Number(chainId || 0), hours: 72 }, { enabled: open && !!chainId, refetchInterval: open ? 10_000 : false });
+  const ranged = useMemo(() => filterLatencySeriesByTimeRange((data as any[]).map((item) => ({ ...item, recordedAt: new Date(Number(item.recordedAt) < 1_000_000_000_000 ? Number(item.recordedAt) * 1000 : item.recordedAt).toISOString() })), timeRangeHours), [data, timeRangeHours]);
+  const chart = useMemo<FullChainLatencyPoint[]>(() => {
+    const raw = ranged.map((item: any) => {
+      const date = new Date(item.recordedAt);
+      const latencyMs = item.isTimeout ? 0 : Number(item.latencyMs || 0);
+      return { label: `${String(date.getMonth() + 1).padStart(2, "0")}/${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`, fullLabel: date.toLocaleString(), latency: latencyMs, latencyMs, chartLatency: item.isTimeout ? 0 : clipLatencyForChart(latencyMs), isTimeout: !!item.isTimeout };
+    });
+    return peakCutEnabled ? applyLatencyPeakCut(raw, [{ dataKey: "latencyMs", timeoutKey: "isTimeout" }, { dataKey: "chartLatency", timeoutKey: "isTimeout" }]) as FullChainLatencyPoint[] : raw;
+  }, [peakCutEnabled, ranged]);
+  const yMax = useMemo(() => getLatencyYAxisMax(Math.max(0, ...chart.map((item) => item.chartLatency)), 120), [chart]);
+  const stats = useMemo(() => getLatencyStabilityStats(chart), [chart]);
+
+  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="flex max-h-[96svh] w-[calc(100vw-0.75rem)] max-w-[95vw] flex-col gap-3 overflow-hidden p-3 sm:max-w-3xl sm:p-6"><DialogHeader><div className="flex flex-col gap-2 pr-9 sm:flex-row sm:items-start sm:justify-between sm:pr-10"><div className="min-w-0"><DialogTitle className="truncate text-base sm:text-lg">全链路延迟（TCPing）- {chainName}</DialogTitle><DialogDescription>逐跳探测累计延迟 · 最近 {latencyTimeRangeLabel(timeRangeHours)}</DialogDescription></div><div className="flex flex-wrap items-center gap-2 self-start"><LatencyTimeRangeSelect value={timeRangeHours} onChange={setTimeRangeHours} /><LatencyPeakCutToggle id={`full-chain-peak-cut-${chainId || "current"}`} checked={peakCutEnabled} onCheckedChange={setPeakCutEnabled} /></div></div></DialogHeader><div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain pr-1"><div className="h-[42svh] min-h-[220px] w-full sm:h-72">{isLoading ? <Skeleton className="h-full w-full" /> : chart.length === 0 ? <div className="flex h-full items-center justify-center text-sm text-muted-foreground">暂无全链路延迟记录</div> : <ResponsiveContainer width="100%" height="100%"><AreaChart data={chart} margin={{ top: 8, right: 10, left: -8, bottom: 0 }}><defs><linearGradient id="fullChainTcpingGradient" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="var(--color-chart-2)" stopOpacity={0.3} /><stop offset="95%" stopColor="var(--color-chart-2)" stopOpacity={0.02} /></linearGradient></defs><CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" /><XAxis dataKey="label" tick={{ fontSize: 9 }} minTickGap={48} interval="preserveStartEnd" /><YAxis tick={{ fontSize: 9 }} tickFormatter={(value) => `${value}ms`} width={44} domain={[0, yMax]} ticks={getLatencyYAxisTicks(yMax)} allowDecimals={false} /><Tooltip cursor={{ stroke: "var(--color-muted-foreground)", strokeDasharray: "3 3" }} wrapperStyle={{ pointerEvents: "none" }} content={({ active, payload }: any) => active && payload?.length ? <div className="pointer-events-none rounded-lg border border-border bg-card px-3 py-2 shadow-md"><p className="mb-1 text-xs text-muted-foreground">{payload[0].payload.fullLabel}</p><p className={payload[0].payload.isTimeout ? "text-sm font-semibold text-destructive" : "text-sm font-semibold tabular-nums text-emerald-600"}>{payload[0].payload.isTimeout ? "超时" : `${payload[0].payload.latencyMs} ms`}</p></div> : null} /><Area type="monotone" dataKey="chartLatency" stroke="var(--color-chart-2)" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" fill="url(#fullChainTcpingGradient)" dot={false} activeDot={{ r: 4 }} isAnimationActive={open} animationDuration={500} /></AreaChart></ResponsiveContainer>}</div><LatencyStabilityStats stats={stats} /></div></DialogContent></Dialog>;
 }
 
 function CreateDialog({
@@ -806,9 +823,7 @@ export default function FullChainsPage() {
         <Dialog open={latencyChainId !== null} onOpenChange={(next) => !next && setLatencyChainId(null)}>
           <DialogContent className="max-w-2xl"><DialogHeader><DialogTitle>全链路延迟探测</DialogTitle><DialogDescription>逐跳探测入口到出口；总延迟为全部跳数累计。</DialogDescription></DialogHeader>{data.filter((chain: any) => Number(chain.id) === latencyChainId).map((chain: any) => <div key={chain.id} className="space-y-4"><ChainNodes nodes={chain.nodes || []} hosts={new Map()} runtime /><div className="flex items-center justify-between border-t pt-3 text-sm"><span>入口到出口总延迟</span><span>{chain.latestLatencyMs ? `${chain.latestLatencyMs} ms` : "待检测"}</span></div><DialogFooter><Button disabled={checkLatency.isPending} onClick={() => checkLatency.mutate({ id: chain.id })}>{checkLatency.isPending ? "探测中..." : "链路测试"}</Button></DialogFooter></div>)}</DialogContent>
         </Dialog>
-        <Dialog open={historyChainId !== null} onOpenChange={(next) => !next && setHistoryChainId(null)}>
-          <DialogContent className="max-h-[80vh] max-w-2xl overflow-y-auto"><DialogHeader><DialogTitle>全链路延迟记录</DialogTitle><DialogDescription>记录入口到出口的全部跳数累计延迟。</DialogDescription></DialogHeader><FullChainLatencyHistory chainId={historyChainId} /></DialogContent>
-        </Dialog>
+        <FullChainLatencyHistory chainId={historyChainId} chainName={data.find((chain: any) => Number(chain.id) === historyChainId)?.name || ""} open={historyChainId !== null} onOpenChange={(next) => !next && setHistoryChainId(null)} />
       </div>
     </DashboardLayout>
   );
