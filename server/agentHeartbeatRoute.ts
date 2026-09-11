@@ -1907,10 +1907,10 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         const nodes = await getFullChainNodes(chainId);
         const index = nodes.findIndex((node: any) => Number(node.id) === nodeId);
         const target = nodes[index + 1] as any;
-        const targetIp = String(target?.ingressIp || target?.publicIp || "").trim();
+        const targetIp = String(target?.publicIp || "").trim();
         if (targetIp) actions.push({ op: "apply", statusType: "runtime", forwardType: `full-chain-latency-${chainId}-${nodeId}`,
           sourcePort: port, targetIp, targetPort: port, reportStatus: true, forceRuntimeSync: true, captureOutput: true,
-          commands: [`started=$(date +%s%3N); output=$(FULL_CHAIN_TARGET=${shQuote(targetIp)} FULL_CHAIN_PORT=${port} timeout 4 bash -c '>/dev/tcp/$FULL_CHAIN_TARGET/$FULL_CHAIN_PORT' 2>&1); result_status=$?; ended=$(date +%s%3N); if [ "$result_status" -eq 0 ] || printf '%s' "$output" | grep -qi 'connection refused'; then latency=$((ended-started)); [ "$latency" -gt 0 ] || latency=1; echo "latency_ms=$latency"; exit 0; fi; for wait in '-W 3' '-w 3'; do ping -n -c 1 $wait ${shQuote(targetIp)} 2>/dev/null | awk '/time[=<]/{sub(/.*time[=<]/, ""); split($0,a," "); print "latency_ms=" a[1]; found=1; exit} END {if (!found) exit 1}' && exit 0; done; exit 1`], });
+          commands: [`for wait in '-W 3' '-w 3'; do ping -n -c 1 $wait ${shQuote(targetIp)} 2>/dev/null | awk '/time[=<]/{sub(/.*time[=<]/, ""); split($0,a," "); print "latency_ms=" a[1]; found=1; exit} END {if (!found) exit 1}' && exit 0; done; started=$(date +%s%3N); output=$(FULL_CHAIN_TARGET=${shQuote(targetIp)} FULL_CHAIN_PORT=${port} timeout 4 bash -c '>/dev/tcp/$FULL_CHAIN_TARGET/$FULL_CHAIN_PORT' 2>&1); result_status=$?; ended=$(date +%s%3N); if [ "$result_status" -eq 0 ] || printf '%s' "$output" | grep -qi 'connection refused'; then latency=$((ended-started)); [ "$latency" -gt 0 ] || latency=1; echo "latency_ms=$latency"; exit 0; fi; exit 1`], });
       }
       if (task.firewallStatus === "checking" || task.firewallStatus === "removing") {
         const nodes = await getFullChainNodes(chainId);
