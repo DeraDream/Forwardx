@@ -722,17 +722,12 @@ function CreateDialog({
 
 export default function FullChainsPage() {
   const [open, setOpen] = useState(false);
-  const [managingChain, setManagingChain] = useState<any>(null);
   const confirmDialog = useConfirmDialog();
   const utils = trpc.useUtils();
   const chains = trpc.fullChains.list.useQuery(undefined, {
     refetchInterval: 1500,
   });
   const services = trpc.landing.list.useQuery(undefined, { refetchInterval: 5000 });
-  const checkLatency = trpc.fullChains.checkLatency.useMutation({
-    onSuccess: () => void utils.fullChains.list.invalidate(),
-    onError: (error) => toast.error(error.message),
-  });
   const remove = trpc.fullChains.remove.useMutation({
     onSuccess: () => void utils.fullChains.list.invalidate(),
     onError: (error) => toast.error(error.message),
@@ -757,6 +752,11 @@ export default function FullChainsPage() {
             新建全链路
           </Button>
         </div>
+        <LandingManagement
+          viewMode="compact"
+          serviceIds={data.map((chain: any) => Number(chain.landingServiceId)).filter(Boolean)}
+          showServices={false}
+        />
         {data.length ? (
           <div className="grid gap-4 lg:grid-cols-2">
             {data.map((chain: any) => {
@@ -764,36 +764,7 @@ export default function FullChainsPage() {
               const removeChain = async () => {
                 if (await confirmDialog({ title: "删除全链路", description: <>确定删除“{chain.name}”吗？会停止链路和末端 SS 并清理对应端口。</>, confirmText: "删除", tone: "destructive" })) remove.mutate({ id: chain.id });
               };
-              return <Card key={chain.id}>
-                <CardContent className="space-y-3 p-4">
-                  <div className="flex justify-between">
-                    <div>
-                      <div className="font-semibold">{chain.name}</div>
-                      <div className="text-xs text-muted-foreground">
-                        {chain.protocol === "both" ? "TCP + UDP" : "TCP"} · :
-                        {chain.port}
-                      </div>
-                    </div>
-                    <span className="text-sm text-muted-foreground">
-                      {chain.statusMessage}
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2 rounded-md border bg-muted/30 p-2 text-xs">
-                    <div><span className="text-muted-foreground">链路总延迟：</span>{chain.latestLatencyMs ? `${chain.latestLatencyMs} ms` : "待检测"}</div>
-                    <div className="truncate"><span className="text-muted-foreground">末端 SS：</span>{service ? `${service.endpoint || service.host?.ip || "-"}:${service.port}` : "部署信息加载中"}</div>
-                  </div>
-                  <ChainNodes
-                    nodes={chain.nodes || []}
-                    hosts={new Map()}
-                    runtime
-                  />
-                  <div className="flex flex-wrap justify-end gap-2 border-t pt-3">
-                    <Button size="sm" variant="outline" disabled={checkLatency.isPending} onClick={() => checkLatency.mutate({ id: chain.id })}>检查链路延迟</Button>
-                    <Button size="sm" variant="outline" disabled={!service} onClick={() => setManagingChain(chain)}>管理 SS / 延迟记录</Button>
-                    <Button size="sm" variant="destructive" disabled={remove.isPending} onClick={() => void removeChain()}>删除链路</Button>
-                  </div>
-                </CardContent>
-              </Card>
+              return service ? <LandingManagement key={chain.id} viewMode="compact" serviceId={Number(chain.landingServiceId)} showTraffic={false} onRemove={() => void removeChain()} /> : <Card key={chain.id}><CardContent className="p-4 text-sm text-muted-foreground">{chain.name}：部署信息加载中</CardContent></Card>;
             })}
           </div>
         ) : (
@@ -815,12 +786,6 @@ export default function FullChainsPage() {
           close={() => setOpen(false)}
           chains={chains.data || []}
         />
-        <Dialog open={!!managingChain} onOpenChange={(next) => !next && setManagingChain(null)}>
-          <DialogContent className="max-h-[92vh] max-w-4xl overflow-y-auto">
-            <DialogHeader><DialogTitle>{managingChain?.name} · 末端 SS</DialogTitle><DialogDescription>可编辑 SS、复制链接、执行延迟探测、查看延迟记录或删除 SS。</DialogDescription></DialogHeader>
-            {managingChain && <LandingManagement viewMode="compact" serviceId={Number(managingChain.landingServiceId)} />}
-          </DialogContent>
-        </Dialog>
       </div>
     </DashboardLayout>
   );
