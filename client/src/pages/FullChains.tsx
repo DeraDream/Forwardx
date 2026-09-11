@@ -500,7 +500,7 @@ function CreateDialog({
   const ensureDraft = async () => id || save();
   const run = async (kind: "port" | "latency" | "deploy") => {
     try {
-      const chainId = kind === "deploy" ? id : await ensureDraft();
+      const chainId = kind === "deploy" ? id : kind === "latency" && editingChain && !id ? Number(editingChain.id) : await ensureDraft();
       if (!chainId) return;
       if (kind === "port") await check.mutateAsync({ id: chainId });
       if (kind === "latency") await checkLatency.mutateAsync({ id: chainId });
@@ -703,7 +703,7 @@ function CreateDialog({
                   {checkLatency.isPending && (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   )}
-                  检查延迟
+                  {editingChain ? "测试当前链路" : "检查延迟"}
                 </Button>
                 <Select value="" onValueChange={add}>
                   <SelectTrigger className="h-8 w-52">
