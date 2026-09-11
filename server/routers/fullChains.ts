@@ -25,6 +25,10 @@ const createInput = z.object({
 
 export const fullChainsRouter = router({
   list: protectedProcedure.query(({ ctx }) => db.listFullChains(ownerId(ctx.user))),
+  latencySeries: protectedProcedure.input(z.object({ id: z.number().int().positive(), hours: z.number().int().min(1).max(168).default(72) })).query(async ({ input, ctx }) => {
+    await requireChain(ctx.user, input.id);
+    return db.getFullChainLatencySeries(input.id, input.hours);
+  }),
   hosts: protectedProcedure.query(async ({ ctx }) => {
     const hosts = await db.getHosts(ownerId(ctx.user));
     const markers = await db.getLandingHosts(ownerId(ctx.user));

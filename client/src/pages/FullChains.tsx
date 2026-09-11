@@ -266,6 +266,16 @@ function ChainNodes({
   );
 }
 
+function FullChainLatencyHistory({ chainId }: { chainId: number | null }) {
+  const { data = [], isLoading } = trpc.fullChains.latencySeries.useQuery({ id: Number(chainId || 0), hours: 72 }, { enabled: !!chainId });
+  if (isLoading) return <div className="py-8 text-center text-sm text-muted-foreground">加载中...</div>;
+  if (!data.length) return <div className="py-8 text-center text-sm text-muted-foreground">暂无全链路延迟记录</div>;
+  return <div className="space-y-3">{data.slice().reverse().map((record: any) => {
+    const details = (() => { try { return JSON.parse(record.details || "[]"); } catch { return []; } })();
+    return <Card key={record.id}><CardContent className="space-y-2 p-3 text-sm"><div className="flex justify-between"><span>{new Date(record.recordedAt).toLocaleString()}</span><span className={record.isTimeout ? "text-destructive" : "text-emerald-600"}>{record.isTimeout ? "探测失败" : `${record.latencyMs} ms`}</span></div><div className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground">{details.map((item: any, index: number) => <span key={item.hostId}>{index > 0 && " → "}{item.name || `主机 #${item.hostId}`}{index < details.length - 1 && ` (${item.isTimeout ? "失败" : `${item.latencyMs} ms`})`}</span>)}</div></CardContent></Card>;
+  })}</div>;
+}
+
 function CreateDialog({
   open,
   close,
@@ -357,6 +367,7 @@ function CreateDialog({
   const valid =
     nodes.length >= 2 &&
     !!last?.isLanding &&
+    !!name.trim() &&
     Number(port) >= 1 &&
     Number(port) <= 65535 &&
     password.length >= 8;
@@ -364,7 +375,7 @@ function CreateDialog({
     if (!valid)
       throw new Error("至少两台机器，末端必须是落地机，并填写有效端口和密码");
     const result = await create.mutateAsync({
-      name: name.trim() || `全链路-${port}`,
+      name: name.trim(),
       port: Number(port),
       protocol: protocol as "tcp" | "both",
       ssProtocol: type as "ss" | "ss2022",
@@ -722,6 +733,8 @@ function CreateDialog({
 
 export default function FullChainsPage() {
   const [open, setOpen] = useState(false);
+  const [latencyChainId, setLatencyChainId] = useState<number | null>(null);
+  const [historyChainId, setHistoryChainId] = useState<number | null>(null);
   const confirmDialog = useConfirmDialog();
   const utils = trpc.useUtils();
   const chains = trpc.fullChains.list.useQuery(undefined, {
@@ -729,6 +742,10 @@ export default function FullChainsPage() {
   });
   const services = trpc.landing.list.useQuery(undefined, { refetchInterval: 5000 });
   const remove = trpc.fullChains.remove.useMutation({
+    onSuccess: () => void utils.fullChains.list.invalidate(),
+    onError: (error) => toast.error(error.message),
+  });
+  const checkLatency = trpc.fullChains.checkLatency.useMutation({
     onSuccess: () => void utils.fullChains.list.invalidate(),
     onError: (error) => toast.error(error.message),
   });
@@ -764,7 +781,7 @@ export default function FullChainsPage() {
               const removeChain = async () => {
                 if (await confirmDialog({ title: "删除全链路", description: <>确定删除“{chain.name}”吗？会停止链路和末端 SS 并清理对应端口。</>, confirmText: "删除", tone: "destructive" })) remove.mutate({ id: chain.id });
               };
-              return service ? <LandingManagement key={chain.id} viewMode="compact" serviceId={Number(chain.landingServiceId)} showTraffic={false} onRemove={() => void removeChain()} /> : <Card key={chain.id}><CardContent className="p-4 text-sm text-muted-foreground">{chain.name}：部署信息加载中</CardContent></Card>;
+              return service ? <LandingManagement key={chain.id} viewMode="compact" serviceId={Number(chain.landingServiceId)} showTraffic={false} latencyMs={chain.latestLatencyMs} onLatencyHistory={() => setHistoryChainId(chain.id)} onLatencyProbe={() => setLatencyChainId(chain.id)} onRemove={() => void removeChain()} /> : <Card key={chain.id}><CardContent className="p-4 text-sm text-muted-foreground">{chain.name}：部署信息加载中</CardContent></Card>;
             })}
           </div>
         ) : (
@@ -786,6 +803,12 @@ export default function FullChainsPage() {
           close={() => setOpen(false)}
           chains={chains.data || []}
         />
+        <Dialog open={latencyChainId !== null} onOpenChange={(next) => !next && setLatencyChainId(null)}>
+          <DialogContent className="max-w-2xl"><DialogHeader><DialogTitle>全链路延迟探测</DialogTitle><DialogDescription>逐跳探测入口到出口；总延迟为全部跳数累计。</DialogDescription></DialogHeader>{data.filter((chain: any) => Number(chain.id) === latencyChainId).map((chain: any) => <div key={chain.id} className="space-y-4"><ChainNodes nodes={chain.nodes || []} hosts={new Map()} runtime /><div className="flex items-center justify-between border-t pt-3 text-sm"><span>入口到出口总延迟</span><span>{chain.latestLatencyMs ? `${chain.latestLatencyMs} ms` : "待检测"}</span></div><DialogFooter><Button disabled={checkLatency.isPending} onClick={() => checkLatency.mutate({ id: chain.id })}>{checkLatency.isPending ? "探测中..." : "链路测试"}</Button></DialogFooter></div>)}</DialogContent>
+        </Dialog>
+        <Dialog open={historyChainId !== null} onOpenChange={(next) => !next && setHistoryChainId(null)}>
+          <DialogContent className="max-h-[80vh] max-w-2xl overflow-y-auto"><DialogHeader><DialogTitle>全链路延迟记录</DialogTitle><DialogDescription>记录入口到出口的全部跳数累计延迟。</DialogDescription></DialogHeader><FullChainLatencyHistory chainId={historyChainId} /></DialogContent>
+        </Dialog>
       </div>
     </DashboardLayout>
   );

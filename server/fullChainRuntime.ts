@@ -67,7 +67,7 @@ async function beginDeploy(chainId: number) {
     const serviceId = await db.createLandingService({
       hostId: Number(next.hostId),
       userId: Number(chain.userId),
-      name: `${chain.name} · SS`,
+      name: chain.name,
       protocol: chain.ssProtocol,
       method: chain.method,
       password: chain.password,
@@ -262,23 +262,12 @@ export async function applyFullChainRuntimeStatus(
       latencyMs: latency > 0 ? Math.round(latency) : null,
     });
     const fresh = await db.getFullChainNodes(chainId);
-    if (
-      fresh
-        .slice(0, -1)
-        .every(
-          (item: any) =>
-            item.latencyStatus === "done" || item.latencyStatus === "error",
-        )
-    ) {
-      await db.updateFullChain(chainId, {
-        latestLatencyMs: fresh
-          .slice(0, -1)
-          .reduce(
-            (sum: number, item: any) =>
-              sum + Math.max(0, Number(item.latencyMs) || 0),
-            0,
-          ),
-      });
+    if (fresh.slice(0, -1).every((item: any) => item.latencyStatus !== "checking")) {
+      const latestLatencyMs = fresh.slice(0, -1).every((item: any) => item.latencyStatus === "done")
+          ? fresh.slice(0, -1).reduce((sum: number, item: any) => sum + Math.max(0, Number(item.latencyMs) || 0), 0)
+          : null;
+      await db.updateFullChain(chainId, { latestLatencyMs });
+      await db.recordFullChainLatency(chainId, latestLatencyMs, fresh.map((item: any, index: number) => ({ hostId: item.hostId, name: item.hostName, latencyMs: index < fresh.length - 1 ? item.latencyMs : null, isTimeout: index < fresh.length - 1 && item.latencyStatus !== "done" })));
     }
     return true;
   }

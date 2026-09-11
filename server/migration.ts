@@ -704,6 +704,7 @@ const IMPORT_TABLE_ORDER = [
   "forward_rules",
   "full_chains",
   "full_chain_nodes",
+  "full_chain_latency_stats",
   "forward_rule_tunnel_exits",
   "tunnel_hops",
   "agent_tokens",
@@ -717,6 +718,7 @@ const IMPORT_TABLE_ORDER = [
   "user_traffic_counters",
   "forward_rule_traffic_counters",
   "tunnel_latency_stats",
+  "full_chain_latency_stats",
   "forward_group_latency_stats",
   "traffic_stats",
   "traffic_stat_buckets",
@@ -1268,6 +1270,10 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
 
     case "tunnel_latency_stats":
       row.tunnelId = mapRequiredId(maps, "tunnels", source.tunnelId);
+      return { row };
+
+    case "full_chain_latency_stats":
+      row.chainId = mapRequiredId(maps, "full_chains", source.chainId);
       return { row };
 
     case "forward_group_latency_stats":

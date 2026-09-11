@@ -32,6 +32,7 @@ export const MIGRATION_TABLES = [
   "landing_service_latency_stats",
   "full_chains",
   "full_chain_nodes",
+  "full_chain_latency_stats",
   "host_groups",
   "host_group_members",
   "tunnels",
@@ -281,6 +282,7 @@ const tables: TableDef[] = [
     ],
     unique: [["chainId", "hostId"], ["chainId", "sortOrder"]], indexes: [["chainId", "sortOrder"], ["hostId"], ["generatedRuleId"]],
   },
+  { name: "full_chain_latency_stats", columns: [c("id", "id"), c("chainId", "int", { notNull: true }), c("latencyMs", "int"), c("isTimeout", "bool", { notNull: true, default: false }), c("details", "text"), c("recordedAt", "epoch", { notNull: true, default: "now" })], indexes: [["chainId", "recordedAt"], ["recordedAt"]] },
   {
     name: "host_group_members",
     columns: [

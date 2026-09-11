@@ -51,6 +51,14 @@ export async function updateFullChainNode(id: number, patch: Record<string, any>
   await executeRaw(`UPDATE ${q("full_chain_nodes")} SET ${keys.map((key) => `${q(key)} = ?`).join(", ")}, ${q("updatedAt")} = ? WHERE ${q("id")} = ?`, [...keys.map((key) => patch[key]), now(), id]);
 }
 
+export async function recordFullChainLatency(chainId: number, latencyMs: number | null, details: unknown) {
+  await insertAndGetId("full_chain_latency_stats", { chainId, latencyMs, isTimeout: latencyMs === null, details: JSON.stringify(details) });
+}
+
+export async function getFullChainLatencySeries(chainId: number, hours: number) {
+  return queryRaw<any>(`SELECT * FROM ${q("full_chain_latency_stats")} WHERE ${q("chainId")} = ? AND ${q("recordedAt")} >= ? ORDER BY ${q("recordedAt")} ASC`, [chainId, now() - hours * 3600]);
+}
+
 export async function getFullChainRuntimeTasks(hostId: number) {
   return queryRaw<any>(`SELECT n.*, c.${q("port")} AS ${q("chainPort")}, c.${q("protocol")} AS ${q("chainProtocol")}
     FROM ${q("full_chain_nodes")} n JOIN ${q("full_chains")} c ON c.${q("id")} = n.${q("chainId")}
