@@ -297,10 +297,12 @@ function CreateDialog({
   open,
   close,
   chains,
+  editingChain,
 }: {
   open: boolean;
   close: () => void;
   chains: any[];
+  editingChain?: any | null;
 }) {
   const utils = trpc.useUtils();
   const hostsQuery = trpc.fullChains.hosts.useQuery(undefined, {
@@ -308,6 +310,7 @@ function CreateDialog({
   });
   const random = trpc.fullChains.random.useQuery(undefined, { enabled: open });
   const create = trpc.fullChains.create.useMutation();
+  const replace = trpc.fullChains.replace.useMutation();
   const check = trpc.fullChains.check.useMutation();
   const checkLatency = trpc.fullChains.checkLatency.useMutation();
   const deploy = trpc.fullChains.deploy.useMutation();
@@ -323,6 +326,7 @@ function CreateDialog({
   const [landingHostId, setLandingHostId] = useState(0);
   const [portCheck, setPortCheck] = useState<PortCheck>(null);
   const createdDraft = useRef<number | undefined>(undefined);
+  const autoDeployId = useRef<number | undefined>(undefined);
   const remove = trpc.fullChains.remove.useMutation();
   const hosts = useMemo(
     () =>
@@ -388,10 +392,23 @@ function CreateDialog({
     Number(port) >= 1 &&
     Number(port) <= 65535 &&
     password.length >= 8;
+  useEffect(() => {
+    if (!open || !editingChain) return;
+    setName(String(editingChain.name || ""));
+    setPort(String(editingChain.port || ""));
+    setProtocol(String(editingChain.protocol || "both"));
+    setType(String(editingChain.ssProtocol || "ss"));
+    setMethod(String(editingChain.method || normal[1]));
+    setPassword(String(editingChain.password || ""));
+    const nextNodes = (editingChain.nodes || []).map((node: any) => ({ hostId: Number(node.hostId), ingressIp: String(node.ingressIp || "") }));
+    setNodes(nextNodes);
+    setEntryIp(String(nextNodes[0]?.ingressIp || ""));
+    setLandingHostId(Number(nextNodes.at(-1)?.hostId || 0));
+  }, [editingChain?.id, open]);
   const save = async () => {
     if (!valid)
       throw new Error("至少两台机器，末端必须是落地机，并填写有效端口和密码");
-    const result = await create.mutateAsync({
+    const input = {
       name: name.trim(),
       port: Number(port),
       protocol: protocol as "tcp" | "both",
@@ -400,7 +417,8 @@ function CreateDialog({
       password,
       allowPublicIntermediate: true,
       nodes,
-    });
+    };
+    const result = editingChain ? await replace.mutateAsync({ ...input, id: Number(editingChain.id) }) : await create.mutateAsync(input);
     setId(result.id);
     createdDraft.current = result.id;
     return result.id;
@@ -425,6 +443,7 @@ function CreateDialog({
   useEffect(() => {
     if (
       !open ||
+      editingChain ||
       active ||
       !last?.isLanding ||
       Number(port) < 1 ||
@@ -470,6 +489,7 @@ function CreateDialog({
     return () => window.clearTimeout(timer);
   }, [
     open,
+    editingChain,
     active,
     last?.id,
     last?.isLanding,
@@ -494,6 +514,11 @@ function CreateDialog({
       toast.error(error.message);
     }
   };
+  useEffect(() => {
+    if (!editingChain || !id || active?.status !== "ready-to-deploy" || autoDeployId.current === id) return;
+    autoDeployId.current = id;
+    void run("deploy");
+  }, [active?.status, editingChain, id]);
   const configReady = valid && portCheck?.available !== false;
   const primary =
     active?.status === "ready-to-deploy"
@@ -501,7 +526,7 @@ function CreateDialog({
       : active?.status === "running"
         ? "已创建"
         : !active || active.status === "draft" || active.status === "error"
-          ? "检查链路"
+          ? editingChain ? "保存并更新" : "检查链路"
           : active.statusMessage || "检查链路中";
   const primaryAction =
     active?.status === "ready-to-deploy"
@@ -514,7 +539,7 @@ function CreateDialog({
     >
       <DialogContent className="max-h-[92vh] max-w-3xl overflow-y-auto p-0">
         <DialogHeader className="border-b px-6 py-5">
-          <DialogTitle>新建全链路</DialogTitle>
+          <DialogTitle>{editingChain ? "编辑全链路" : "新建全链路"}</DialogTitle>
           <DialogDescription>
             先完成检查，再确认部署。入口在首位，末端为公网直连落地 SS。
           </DialogDescription>
@@ -726,7 +751,7 @@ function CreateDialog({
           <Button
             disabled={
               locked ||
-              create.isPending ||
+            create.isPending || replace.isPending ||
               check.isPending ||
               deploy.isPending ||
               !configReady ||
@@ -737,7 +762,7 @@ function CreateDialog({
             }
             onClick={() => void run(primaryAction)}
           >
-            {(create.isPending || check.isPending || deploy.isPending) && (
+            {(create.isPending || replace.isPending || check.isPending || deploy.isPending) && (
               <Loader2 className="h-4 w-4 animate-spin" />
             )}
             {primary}
@@ -750,6 +775,7 @@ function CreateDialog({
 
 export default function FullChainsPage() {
   const [open, setOpen] = useState(false);
+  const [editingChain, setEditingChain] = useState<any | null>(null);
   const [latencyChainId, setLatencyChainId] = useState<number | null>(null);
   const [historyChainId, setHistoryChainId] = useState<number | null>(null);
   const confirmDialog = useConfirmDialog();
@@ -781,7 +807,7 @@ export default function FullChainsPage() {
               独立部署多跳转发，末端自动生成公网直连 SS。
             </p>
           </div>
-          <Button onClick={() => setOpen(true)}>
+          <Button onClick={() => { setEditingChain(null); setOpen(true); }}>
             <Plus className="h-4 w-4" />
             新建全链路
           </Button>
@@ -798,7 +824,7 @@ export default function FullChainsPage() {
               const removeChain = async () => {
                 if (await confirmDialog({ title: "删除全链路", description: <>确定删除“{chain.name}”吗？会停止链路和末端 SS 并清理对应端口。</>, confirmText: "删除", tone: "destructive" })) remove.mutate({ id: chain.id });
               };
-              return service ? <LandingManagement key={chain.id} viewMode="compact" serviceId={Number(chain.landingServiceId)} showTraffic={false} latencyMs={chain.latestLatencyMs} onLatencyHistory={() => setHistoryChainId(chain.id)} onLatencyProbe={() => setLatencyChainId(chain.id)} onRemove={() => void removeChain()} /> : <Card key={chain.id}><CardContent className="p-4 text-sm text-muted-foreground">{chain.name}：部署信息加载中</CardContent></Card>;
+              return service ? <LandingManagement key={chain.id} viewMode="compact" serviceId={Number(chain.landingServiceId)} showTraffic={false} latencyMs={chain.latestLatencyMs} onEdit={() => { setEditingChain(chain); setOpen(true); }} onLatencyHistory={() => setHistoryChainId(chain.id)} onLatencyProbe={() => setLatencyChainId(chain.id)} onRemove={() => void removeChain()} /> : <Card key={chain.id}><CardContent className="p-4 text-sm text-muted-foreground">{chain.name}：部署信息加载中</CardContent></Card>;
             })}
           </div>
         ) : (
@@ -815,10 +841,11 @@ export default function FullChainsPage() {
           </Card>
         )}
         <CreateDialog
-          key={open ? "open" : "closed"}
+          key={open ? `open-${editingChain?.id || "new"}` : "closed"}
           open={open}
-          close={() => setOpen(false)}
+          close={() => { setOpen(false); setEditingChain(null); }}
           chains={chains.data || []}
+          editingChain={editingChain}
         />
         <Dialog open={latencyChainId !== null} onOpenChange={(next) => !next && setLatencyChainId(null)}>
           <DialogContent className="max-w-2xl"><DialogHeader><DialogTitle>全链路延迟探测</DialogTitle><DialogDescription>逐跳探测入口到出口；总延迟为全部跳数累计。</DialogDescription></DialogHeader>{data.filter((chain: any) => Number(chain.id) === latencyChainId).map((chain: any) => <div key={chain.id} className="space-y-4"><ChainNodes nodes={chain.nodes || []} hosts={new Map()} runtime /><div className="flex items-center justify-between border-t pt-3 text-sm"><span>入口到出口总延迟</span><span>{chain.latestLatencyMs ? `${chain.latestLatencyMs} ms` : "待检测"}</span></div><DialogFooter><Button disabled={checkLatency.isPending} onClick={() => checkLatency.mutate({ id: chain.id })}>{checkLatency.isPending ? "探测中..." : "链路测试"}</Button></DialogFooter></div>)}</DialogContent>

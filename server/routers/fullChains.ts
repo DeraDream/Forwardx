@@ -51,7 +51,6 @@ export const fullChainsRouter = router({
   replace: protectedProcedure.input(createInput.extend({ id: z.number().int().positive() })).mutation(async ({ input, ctx }) => {
     const old = await requireChain(ctx.user, input.id);
     if (["checking-link", "checking-port", "checking-protocol", "deploying"].includes(String(old.status))) throw new Error("原全链路正在执行，暂不能替换");
-    if (Number(input.port) === Number(old.port)) throw new Error("无损替换必须使用新端口；同端口无法同时保留旧监听和新监听");
     if (new Set(input.nodes.map((node) => node.hostId)).size !== input.nodes.length) throw new Error("同一台机器只能出现一次");
     if ((input.ssProtocol === "ss2022") !== input.method.startsWith("2022-")) throw new Error("SS 类型与加密方式不匹配");
     for (const node of input.nodes) {
@@ -59,8 +58,10 @@ export const fullChainsRouter = router({
       if (!host || (!isAdmin(ctx.user) && Number(host.userId) !== Number(ctx.user.id))) throw new Error("链路中包含无权使用的主机");
     }
     if (!await db.getLandingHostByHostId(input.nodes[input.nodes.length - 1].hostId)) throw new Error("末端 SS 必须选择已标记的落地机");
+    const samePort = Number(input.port) === Number(old.port);
+    if (samePort) await cancelFullChain(input.id);
     const id = await db.createFullChain({ ...input, userId: Number(ctx.user.id) });
-    await db.updateFullChain(id, { replacesChainId: input.id, statusMessage: `正在无损替换 #${input.id}` });
+    await db.updateFullChain(id, { replacesChainId: input.id, statusMessage: samePort ? `正在原端口更新 #${input.id}` : `正在无损替换 #${input.id}` });
     await startFullChain(id);
     return { id };
   }),
