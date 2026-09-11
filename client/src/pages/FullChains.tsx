@@ -788,6 +788,10 @@ export default function FullChainsPage() {
     onSuccess: () => void utils.fullChains.list.invalidate(),
     onError: (error) => toast.error(error.message),
   });
+  const restart = trpc.fullChains.start.useMutation({
+    onSuccess: () => void utils.fullChains.list.invalidate(),
+    onError: (error) => toast.error(error.message),
+  });
   const checkLatency = trpc.fullChains.checkLatency.useMutation({
     onSuccess: () => void utils.fullChains.list.invalidate(),
     onError: (error) => toast.error(error.message),
@@ -824,7 +828,7 @@ export default function FullChainsPage() {
               const removeChain = async () => {
                 if (await confirmDialog({ title: "删除全链路", description: <>确定删除“{chain.name}”吗？会停止链路和末端 SS 并清理对应端口。</>, confirmText: "删除", tone: "destructive" })) remove.mutate({ id: chain.id });
               };
-              return service ? <LandingManagement key={chain.id} viewMode="compact" serviceId={Number(chain.landingServiceId)} showTraffic={false} latencyMs={chain.latestLatencyMs} onEdit={() => { setEditingChain(chain); setOpen(true); }} onLatencyHistory={() => setHistoryChainId(chain.id)} onLatencyProbe={() => setLatencyChainId(chain.id)} onRemove={() => void removeChain()} /> : <Card key={chain.id}><CardContent className="p-4 text-sm text-muted-foreground">{chain.name}：部署信息加载中</CardContent></Card>;
+              return service ? <LandingManagement key={chain.id} viewMode="compact" serviceId={Number(chain.landingServiceId)} showTraffic={false} latencyMs={chain.latestLatencyMs} onEdit={() => { setEditingChain(chain); setOpen(true); }} onLatencyHistory={() => setHistoryChainId(chain.id)} onLatencyProbe={() => setLatencyChainId(chain.id)} onRemove={() => void removeChain()} /> : <Card key={chain.id}><CardContent className="flex items-center justify-between gap-3 p-4"><div className="text-sm text-muted-foreground">{chain.name} #{chain.id}：{chain.statusMessage || "部署信息加载中"}</div><div className="flex shrink-0 gap-2"><Button size="sm" variant="outline" disabled={restart.isPending || busy.has(String(chain.status))} onClick={() => restart.mutate({ id: Number(chain.id) })}>重新部署</Button><Button size="sm" variant="destructive" disabled={remove.isPending} onClick={() => void removeChain()}>删除</Button></div></CardContent></Card>;
             })}
           </div>
         ) : (
