@@ -127,6 +127,9 @@ export const fullChainsRouter = router({
     for (const node of nodes.slice(0, -1)) { await db.updateFullChainNode(Number(node.id), { latencyStatus: "checking", latencyMs: null }); pushAgentRefresh(Number(node.hostId), "full-chain-latency", { urgent: true }); }
     return { success: true };
   }),
+  resetTraffic: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ input, ctx }) => {
+    await requireChain(ctx.user, input.id); await db.resetFullChainTraffic(input.id); return { success: true };
+  }),
   remove: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ input, ctx }) => {
     await requireChain(ctx.user, input.id); await cancelFullChain(input.id); await db.deleteFullChain(input.id); return { success: true };
   }),

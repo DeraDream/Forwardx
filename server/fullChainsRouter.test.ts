@@ -42,6 +42,10 @@ test("panel can create only a unique chain ending at a marked landing host", () 
       await db.recordFullChainLatency(created.id, 7, []);
       const isolated = (await caller.list()).find((chain) => chain.id === created.id);
       assert.equal(isolated.traffic.bytesInTotal, 12, "全链路流量必须写入自己的统计表");
+      await caller.resetTraffic({ id: created.id });
+      const trafficReset = (await caller.list()).find((chain) => chain.id === created.id);
+      assert.equal(trafficReset.traffic.bytesInTotal, 0, "全链路流量重置必须只清除该链路自己的流量");
+      assert.equal((await caller.latencySeries({ id: created.id, hours: 24 })).length, 1, "流量重置不得清除全链路延迟历史");
       await landingCaller.resetTraffic({ id: landingServiceId });
       const reset = (await caller.list()).find((chain) => chain.id === created.id);
       assert.equal(reset.traffic.bytesInTotal, 0, "全链路卡片重置必须清除该链路流量历史");

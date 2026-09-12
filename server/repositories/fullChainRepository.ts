@@ -76,6 +76,11 @@ export async function resetFullChainHistoryForLandingService(serviceId: number) 
   return { chainIds: chains.map((chain) => Number(chain.id)) };
 }
 
+export async function resetFullChainTraffic(chainId: number) {
+  await executeRaw(`DELETE FROM ${q("full_chain_traffic_stats")} WHERE ${q("chainId")} = ?`, [chainId]);
+  await executeRaw(`DELETE FROM ${q("full_chain_traffic_counters")} WHERE ${q("chainId")} = ?`, [chainId]);
+}
+
 export async function updateFullChain(id: number, patch: Record<string, any>) {
   const keys = Object.keys(patch);
   if (!keys.length) return;

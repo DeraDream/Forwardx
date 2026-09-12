@@ -1,8 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import QRCode from "qrcode";
 import DashboardLayout from "@/components/DashboardLayout";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
+import { copyTextToClipboard } from "@/lib/clipboard";
 import {
   Dialog,
   DialogContent,
@@ -28,16 +32,21 @@ import {
 } from "@/components/SortableDragHandle";
 import {
   CheckCircle2,
+  Copy,
   ArrowDownToLine,
   ArrowUpFromLine,
   Activity,
+  ArrowRightLeft,
   Loader2,
   Plus,
   Pencil,
   RefreshCw,
+  RotateCcw,
+  QrCode,
   Route,
   Shuffle,
   Trash2,
+  Stethoscope,
   XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -67,6 +76,12 @@ function formatBytes(value: unknown) {
   const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   return `${(bytes / 1024 ** index).toFixed(index ? 2 : 0)} ${units[index]}`;
 }
+
+const base64Url = (value: string) => btoa(unescape(encodeURIComponent(value))).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "");
+const fullChainSsUri = (chain: any) => {
+  const endpoint = String(chain?.nodes?.at(-1)?.publicIp || "").trim();
+  return endpoint && chain?.password ? `ss://${base64Url(`${chain.method}:${chain.password}`)}@${endpoint}:${chain.port}#${encodeURIComponent(chain.name)}` : "";
+};
 
 function StatusBadge({ status, available, checking, unavailable, pending, message }: {
   status: string; available: string; checking: string; unavailable: string; pending?: string; message?: string;
@@ -349,6 +364,11 @@ function CreateDialog({
     [hostsQuery.data],
   );
   const active = chains.find((item: any) => item.id === id);
+  const currentChain = chains.find((item: any) => Number(item.id) === Number(id || editingChain?.id));
+  const displayNodes = useMemo(() => {
+    const runtimeNodes = (active?.nodes || (editingChain ? currentChain?.nodes : []) || []) as any[];
+    return nodes.map((node) => ({ ...runtimeNodes.find((item) => Number(item.hostId) === Number(node.hostId)), ...node }));
+  }, [active?.nodes, currentChain?.nodes, editingChain, nodes]);
   const locked = !!active && busy.has(active.status);
   const last = hosts.get(nodes.at(-1)?.hostId || 0);
   const discardCheckedDraft = () => {
@@ -523,7 +543,10 @@ function CreateDialog({
       const chainId = kind === "deploy" ? id : kind === "latency" && editingChain && !id ? Number(editingChain.id) : await ensureDraft();
       if (!chainId) return;
       if (kind === "port") await check.mutateAsync({ id: chainId });
-      if (kind === "latency") await checkLatency.mutateAsync({ id: chainId });
+      if (kind === "latency") {
+        await checkLatency.mutateAsync({ id: chainId });
+        toast.success("全链路延迟检测已下发");
+      }
       if (kind === "deploy") {
         deployStarted.current = true;
         await deploy.mutateAsync({ id: chainId });
@@ -741,7 +764,7 @@ function CreateDialog({
             </div>
             <div className="order-5 rounded-lg border p-2">
               <ChainNodes
-                nodes={active?.nodes || nodes}
+                nodes={displayNodes}
                 hosts={hosts}
                 setNodes={setNodes}
                 disabled={!!active || locked}
@@ -794,6 +817,8 @@ export default function FullChainsPage() {
   const [editingChain, setEditingChain] = useState<any | null>(null);
   const [latencyChainId, setLatencyChainId] = useState<number | null>(null);
   const [historyChainId, setHistoryChainId] = useState<number | null>(null);
+  const [qrChain, setQrChain] = useState<any | null>(null);
+  const [qrData, setQrData] = useState("");
   const confirmDialog = useConfirmDialog();
   const utils = trpc.useUtils();
   const chains = trpc.fullChains.list.useQuery(undefined, {
@@ -807,6 +832,9 @@ export default function FullChainsPage() {
     onSuccess: () => void utils.fullChains.list.invalidate(),
     onError: (error) => toast.error(error.message),
   });
+  const cancel = trpc.fullChains.cancel.useMutation({ onSuccess: () => void utils.fullChains.list.invalidate(), onError: (error) => toast.error(error.message) });
+  const retry = trpc.fullChains.retry.useMutation({ onSuccess: () => void utils.fullChains.list.invalidate(), onError: (error) => toast.error(error.message) });
+  const resetTraffic = trpc.fullChains.resetTraffic.useMutation({ onSuccess: () => { void utils.fullChains.list.invalidate(); toast.success("该全链路流量统计已清除"); }, onError: (error) => toast.error(error.message) });
   const data = (chains.data || []).filter((chain: any) =>
     ["deploying", "running", "cancelled", "error"].includes(
       String(chain.status),
@@ -820,6 +848,7 @@ export default function FullChainsPage() {
     bytesOutTotal: total.bytesOutTotal + Number(chain.traffic?.bytesOutTotal || 0),
     connectionsTotal: total.connectionsTotal + Number(chain.traffic?.connectionsTotal || 0),
   }), { bytesIn24h: 0, bytesOut24h: 0, connections24h: 0, bytesInTotal: 0, bytesOutTotal: 0, connectionsTotal: 0 });
+  useEffect(() => { if (!qrChain) return void setQrData(""); void QRCode.toDataURL(fullChainSsUri(qrChain), { width: 240, margin: 1 }).then(setQrData).catch(() => setQrData("")); }, [qrChain]);
   return (
     <DashboardLayout>
       <div className="mx-auto w-full max-w-7xl space-y-5 p-4 sm:p-6">
@@ -846,9 +875,18 @@ export default function FullChainsPage() {
               const removeChain = async () => {
                 if (await confirmDialog({ title: "删除全链路", description: <>确定删除“{chain.name}”吗？会停止链路和末端 SS 并清理对应端口。</>, confirmText: "删除", tone: "destructive" })) remove.mutate({ id: chain.id });
               };
+              const resetChainTraffic = async () => {
+                if (await confirmDialog({ title: "重置全链路流量", description: <>确认清除全链路“{chain.name}”的流量统计？不会影响落地 SS 或其他链路。</>, confirmText: "确认重置", tone: "destructive" })) resetTraffic.mutate({ id: chain.id });
+              };
               const endpoints = (chain.nodes || []).map((node: any) => node.hostName || node.publicIp || `主机 #${node.hostId}`).join(" · ");
               const chainTraffic = chain.traffic || {};
-              return <Card key={chain.id} className="action-card border-border/40 bg-card/60 backdrop-blur-md"><CardContent className="space-y-3 p-4"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="truncate font-medium">{chain.name}</div><p className="mt-1 truncate text-xs text-muted-foreground">{endpoints || "等待节点部署"}</p></div><span className={`rounded-md border px-2 py-1 text-xs ${chain.status === "running" ? "border-emerald-500/50 text-emerald-600" : chain.status === "error" ? "border-destructive/50 text-destructive" : "border-muted-foreground/30 text-muted-foreground"}`}>{chain.status === "running" ? "运行中" : chain.status === "error" ? "错误" : "部署中"}</span></div><div className="flex items-center justify-between rounded-md bg-muted/35 px-2.5 py-2 text-xs"><span>入口端口 {chain.port} · {String(chain.protocol || "both").toUpperCase()}</span><span>{chain.nodes?.length || 0} 跳</span></div><div className="grid grid-cols-2 gap-3 border-t border-border/40 pt-3 text-xs"><div><div className="mb-1 text-muted-foreground">24H 入向</div><div className="flex items-center gap-1 text-emerald-600"><ArrowDownToLine className="h-3 w-3" />{formatBytes(chainTraffic.bytesIn24h)}</div></div><div><div className="mb-1 text-muted-foreground">24H 出向</div><div className="flex items-center gap-1 text-amber-600"><ArrowUpFromLine className="h-3 w-3" />{formatBytes(chainTraffic.bytesOut24h)}</div></div><div><div className="mb-1 text-muted-foreground">累计流量</div><div>{formatBytes(Number(chainTraffic.bytesInTotal || 0) + Number(chainTraffic.bytesOutTotal || 0))}</div></div><div><div className="mb-1 text-muted-foreground">链路延迟</div><div>{chain.latestLatencyMs ? `${chain.latestLatencyMs} ms` : "未测试"}</div></div></div><div className="flex justify-end gap-1 border-t border-border/40 pt-2"><Button size="icon" variant="ghost" title="链路测试" onClick={() => setLatencyChainId(chain.id)}><Activity className="h-4 w-4" /></Button><Button size="icon" variant="ghost" title="延迟历史" onClick={() => setHistoryChainId(chain.id)}><RefreshCw className="h-4 w-4" /></Button><Button size="icon" variant="ghost" title="编辑" onClick={() => { setEditingChain(chain); setOpen(true); }}><Pencil className="h-4 w-4" /></Button><Button size="icon" variant="ghost" title="删除" className="text-destructive hover:text-destructive" onClick={() => void removeChain()}><Trash2 className="h-4 w-4" /></Button></div></CardContent></Card>;
+              const status = chain.status === "running" ? "运行中" : chain.status === "error" ? "错误" : chain.status === "cancelled" ? "已停用" : "部署中";
+              const dotClass = chain.status === "running" ? "bg-chart-2 shadow-sm shadow-chart-2/50 animate-pulse" : chain.status === "error" ? "bg-destructive/70 shadow-sm shadow-destructive/40" : "bg-amber-400 shadow-sm shadow-amber-400/50";
+              const entry = `${chain.nodes?.[0]?.ingressIp || chain.nodes?.[0]?.publicIp || "-"}:${chain.port}`;
+              const exitNode = chain.nodes?.at(-1);
+              const exit = `${exitNode?.publicIp || "-"}:${chain.port}`;
+              const pending = cancel.isPending || retry.isPending || resetTraffic.isPending || remove.isPending;
+              return <Card key={chain.id} className="action-card w-full border-border/40 bg-card/60 backdrop-blur-md"><CardContent className="action-card-content space-y-3 p-4"><div className="flex items-start justify-between gap-3"><div className="flex min-w-0 items-start gap-2"><span title={status} className={`mt-2 h-2.5 w-2.5 shrink-0 rounded-full ${dotClass}`} /><div className="min-w-0"><div className="truncate font-medium">{chain.name}</div><p className="mt-1 truncate text-xs text-muted-foreground">{endpoints || "等待节点部署"}</p></div></div><Switch checked={chain.isEnabled !== false} disabled={pending || chain.status === "deploying"} onCheckedChange={(isEnabled) => isEnabled ? retry.mutate({ id: chain.id }) : cancel.mutate({ id: chain.id })} aria-label={`${chain.name} 启用状态`} /></div><div className="min-w-0 space-y-1.5 font-mono text-xs"><div className="rounded-md border border-border/50 bg-background/55 px-2.5 py-2"><div className="mb-1 text-[10px] font-medium text-muted-foreground">入口</div><code className="block truncate rounded bg-muted/35 px-1.5 py-1 text-[11px]">{entry}</code></div><div className="flex justify-center"><span className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-border/50 bg-background text-muted-foreground shadow-sm"><ArrowDownToLine className="h-3 w-3" /></span></div><div className="rounded-md border border-border/50 bg-background/55 px-2.5 py-2"><div className="mb-1 text-[10px] font-medium text-muted-foreground">出口（公网）</div><code className="block truncate rounded bg-muted/35 px-1.5 py-1 text-[11px]">{exit}</code></div></div><div className="grid grid-cols-2 gap-3 text-xs"><div><div className="mb-1 text-muted-foreground">链路</div><Badge variant="outline" className="h-5 border-emerald-500/30 px-1.5 text-[10px] text-emerald-600">{chain.nodes?.length || 0} 跳转发 + SS</Badge></div><div><div className="mb-1 text-muted-foreground">协议</div><Badge variant="secondary" className="h-5 px-1.5 text-[10px]">{String(chain.protocol || "both").toUpperCase() === "BOTH" ? "TCP + UDP" : "TCP"}</Badge></div></div><div className="grid grid-cols-2 gap-x-3 gap-y-2 border-t border-border/40 pt-2 text-xs"><div><div className="mb-1 text-muted-foreground">24H 入向</div><div className="flex items-center gap-1 text-emerald-600"><ArrowDownToLine className="h-3 w-3" />{formatBytes(chainTraffic.bytesIn24h)}</div></div><div><div className="mb-1 text-muted-foreground">24H 出向</div><div className="flex items-center gap-1 text-amber-600"><ArrowUpFromLine className="h-3 w-3" />{formatBytes(chainTraffic.bytesOut24h)}</div></div><div><div className="mb-1 text-muted-foreground">累计流量</div><div className="flex items-center gap-1"><ArrowRightLeft className="h-3 w-3" />{formatBytes(Number(chainTraffic.bytesInTotal || 0) + Number(chainTraffic.bytesOutTotal || 0))}</div></div><div><div className="mb-1 text-muted-foreground">链路延迟</div><div>{chain.latestLatencyMs ? `${chain.latestLatencyMs} ms` : "未测试"}</div></div></div><div className="mt-auto flex justify-end border-t border-border/40 pt-2"><Button size="icon" variant="ghost" title="编辑" onClick={() => { setEditingChain(chain); setOpen(true); }}><Pencil className="h-4 w-4" /></Button><Button size="icon" variant="ghost" title="全链路延迟记录" onClick={() => setHistoryChainId(chain.id)}><Activity className="h-3.5 w-3.5" /></Button><Button size="icon" variant="ghost" title="全链路延迟探测" onClick={() => setLatencyChainId(chain.id)}><Stethoscope className="h-3.5 w-3.5" /></Button><Button size="icon" variant="ghost" title="复制全链路 SS 链接" onClick={() => void copyTextToClipboard(fullChainSsUri(chain)).then(() => toast.success("全链路 SS 链接已复制")).catch(() => toast.error("复制失败"))}><Copy className="h-4 w-4" /></Button><Button size="icon" variant="ghost" title="显示全链路 SS 二维码" onClick={() => setQrChain(chain)}><QrCode className="h-4 w-4" /></Button><Button size="icon" variant="ghost" title="重置全链路流量统计" disabled={pending} onClick={() => void resetChainTraffic()}><RotateCcw className="h-4 w-4" /></Button><Button size="icon" variant="ghost" title="删除" className="text-destructive" disabled={pending} onClick={() => void removeChain()}><Trash2 className="h-4 w-4" /></Button></div></CardContent></Card>;
             })}
           </div>
         ) : (
@@ -875,6 +913,7 @@ export default function FullChainsPage() {
           <DialogContent className="max-w-2xl"><DialogHeader><DialogTitle>全链路延迟探测</DialogTitle><DialogDescription>逐跳探测入口到出口；总延迟为全部跳数累计。</DialogDescription></DialogHeader>{data.filter((chain: any) => Number(chain.id) === latencyChainId).map((chain: any) => <div key={chain.id} className="space-y-4"><ChainNodes nodes={chain.nodes || []} hosts={new Map()} runtime /><div className="flex items-center justify-between border-t pt-3 text-sm"><span>入口到出口总延迟</span><span>{chain.latestLatencyMs ? `${chain.latestLatencyMs} ms` : "待检测"}</span></div><DialogFooter><Button disabled={checkLatency.isPending} onClick={() => checkLatency.mutate({ id: chain.id })}>{checkLatency.isPending ? "探测中..." : "链路测试"}</Button></DialogFooter></div>)}</DialogContent>
         </Dialog>
         <FullChainLatencyHistory chainId={historyChainId} chainName={data.find((chain: any) => Number(chain.id) === historyChainId)?.name || ""} open={historyChainId !== null} onOpenChange={(next) => !next && setHistoryChainId(null)} />
+        <Dialog open={!!qrChain} onOpenChange={(next) => !next && setQrChain(null)}><DialogContent className="max-w-sm"><DialogTitle>{qrChain?.name || "全链路"} SS 二维码</DialogTitle><DialogDescription>使用 Shadowsocks 客户端扫码添加。</DialogDescription><div className="flex justify-center py-3">{qrData ? <img className="h-60 w-60 rounded-md bg-white p-2" src={qrData} alt="全链路 SS 二维码" /> : <div className="grid h-60 w-60 place-items-center text-sm text-muted-foreground">二维码生成中…</div>}</div><DialogFooter><Button variant="outline" onClick={() => void copyTextToClipboard(fullChainSsUri(qrChain)).then(() => toast.success("全链路 SS 链接已复制")).catch(() => toast.error("复制失败"))}>复制 SS 链接</Button><Button onClick={() => setQrChain(null)}>关闭</Button></DialogFooter></DialogContent></Dialog>
       </div>
     </DashboardLayout>
   );
