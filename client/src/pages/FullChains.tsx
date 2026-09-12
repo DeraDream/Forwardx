@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
-import { LandingManagement } from "@/components/LandingManagement";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -29,8 +28,12 @@ import {
 } from "@/components/SortableDragHandle";
 import {
   CheckCircle2,
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  Activity,
   Loader2,
   Plus,
+  Pencil,
   RefreshCw,
   Route,
   Shuffle,
@@ -56,6 +59,14 @@ const ss2022 = [
   "2022-blake3-aes-256-gcm",
   "2022-blake3-chacha20-poly1305",
 ];
+
+function formatBytes(value: unknown) {
+  const bytes = Number(value || 0);
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  return `${(bytes / 1024 ** index).toFixed(index ? 2 : 0)} ${units[index]}`;
+}
 
 function StatusBadge({ status, available, checking, unavailable, pending, message }: {
   status: string; available: string; checking: string; unavailable: string; pending?: string; message?: string;
@@ -791,7 +802,6 @@ export default function FullChainsPage() {
   const chains = trpc.fullChains.list.useQuery(undefined, {
     refetchInterval: 1500,
   });
-  const services = trpc.landing.list.useQuery(undefined, { refetchInterval: 5000 });
   const remove = trpc.fullChains.remove.useMutation({
     onSuccess: () => void utils.fullChains.list.invalidate(),
     onError: (error) => toast.error(error.message),
@@ -805,6 +815,14 @@ export default function FullChainsPage() {
       String(chain.status),
     ),
   );
+  const traffic = data.reduce((total: any, chain: any) => ({
+    bytesIn24h: total.bytesIn24h + Number(chain.traffic?.bytesIn24h || 0),
+    bytesOut24h: total.bytesOut24h + Number(chain.traffic?.bytesOut24h || 0),
+    connections24h: total.connections24h + Number(chain.traffic?.connections24h || 0),
+    bytesInTotal: total.bytesInTotal + Number(chain.traffic?.bytesInTotal || 0),
+    bytesOutTotal: total.bytesOutTotal + Number(chain.traffic?.bytesOutTotal || 0),
+    connectionsTotal: total.connectionsTotal + Number(chain.traffic?.connectionsTotal || 0),
+  }), { bytesIn24h: 0, bytesOut24h: 0, connections24h: 0, bytesInTotal: 0, bytesOutTotal: 0, connectionsTotal: 0 });
   return (
     <DashboardLayout>
       <div className="mx-auto w-full max-w-7xl space-y-5 p-4 sm:p-6">
@@ -820,19 +838,20 @@ export default function FullChainsPage() {
             新建全链路
           </Button>
         </div>
-        <LandingManagement
-          viewMode="compact"
-          serviceIds={data.map((chain: any) => Number(chain.landingServiceId)).filter(Boolean)}
-          showServices={false}
-        />
+        <div className="grid gap-3 md:grid-cols-3">
+          <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground">全链路入向流量</div><div className="mt-1 flex items-baseline gap-2 text-emerald-600"><span className="font-semibold">累计 {formatBytes(traffic.bytesInTotal)}</span><span className="text-xs">24H {formatBytes(traffic.bytesIn24h)}</span></div></CardContent></Card>
+          <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground">全链路出向流量</div><div className="mt-1 flex items-baseline gap-2 text-amber-600"><span className="font-semibold">累计 {formatBytes(traffic.bytesOutTotal)}</span><span className="text-xs">24H {formatBytes(traffic.bytesOut24h)}</span></div></CardContent></Card>
+          <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground">全链路连接次数</div><div className="mt-1 flex items-baseline gap-2"><span className="font-semibold">累计 {traffic.connectionsTotal.toLocaleString()}</span><span className="text-xs text-muted-foreground">24H {traffic.connections24h.toLocaleString()} · TCP</span></div></CardContent></Card>
+        </div>
         {data.length ? (
           <div className="grid gap-4 lg:grid-cols-2">
             {data.map((chain: any) => {
-              const service = (services.data || []).find((item: any) => Number(item.id) === Number(chain.landingServiceId));
               const removeChain = async () => {
                 if (await confirmDialog({ title: "删除全链路", description: <>确定删除“{chain.name}”吗？会停止链路和末端 SS 并清理对应端口。</>, confirmText: "删除", tone: "destructive" })) remove.mutate({ id: chain.id });
               };
-              return service ? <LandingManagement key={chain.id} viewMode="compact" serviceId={Number(chain.landingServiceId)} showTraffic={false} latencyMs={chain.latestLatencyMs} onEdit={() => { setEditingChain(chain); setOpen(true); }} onLatencyHistory={() => setHistoryChainId(chain.id)} onLatencyProbe={() => setLatencyChainId(chain.id)} onRemove={() => void removeChain()} /> : null;
+              const endpoints = (chain.nodes || []).map((node: any) => node.hostName || node.publicIp || `主机 #${node.hostId}`).join(" · ");
+              const chainTraffic = chain.traffic || {};
+              return <Card key={chain.id} className="action-card border-border/40 bg-card/60 backdrop-blur-md"><CardContent className="space-y-3 p-4"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="truncate font-medium">{chain.name}</div><p className="mt-1 truncate text-xs text-muted-foreground">{endpoints || "等待节点部署"}</p></div><span className={`rounded-md border px-2 py-1 text-xs ${chain.status === "running" ? "border-emerald-500/50 text-emerald-600" : chain.status === "error" ? "border-destructive/50 text-destructive" : "border-muted-foreground/30 text-muted-foreground"}`}>{chain.status === "running" ? "运行中" : chain.status === "error" ? "错误" : "部署中"}</span></div><div className="flex items-center justify-between rounded-md bg-muted/35 px-2.5 py-2 text-xs"><span>入口端口 {chain.port} · {String(chain.protocol || "both").toUpperCase()}</span><span>{chain.nodes?.length || 0} 跳</span></div><div className="grid grid-cols-2 gap-3 border-t border-border/40 pt-3 text-xs"><div><div className="mb-1 text-muted-foreground">24H 入向</div><div className="flex items-center gap-1 text-emerald-600"><ArrowDownToLine className="h-3 w-3" />{formatBytes(chainTraffic.bytesIn24h)}</div></div><div><div className="mb-1 text-muted-foreground">24H 出向</div><div className="flex items-center gap-1 text-amber-600"><ArrowUpFromLine className="h-3 w-3" />{formatBytes(chainTraffic.bytesOut24h)}</div></div><div><div className="mb-1 text-muted-foreground">累计流量</div><div>{formatBytes(Number(chainTraffic.bytesInTotal || 0) + Number(chainTraffic.bytesOutTotal || 0))}</div></div><div><div className="mb-1 text-muted-foreground">链路延迟</div><div>{chain.latestLatencyMs ? `${chain.latestLatencyMs} ms` : "未测试"}</div></div></div><div className="flex justify-end gap-1 border-t border-border/40 pt-2"><Button size="icon" variant="ghost" title="链路测试" onClick={() => setLatencyChainId(chain.id)}><Activity className="h-4 w-4" /></Button><Button size="icon" variant="ghost" title="延迟历史" onClick={() => setHistoryChainId(chain.id)}><RefreshCw className="h-4 w-4" /></Button><Button size="icon" variant="ghost" title="编辑" onClick={() => { setEditingChain(chain); setOpen(true); }}><Pencil className="h-4 w-4" /></Button><Button size="icon" variant="ghost" title="删除" className="text-destructive hover:text-destructive" onClick={() => void removeChain()}><Trash2 className="h-4 w-4" /></Button></div></CardContent></Card>;
             })}
           </div>
         ) : (
