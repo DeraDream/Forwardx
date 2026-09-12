@@ -15,7 +15,9 @@ test("panel can create only a unique chain ending at a marked landing host", () 
     const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
     const runtime = await import(url("server/dbRuntime.ts"));
     const schema = await import(url("server/dbSchema.ts"));
+    const db = await import(url("server/db.ts"));
     const { fullChainsRouter } = await import(url("server/routers/fullChains.ts"));
+    let complete = false;
     try {
       await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
       await schema.ensureDatabaseSchema();
@@ -30,20 +32,28 @@ test("panel can create only a unique chain ending at a marked landing host", () 
       await assert.rejects(() => caller.create({ ...base, nodes: [{ hostId: 11 }, { hostId: 12 }] }), /末端 SS/);
       const created = await caller.create({ ...base, nodes: [{ hostId: 11 }, { hostId: 12 }, { hostId: 13 }] });
       assert.ok(created.id > 0);
+      const landingServiceId = await db.createLandingService({ hostId: 13, userId: 1, name: "HK-JP", protocol: "ss", method: "aes-256-gcm", password: "12345678", port: 32123, endpoint: "198.51.100.13:32123", isEnabled: true, status: "running" });
+      await db.updateFullChain(created.id, { landingServiceId, status: "running" });
+      const landingOnly = await caller.update({ ...base, id: created.id, name: "HK-JP-renamed", password: "abcdefgh", nodes: [{ hostId: 11 }, { hostId: 12 }, { hostId: 13 }] });
+      assert.equal(landingOnly.requiresRedeploy, false, "名称或落地 SS 配置变更不得重部署整条链路");
+      const landingService = await db.getLandingServiceById(landingServiceId, true);
+      assert.equal(landingService.name, "HK-JP-renamed");
+      assert.equal(landingService.password, "abcdefgh");
+      const updated = await caller.update({ ...base, id: created.id, name: "HK-JP-edit", port: 32124, nodes: [{ hostId: 11 }, { hostId: 12 }, { hostId: 13 }] });
+      assert.equal(updated.id, created.id, "编辑必须保留原全链路 ID");
+      assert.equal(updated.requiresRedeploy, true, "端口变化必须重新检查并部署");
       const [chain] = await caller.list();
-      assert.equal(chain.name, "HK-JP");
+      assert.equal(chain.name, "HK-JP-edit");
+      assert.equal(chain.port, 32124);
       assert.equal(chain.status, "draft");
       assert.deepEqual(chain.nodes.map((node) => Number(node.hostId)), [11, 12, 13]);
       assert.equal(chain.nodes[0].portStatus, "pending");
-      await caller.check({ id: created.id });
-      const [checking] = await caller.list();
-      assert.equal(checking.status, "checking-link");
-      assert.ok(checking.nodes.every((node) => node.portStatus === "checking"));
-      assert.ok(checking.nodes.every((node) => node.protocolStatus === "checking"));
-    } finally { await runtime.closeDatabase(); }
+
+      complete = true;
+    } finally { if (global.gc) global.gc(); await runtime.closeDatabase(); if (complete) process.exit(0); }
   `;
   try {
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", script], { cwd: process.cwd(), env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: databasePath }, encoding: "utf8" });
+    const result = spawnSync(process.execPath, ["--expose-gc", "--import", "tsx", "--input-type=module", "--eval", script], { cwd: process.cwd(), env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: databasePath }, encoding: "utf8" });
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
@@ -59,7 +69,7 @@ test("full-chain checks all nodes before deployment", () => {
     const runtime = await import(url("server/dbRuntime.ts"));
     const schema = await import(url("server/dbSchema.ts"));
     const { fullChainsRouter } = await import(url("server/routers/fullChains.ts"));
-    const { applyFullChainRuntimeStatus } = await import(url("server/fullChainRuntime.ts"));
+    const { applyFullChainLandingStatus, applyFullChainRuleStatus, applyFullChainRuntimeStatus } = await import(url("server/fullChainRuntime.ts"));
     try {
       await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
       await schema.ensureDatabaseSchema();
@@ -86,6 +96,16 @@ test("full-chain checks all nodes before deployment", () => {
       tcpChain = (await caller.list()).find((item) => item.id === tcp.id);
       assert.equal(tcpChain.status, "deploying");
       assert.ok(Number(tcpChain.nodes[0].generatedRuleId) > 0, "deployment creates the first forwarding rule");
+      assert.equal(tcpChain.nodes[0].deployStatus, "checking", "入口先开始部署");
+      assert.equal(tcpChain.nodes[1].deployStatus, "pending", "下一台必须等待入口完成");
+      await applyFullChainRuleStatus(tcpChain.nodes[0].generatedRuleId, true, "部署完毕");
+      tcpChain = (await caller.list()).find((item) => item.id === tcp.id);
+      assert.equal(tcpChain.nodes[0].deployStatus, "done");
+      assert.equal(tcpChain.nodes[1].deployStatus, "checking", "入口完成后才部署落地机");
+      await applyFullChainLandingStatus(tcpChain.landingServiceId, true, "部署完毕");
+      tcpChain = (await caller.list()).find((item) => item.id === tcp.id);
+      assert.equal(tcpChain.status, "running", "落地机完成后全链路才运行");
+      assert.ok(tcpChain.nodes.every((node) => node.deployStatus === "done"));
 
       const both = await create("both", 32125);
       await caller.checkLatency({ id: both.id });

@@ -23,6 +23,13 @@ const createInput = z.object({
   allowPublicIntermediate: z.boolean().default(true), nodes: z.array(nodeInput).min(2).max(12),
 });
 
+function sameNodes(current: any[], next: Array<{ hostId: number; ingressIp?: string | null }>) {
+  return current.length === next.length && current.every((node, index) =>
+    Number(node.hostId) === Number(next[index].hostId) &&
+    String(node.ingressIp || "") === String(next[index].ingressIp || ""),
+  );
+}
+
 export const fullChainsRouter = router({
   list: protectedProcedure.query(({ ctx }) => db.listFullChains(ownerId(ctx.user))),
   latencySeries: protectedProcedure.input(z.object({ id: z.number().int().positive(), hours: z.number().int().min(1).max(168).default(72) })).query(async ({ input, ctx }) => {
@@ -48,9 +55,9 @@ export const fullChainsRouter = router({
     const id = await db.createFullChain({ ...input, userId: Number(ctx.user.id) });
     return { id };
   }),
-  replace: protectedProcedure.input(createInput.extend({ id: z.number().int().positive() })).mutation(async ({ input, ctx }) => {
+  update: protectedProcedure.input(createInput.extend({ id: z.number().int().positive() })).mutation(async ({ input, ctx }) => {
     const old = await requireChain(ctx.user, input.id);
-    if (["checking-link", "checking-port", "checking-protocol", "deploying"].includes(String(old.status))) throw new Error("原全链路正在执行，暂不能替换");
+    if (["checking-link", "checking-port", "checking-protocol", "deploying"].includes(String(old.status))) throw new Error("全链路正在执行，暂不能编辑");
     if (new Set(input.nodes.map((node) => node.hostId)).size !== input.nodes.length) throw new Error("同一台机器只能出现一次");
     if ((input.ssProtocol === "ss2022") !== input.method.startsWith("2022-")) throw new Error("SS 类型与加密方式不匹配");
     for (const node of input.nodes) {
@@ -58,12 +65,33 @@ export const fullChainsRouter = router({
       if (!host || (!isAdmin(ctx.user) && Number(host.userId) !== Number(ctx.user.id))) throw new Error("链路中包含无权使用的主机");
     }
     if (!await db.getLandingHostByHostId(input.nodes[input.nodes.length - 1].hostId)) throw new Error("末端 SS 必须选择已标记的落地机");
-    const samePort = Number(input.port) === Number(old.port);
-    if (samePort) await cancelFullChain(input.id);
-    const id = await db.createFullChain({ ...input, userId: Number(ctx.user.id) });
-    await db.updateFullChain(id, { replacesChainId: input.id, statusMessage: samePort ? `正在原端口更新 #${input.id}` : `正在无损替换 #${input.id}` });
-    await startFullChain(id);
-    return { id };
+    const oldNodes = await db.getFullChainNodes(input.id);
+    let requiresRedeploy =
+      Number(old.port) !== input.port ||
+      String(old.protocol) !== input.protocol ||
+      !!old.allowPublicIntermediate !== input.allowPublicIntermediate ||
+      !sameNodes(oldNodes, input.nodes);
+    const landingService = Number(old.landingServiceId) > 0
+      ? await db.getLandingServiceById(Number(old.landingServiceId), true) as any
+      : null;
+    if (!landingService) requiresRedeploy = true;
+
+    if (!requiresRedeploy) {
+      await db.updateFullChain(input.id, {
+        name: input.name, ssProtocol: input.ssProtocol, method: input.method, password: input.password,
+      });
+      await db.updateLandingService(Number(landingService.id), {
+        name: input.name, protocol: input.ssProtocol, method: input.method, password: input.password,
+        previousPort: Number(landingService.port), recreatePending: true,
+        status: "pending", statusMessage: "全链路落地 SS 更新中",
+      });
+      pushAgentRefresh(Number(landingService.hostId), "full-chain-landing-update", { urgent: true });
+      return { id: input.id, requiresRedeploy: false };
+    }
+
+    await cancelFullChain(input.id);
+    await db.replaceFullChainConfig(input.id, { ...input, userId: Number(old.userId) });
+    return { id: input.id, requiresRedeploy: true };
   }),
   start: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ input, ctx }) => {
     const chain = await requireChain(ctx.user, input.id);

@@ -126,8 +126,6 @@ async function finishDeploy(chainId: number) {
       status: "running",
       statusMessage: "全链路可用",
     });
-    if (Number(chain.replacesChainId) > 0)
-      await retireReplacedChain(Number(chain.replacesChainId));
     return;
   }
   for (const [index, node] of nodes.entries()) {
@@ -149,16 +147,6 @@ async function finishDeploy(chainId: number) {
   await db.updateFullChain(chainId, {
     status: "deploying",
     statusMessage: "正在限制中转入口 IP",
-  });
-}
-
-async function retireReplacedChain(chainId: number) {
-  const old = (await db.getFullChainById(chainId)) as any;
-  if (!old) return;
-  await cancelFullChain(chainId);
-  await db.updateFullChain(chainId, {
-    status: "replaced",
-    statusMessage: "已由新全链路无损替换",
   });
 }
 
@@ -298,9 +286,6 @@ export async function applyFullChainRuntimeStatus(
         status: "running",
         statusMessage: "全链路可用",
       });
-      const currentChain = (await db.getFullChainById(chainId)) as any;
-      if (Number(currentChain?.replacesChainId) > 0)
-        await retireReplacedChain(Number(currentChain.replacesChainId));
     }
     return true;
   }

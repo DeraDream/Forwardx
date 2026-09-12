@@ -51,6 +51,19 @@ export async function updateFullChainNode(id: number, patch: Record<string, any>
   await executeRaw(`UPDATE ${q("full_chain_nodes")} SET ${keys.map((key) => `${q(key)} = ?`).join(", ")}, ${q("updatedAt")} = ? WHERE ${q("id")} = ?`, [...keys.map((key) => patch[key]), now(), id]);
 }
 
+export async function replaceFullChainConfig(id: number, input: FullChainCreate) {
+  await executeRaw(`DELETE FROM ${q("full_chain_latency_stats")} WHERE ${q("chainId")} = ?`, [id]);
+  await executeRaw(`DELETE FROM ${q("full_chain_nodes")} WHERE ${q("chainId")} = ?`, [id]);
+  await updateFullChain(id, {
+    name: input.name, port: input.port, protocol: input.protocol, ssProtocol: input.ssProtocol,
+    method: input.method, password: input.password, allowPublicIntermediate: input.allowPublicIntermediate,
+    landingServiceId: null, latestLatencyMs: null, isEnabled: true, status: "draft", statusMessage: "配置已保存，等待重新检查",
+  });
+  for (const [sortOrder, node] of input.nodes.entries()) {
+    await insertAndGetId("full_chain_nodes", { chainId: id, hostId: node.hostId, sortOrder, ingressIp: node.ingressIp || null, portStatus: "pending", protocolStatus: "pending", deployStatus: "pending", latencyStatus: "pending" });
+  }
+}
+
 export async function recordFullChainLatency(chainId: number, latencyMs: number | null, details: unknown) {
   await insertAndGetId("full_chain_latency_stats", { chainId, latencyMs, isTimeout: latencyMs === null, details: JSON.stringify(details) });
 }

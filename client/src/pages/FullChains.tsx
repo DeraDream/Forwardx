@@ -57,11 +57,11 @@ const ss2022 = [
   "2022-blake3-chacha20-poly1305",
 ];
 
-function StatusBadge({ status, available, checking, unavailable, message }: {
-  status: string; available: string; checking: string; unavailable: string; message?: string;
+function StatusBadge({ status, available, checking, unavailable, pending, message }: {
+  status: string; available: string; checking: string; unavailable: string; pending?: string; message?: string;
 }) {
   const kind = status === "available" ? "ok" : status === "checking" ? "busy" : status === "error" ? "error" : "idle";
-  const text = kind === "ok" ? available : kind === "busy" ? checking : kind === "error" ? unavailable : "待检查";
+  const text = kind === "ok" ? available : kind === "busy" ? checking : kind === "error" ? unavailable : pending || "待检查";
   return (
     <span
       key={status}
@@ -80,9 +80,9 @@ function StatusBadge({ status, available, checking, unavailable, message }: {
   );
 }
 
-function Status({ node, protocol }: { node: any; protocol?: string }) {
-  if (["checking", "done", "error"].includes(node.deployStatus))
-    return <StatusBadge status={node.deployStatus === "done" ? "available" : node.deployStatus} available="已创建" checking="创建中" unavailable="创建失败" message={node.deployMessage} />;
+function Status({ node, protocol, deploying }: { node: any; protocol?: string; deploying?: boolean }) {
+  if (deploying || ["checking", "done", "error"].includes(node.deployStatus))
+    return <StatusBadge status={node.deployStatus === "done" ? "available" : node.deployStatus} available="部署完毕" checking="部署中" unavailable="部署失败" pending="等待部署" message={node.deployMessage} />;
   return <div className="flex items-center gap-2">
     <StatusBadge status={node.portStatus} available="端口可用" checking="检查端口中" unavailable="端口不可用" message={node.portMessage} />
     {protocol === "both" && <StatusBadge status={node.protocolStatus} available="UDP 可用" checking="检查 UDP 中" unavailable="UDP 不可用" message={node.protocolMessage} />}
@@ -97,6 +97,7 @@ function ChainNodes({
   runtime,
   fixedLast = false,
   protocol,
+  deploying,
 }: {
   nodes: any[];
   hosts: Map<number, Host>;
@@ -105,6 +106,7 @@ function ChainNodes({
   runtime?: boolean;
   fixedLast?: boolean;
   protocol?: string;
+  deploying?: boolean;
 }) {
   const sortable = useSortableReorder({
     items: nodes,
@@ -241,7 +243,7 @@ function ChainNodes({
                     </Button>
                   </div>
                 )}
-                {runtime && <Status node={node} protocol={protocol} />}
+                {runtime && <Status node={node} protocol={protocol} deploying={deploying} />}
               </div>
             )}
           </SortableItem>
@@ -310,7 +312,7 @@ function CreateDialog({
   });
   const random = trpc.fullChains.random.useQuery(undefined, { enabled: open });
   const create = trpc.fullChains.create.useMutation();
-  const replace = trpc.fullChains.replace.useMutation();
+  const update = trpc.fullChains.update.useMutation();
   const check = trpc.fullChains.check.useMutation();
   const checkLatency = trpc.fullChains.checkLatency.useMutation();
   const deploy = trpc.fullChains.deploy.useMutation();
@@ -326,7 +328,7 @@ function CreateDialog({
   const [landingHostId, setLandingHostId] = useState(0);
   const [portCheck, setPortCheck] = useState<PortCheck>(null);
   const createdDraft = useRef<number | undefined>(undefined);
-  const autoDeployId = useRef<number | undefined>(undefined);
+  const deployStarted = useRef(false);
   const remove = trpc.fullChains.remove.useMutation();
   const hosts = useMemo(
     () =>
@@ -342,6 +344,7 @@ function CreateDialog({
     const draftId = createdDraft.current;
     if (!draftId) return;
     createdDraft.current = undefined;
+    deployStarted.current = false;
     setId(undefined);
     void remove
       .mutateAsync({ id: draftId })
@@ -392,6 +395,8 @@ function CreateDialog({
     Number(port) >= 1 &&
     Number(port) <= 65535 &&
     password.length >= 8;
+  const editDirty = useMemo(() => !editingChain || !!id || name.trim() !== String(editingChain.name || "") || Number(port) !== Number(editingChain.port) || protocol !== String(editingChain.protocol || "both") || type !== String(editingChain.ssProtocol || "ss") || method !== String(editingChain.method || "") || password !== String(editingChain.password || "") || nodes.length !== (editingChain.nodes || []).length || nodes.some((node, index) => Number(node.hostId) !== Number(editingChain.nodes?.[index]?.hostId) || String(node.ingressIp || "") !== String(editingChain.nodes?.[index]?.ingressIp || "")), [editingChain, id, method, name, nodes, password, port, protocol, type]);
+  const editNeedsRedeploy = !!editingChain && (Number(port) !== Number(editingChain.port) || protocol !== String(editingChain.protocol || "both") || nodes.length !== (editingChain.nodes || []).length || nodes.some((node, index) => Number(node.hostId) !== Number(editingChain.nodes?.[index]?.hostId) || String(node.ingressIp || "") !== String(editingChain.nodes?.[index]?.ingressIp || "")));
   useEffect(() => {
     if (!open || !editingChain) return;
     setName(String(editingChain.name || ""));
@@ -405,7 +410,7 @@ function CreateDialog({
     setEntryIp(String(nextNodes[0]?.ingressIp || ""));
     setLandingHostId(Number(nextNodes.at(-1)?.hostId || 0));
   }, [editingChain?.id, open]);
-  const save = async () => {
+  const save = async (): Promise<number | undefined> => {
     if (!valid)
       throw new Error("至少两台机器，末端必须是落地机，并填写有效端口和密码");
     const input = {
@@ -415,12 +420,18 @@ function CreateDialog({
       ssProtocol: type as "ss" | "ss2022",
       method: method as any,
       password,
-      allowPublicIntermediate: true,
+      allowPublicIntermediate: editingChain ? editingChain.allowPublicIntermediate !== false : true,
       nodes,
     };
-    const result = editingChain ? await replace.mutateAsync({ ...input, id: Number(editingChain.id) }) : await create.mutateAsync(input);
+    const result = editingChain ? await update.mutateAsync({ ...input, id: Number(editingChain.id) }) : await create.mutateAsync(input);
+    if (editingChain && (result as { requiresRedeploy?: boolean }).requiresRedeploy === false) {
+      toast.success("面板和落地 SS 已更新");
+      await utils.fullChains.list.invalidate();
+      closeDialog();
+      return undefined;
+    }
     setId(result.id);
-    createdDraft.current = result.id;
+    if (!editingChain) createdDraft.current = result.id;
     return result.id;
   };
   const closeDialog = () => {
@@ -505,9 +516,9 @@ function CreateDialog({
       if (kind === "port") await check.mutateAsync({ id: chainId });
       if (kind === "latency") await checkLatency.mutateAsync({ id: chainId });
       if (kind === "deploy") {
+        deployStarted.current = true;
         await deploy.mutateAsync({ id: chainId });
         createdDraft.current = undefined;
-        closeDialog();
       }
       await utils.fullChains.list.invalidate();
     } catch (error: any) {
@@ -515,19 +526,13 @@ function CreateDialog({
     }
   };
   useEffect(() => {
-    if (!editingChain || !id || active?.status !== "ready-to-deploy" || autoDeployId.current === id) return;
-    autoDeployId.current = id;
-    void run("deploy");
-  }, [active?.status, editingChain, id]);
+    if (id && deployStarted.current && active?.status === "running") closeDialog();
+  }, [active?.status, id]);
   const configReady = valid && portCheck?.available !== false;
   const primary =
-    active?.status === "ready-to-deploy"
-      ? "创建链路"
-      : active?.status === "running"
-        ? "已创建"
-        : !active || active.status === "draft" || active.status === "error"
-          ? editingChain ? "保存并更新" : "检查链路"
-          : active.statusMessage || "检查链路中";
+    editingChain
+      ? !id ? editNeedsRedeploy ? "保存并检查" : "保存" : active?.status === "ready-to-deploy" ? "重新部署" : active?.status === "running" ? "已部署" : active?.statusMessage || "检查链路中"
+      : active?.status === "ready-to-deploy" ? "创建链路" : active?.status === "running" ? "已创建" : !active || active.status === "draft" || active.status === "error" ? "检查链路" : active.statusMessage || "检查链路中";
   const primaryAction =
     active?.status === "ready-to-deploy"
       ? "deploy"
@@ -541,7 +546,7 @@ function CreateDialog({
         <DialogHeader className="border-b px-6 py-5">
           <DialogTitle>{editingChain ? "编辑全链路" : "新建全链路"}</DialogTitle>
           <DialogDescription>
-            先完成检查，再确认部署。入口在首位，末端为公网直连落地 SS。
+            {editingChain ? "改名称或落地 SS 配置只更新面板和落地机；端口、转发协议或机器变更才重新检查和部署。" : "先完成检查，再确认部署。入口在首位，末端为公网直连落地 SS。"}
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-3 px-6 py-4">
@@ -735,6 +740,7 @@ function CreateDialog({
                 runtime
                 fixedLast
                 protocol={active?.protocol || protocol}
+                deploying={active?.status === "deploying"}
               />
             </div>
           </>
@@ -751,18 +757,20 @@ function CreateDialog({
           <Button
             disabled={
               locked ||
-            create.isPending || replace.isPending ||
+            create.isPending || update.isPending ||
               check.isPending ||
               deploy.isPending ||
               !configReady ||
-              (!!active &&
+              (!!editingChain && !id && !editDirty) ||
+              (!editingChain && !!active &&
                 !["draft", "error", "ready-to-deploy"].includes(
                   active.status,
-                ))
+                )) ||
+              (!!editingChain && !!id && active?.status !== "ready-to-deploy")
             }
             onClick={() => void run(primaryAction)}
           >
-            {(create.isPending || replace.isPending || check.isPending || deploy.isPending) && (
+            {(create.isPending || update.isPending || check.isPending || deploy.isPending) && (
               <Loader2 className="h-4 w-4 animate-spin" />
             )}
             {primary}
@@ -785,10 +793,6 @@ export default function FullChainsPage() {
   });
   const services = trpc.landing.list.useQuery(undefined, { refetchInterval: 5000 });
   const remove = trpc.fullChains.remove.useMutation({
-    onSuccess: () => void utils.fullChains.list.invalidate(),
-    onError: (error) => toast.error(error.message),
-  });
-  const restart = trpc.fullChains.start.useMutation({
     onSuccess: () => void utils.fullChains.list.invalidate(),
     onError: (error) => toast.error(error.message),
   });
@@ -828,7 +832,7 @@ export default function FullChainsPage() {
               const removeChain = async () => {
                 if (await confirmDialog({ title: "删除全链路", description: <>确定删除“{chain.name}”吗？会停止链路和末端 SS 并清理对应端口。</>, confirmText: "删除", tone: "destructive" })) remove.mutate({ id: chain.id });
               };
-              return service ? <LandingManagement key={chain.id} viewMode="compact" serviceId={Number(chain.landingServiceId)} showTraffic={false} latencyMs={chain.latestLatencyMs} onEdit={() => { setEditingChain(chain); setOpen(true); }} onLatencyHistory={() => setHistoryChainId(chain.id)} onLatencyProbe={() => setLatencyChainId(chain.id)} onRemove={() => void removeChain()} /> : <Card key={chain.id}><CardContent className="flex items-center justify-between gap-3 p-4"><div className="text-sm text-muted-foreground">{chain.name} #{chain.id}：{chain.statusMessage || "部署信息加载中"}</div><div className="flex shrink-0 gap-2"><Button size="sm" variant="outline" disabled={restart.isPending || busy.has(String(chain.status))} onClick={() => restart.mutate({ id: Number(chain.id) })}>重新部署</Button><Button size="sm" variant="destructive" disabled={remove.isPending} onClick={() => void removeChain()}>删除</Button></div></CardContent></Card>;
+              return service ? <LandingManagement key={chain.id} viewMode="compact" serviceId={Number(chain.landingServiceId)} showTraffic={false} latencyMs={chain.latestLatencyMs} onEdit={() => { setEditingChain(chain); setOpen(true); }} onLatencyHistory={() => setHistoryChainId(chain.id)} onLatencyProbe={() => setLatencyChainId(chain.id)} onRemove={() => void removeChain()} /> : null;
             })}
           </div>
         ) : (
