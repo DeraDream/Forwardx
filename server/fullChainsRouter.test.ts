@@ -17,6 +17,7 @@ test("panel can create only a unique chain ending at a marked landing host", () 
     const schema = await import(url("server/dbSchema.ts"));
     const db = await import(url("server/db.ts"));
     const { fullChainsRouter } = await import(url("server/routers/fullChains.ts"));
+    const { landingRouter } = await import(url("server/routers/landing.ts"));
     let complete = false;
     try {
       await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
@@ -27,6 +28,7 @@ test("panel can create only a unique chain ending at a marked landing host", () 
       }
       await runtime.executeRaw('INSERT INTO "landing_hosts" ("hostId", "userId") VALUES (13, 1)');
       const caller = fullChainsRouter.createCaller({ req: { headers: {} }, res: { clearCookie() {} }, user: { id: 1, username: "chain-user", role: "user", accountEnabled: true }, authSession: null, authFailureReason: null });
+      const landingCaller = landingRouter.createCaller({ req: { headers: {} }, res: { clearCookie() {} }, user: { id: 1, username: "chain-user", role: "user", accountEnabled: true }, authSession: null, authFailureReason: null });
       const base = { name: "HK-JP", port: 32123, protocol: "both", ssProtocol: "ss", method: "aes-256-gcm", password: "12345678", allowPublicIntermediate: false };
       await assert.rejects(() => caller.create({ ...base, nodes: [{ hostId: 11 }, { hostId: 11 }] }), /只能出现一次/);
       await assert.rejects(() => caller.create({ ...base, nodes: [{ hostId: 11 }, { hostId: 12 }] }), /末端 SS/);
@@ -34,6 +36,18 @@ test("panel can create only a unique chain ending at a marked landing host", () 
       assert.ok(created.id > 0);
       const landingServiceId = await db.createLandingService({ hostId: 13, userId: 1, name: "HK-JP", protocol: "ss", method: "aes-256-gcm", password: "12345678", port: 32123, endpoint: "198.51.100.13:32123", isEnabled: true, status: "running" });
       await db.updateFullChain(created.id, { landingServiceId, status: "running" });
+      await db.updateLandingService(landingServiceId, { isFullChainManaged: true });
+      assert.equal((await db.getLandingServices(1)).some((service) => service.id === landingServiceId), false, "全链路末端 SS 不得出现在落地 SS 列表");
+      await db.recordFullChainTraffic([{ serviceId: landingServiceId, hostId: 13, userId: 1, bytesIn: 12, bytesOut: 34, connections: 5 }]);
+      await db.recordFullChainLatency(created.id, 7, []);
+      const isolated = (await caller.list()).find((chain) => chain.id === created.id);
+      assert.equal(isolated.traffic.bytesInTotal, 12, "全链路流量必须写入自己的统计表");
+      await landingCaller.resetTraffic({ id: landingServiceId });
+      const reset = (await caller.list()).find((chain) => chain.id === created.id);
+      assert.equal(reset.traffic.bytesInTotal, 0, "全链路卡片重置必须清除该链路流量历史");
+      assert.equal((await caller.latencySeries({ id: created.id, hours: 24 })).length, 0, "全链路卡片重置必须清除该链路延迟历史");
+      await db.recordFullChainTraffic([{ serviceId: landingServiceId, hostId: 13, userId: 1, bytesIn: 12, bytesOut: 34, connections: 5 }]);
+      await db.recordFullChainLatency(created.id, 7, []);
       const landingOnly = await caller.update({ ...base, id: created.id, name: "HK-JP-renamed", password: "abcdefgh", nodes: [{ hostId: 11 }, { hostId: 12 }, { hostId: 13 }] });
       assert.equal(landingOnly.requiresRedeploy, false, "名称或落地 SS 配置变更不得重部署整条链路");
       const landingService = await db.getLandingServiceById(landingServiceId, true);
@@ -48,6 +62,11 @@ test("panel can create only a unique chain ending at a marked landing host", () 
       assert.equal(chain.status, "draft");
       assert.deepEqual(chain.nodes.map((node) => Number(node.hostId)), [11, 12, 13]);
       assert.equal(chain.nodes[0].portStatus, "pending");
+      assert.equal(chain.traffic.bytesInTotal, 12, "重新部署不得清空全链路流量历史");
+      assert.equal((await caller.latencySeries({ id: created.id, hours: 24 })).length, 1, "重新部署不得清空全链路延迟历史");
+      await caller.remove({ id: created.id });
+      assert.equal((await caller.list()).some((item) => item.id === created.id), false, "删除后全链路 item 不得继续出现");
+      await assert.rejects(() => caller.latencySeries({ id: created.id, hours: 24 }), /全链路不存在/, "删除后全链路历史不得继续读取");
 
       complete = true;
     } finally { if (global.gc) global.gc(); await runtime.closeDatabase(); if (complete) process.exit(0); }

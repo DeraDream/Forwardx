@@ -1,5 +1,5 @@
-import { executeRaw, insertAndGetId, queryRaw } from "../dbRuntime";
-import { quoteIdentifier } from "../dbCompat";
+import { executeRaw, getDatabaseKind, insertAndGetId, queryRaw } from "../dbRuntime";
+import { epochSeconds, quoteIdentifier } from "../dbCompat";
 
 const q = quoteIdentifier;
 const now = () => Math.floor(Date.now() / 1000);
@@ -36,7 +36,44 @@ export async function getFullChainNodes(chainId: number) {
 export async function listFullChains(userId?: number) {
   const where = userId ? `WHERE c.${q("userId")} = ?` : "";
   const chains = await queryRaw<any>(`SELECT c.* FROM ${q("full_chains")} c ${where} ORDER BY c.${q("createdAt")} DESC, c.${q("id")} DESC`, userId ? [userId] : []);
-  return Promise.all(chains.map(async (chain) => ({ ...chain, nodes: await getFullChainNodes(Number(chain.id)) })));
+  const traffic = await getFullChainTrafficSummaries(chains.map((chain) => Number(chain.id)));
+  return Promise.all(chains.map(async (chain) => ({ ...chain, nodes: await getFullChainNodes(Number(chain.id)), traffic: traffic.get(Number(chain.id)) || emptyTraffic() })));
+}
+
+const emptyTraffic = () => ({ bytesIn24h: 0, bytesOut24h: 0, connections24h: 0, bytesInTotal: 0, bytesOutTotal: 0, connectionsTotal: 0 });
+
+async function getFullChainTrafficSummaries(ids: number[]) {
+  const result = new Map<number, ReturnType<typeof emptyTraffic>>();
+  if (!ids.length) return result;
+  const marks = ids.map(() => "?").join(",");
+  const cutoff = now() - 24 * 3600;
+  const rows = await queryRaw<any>(`SELECT ${q("chainId")} chainId, SUM(CASE WHEN ${q("recordedAt")} >= ? THEN ${q("bytesIn")} ELSE 0 END) bytesIn24h, SUM(CASE WHEN ${q("recordedAt")} >= ? THEN ${q("bytesOut")} ELSE 0 END) bytesOut24h, SUM(CASE WHEN ${q("recordedAt")} >= ? THEN ${q("connections")} ELSE 0 END) connections24h, SUM(${q("bytesIn")}) bytesInTotal, SUM(${q("bytesOut")}) bytesOutTotal, SUM(${q("connections")}) connectionsTotal FROM ${q("full_chain_traffic_stats")} WHERE ${q("chainId")} IN (${marks}) GROUP BY ${q("chainId")}`, [cutoff, cutoff, cutoff, ...ids]);
+  for (const row of rows) result.set(Number(row.chainId), { bytesIn24h: Number(row.bytesIn24h || 0), bytesOut24h: Number(row.bytesOut24h || 0), connections24h: Number(row.connections24h || 0), bytesInTotal: Number(row.bytesInTotal || 0), bytesOutTotal: Number(row.bytesOutTotal || 0), connectionsTotal: Number(row.connectionsTotal || 0) });
+  return result;
+}
+
+export async function recordFullChainTraffic(items: Array<{ serviceId: number; hostId: number; userId: number; bytesIn: number; bytesOut: number; connections: number }>) {
+  const at = epochSeconds(new Date());
+  for (const item of items) {
+    const chains = await queryRaw<any>(`SELECT ${q("id")} id FROM ${q("full_chains")} WHERE ${q("landingServiceId")} = ?`, [item.serviceId]);
+    for (const chain of chains) {
+      const chainId = Number(chain.id);
+      await executeRaw(`INSERT INTO ${q("full_chain_traffic_stats")} (${q("chainId")},${q("hostId")},${q("bytesIn")},${q("bytesOut")},${q("connections")},${q("recordedAt")}) VALUES (?,?,?,?,?,?)`, [chainId, item.hostId, item.bytesIn, item.bytesOut, item.connections, at]);
+      const suffix = getDatabaseKind() === "mysql" ? `ON DUPLICATE KEY UPDATE ${q("bytesIn")}=${q("bytesIn")}+VALUES(${q("bytesIn")}),${q("bytesOut")}=${q("bytesOut")}+VALUES(${q("bytesOut")}),${q("connections")}=${q("connections")}+VALUES(${q("connections")}),${q("updatedAt")}=VALUES(${q("updatedAt")})` : `ON CONFLICT (${q("chainId")},${q("hostId")}) DO UPDATE SET ${q("bytesIn")}=${q("full_chain_traffic_counters")}.${q("bytesIn")}+excluded.${q("bytesIn")},${q("bytesOut")}=${q("full_chain_traffic_counters")}.${q("bytesOut")}+excluded.${q("bytesOut")},${q("connections")}=${q("full_chain_traffic_counters")}.${q("connections")}+excluded.${q("connections")},${q("updatedAt")}=excluded.${q("updatedAt")}`;
+      await executeRaw(`INSERT INTO ${q("full_chain_traffic_counters")} (${q("chainId")},${q("hostId")},${q("userId")},${q("bytesIn")},${q("bytesOut")},${q("connections")},${q("updatedAt")}) VALUES (?,?,?,?,?,?,?) ${suffix}`, [chainId, item.hostId, item.userId, item.bytesIn, item.bytesOut, item.connections, at]);
+    }
+  }
+}
+
+export async function resetFullChainHistoryForLandingService(serviceId: number) {
+  const chains = await queryRaw<any>(`SELECT ${q("id")} id FROM ${q("full_chains")} WHERE ${q("landingServiceId")} = ?`, [serviceId]);
+  for (const chain of chains) {
+    const chainId = Number(chain.id);
+    await executeRaw(`DELETE FROM ${q("full_chain_latency_stats")} WHERE ${q("chainId")} = ?`, [chainId]);
+    await executeRaw(`DELETE FROM ${q("full_chain_traffic_stats")} WHERE ${q("chainId")} = ?`, [chainId]);
+    await executeRaw(`DELETE FROM ${q("full_chain_traffic_counters")} WHERE ${q("chainId")} = ?`, [chainId]);
+  }
+  return { chainIds: chains.map((chain) => Number(chain.id)) };
 }
 
 export async function updateFullChain(id: number, patch: Record<string, any>) {
@@ -52,7 +89,6 @@ export async function updateFullChainNode(id: number, patch: Record<string, any>
 }
 
 export async function replaceFullChainConfig(id: number, input: FullChainCreate) {
-  await executeRaw(`DELETE FROM ${q("full_chain_latency_stats")} WHERE ${q("chainId")} = ?`, [id]);
   await executeRaw(`DELETE FROM ${q("full_chain_nodes")} WHERE ${q("chainId")} = ?`, [id]);
   await updateFullChain(id, {
     name: input.name, port: input.port, protocol: input.protocol, ssProtocol: input.ssProtocol,
@@ -84,6 +120,9 @@ export async function getFullChainNodeByRuleId(ruleId: number) {
 }
 
 export async function deleteFullChain(id: number) {
+  await executeRaw(`DELETE FROM ${q("full_chain_latency_stats")} WHERE ${q("chainId")} = ?`, [id]);
+  await executeRaw(`DELETE FROM ${q("full_chain_traffic_stats")} WHERE ${q("chainId")} = ?`, [id]);
+  await executeRaw(`DELETE FROM ${q("full_chain_traffic_counters")} WHERE ${q("chainId")} = ?`, [id]);
   await executeRaw(`DELETE FROM ${q("full_chain_nodes")} WHERE ${q("chainId")} = ?`, [id]);
   await executeRaw(`DELETE FROM ${q("full_chains")} WHERE ${q("id")} = ?`, [id]);
 }

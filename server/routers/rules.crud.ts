@@ -72,7 +72,7 @@ async function resolveLandingServiceTarget(actor: { id: number; role: string }, 
   const id = Number(targetLandingServiceId || 0);
   if (!Number.isInteger(id) || id <= 0) return null;
   const service = await db.getLandingServiceById(id, true) as any;
-  if (!service || !service.isEnabled || service.status === "removing") throw new Error("引用的落地服务不存在或未启用");
+  if (!service || service.isFullChainManaged || !service.isEnabled || service.status === "removing") throw new Error("引用的落地服务不存在或未启用");
   if (actor.role !== "admin" && Number(service.userId) !== Number(actor.id)) throw new Error("无权引用该落地服务");
   const host = await db.getHostById(Number(service.hostId)) as any;
   // A landing SS may have an independent inbound address.  Its configured

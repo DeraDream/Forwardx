@@ -32,6 +32,8 @@ export const MIGRATION_TABLES = [
   "landing_service_latency_stats",
   "full_chains",
   "full_chain_nodes",
+  "full_chain_traffic_counters",
+  "full_chain_traffic_stats",
   "full_chain_latency_stats",
   "host_groups",
   "host_group_members",
@@ -254,6 +256,7 @@ const tables: TableDef[] = [
       c("latencyTargetHost", "text", { notNull: true, default: "www.gstatic.com" }), c("latencyTargetPort", "int", { notNull: true, default: 443 }),
       c("latestLatencyMs", "int"), c("latestLatencyIsTimeout", "bool", { notNull: true, default: false }), c("latestLatencyAt", "epoch"), c("isEnabled", "bool", { notNull: true, default: true }),
       c("status", "varchar", { length: 24, notNull: true, default: "pending" }), c("statusMessage", "text"),
+      c("isFullChainManaged", "bool", { notNull: true, default: false }),
       c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }),
     ],
     unique: [["hostId", "port"]], indexes: [["userId"], ["hostId"], ["hostId", "isEnabled"]],
@@ -281,6 +284,22 @@ const tables: TableDef[] = [
       c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }),
     ],
     unique: [["chainId", "hostId"], ["chainId", "sortOrder"]], indexes: [["chainId", "sortOrder"], ["hostId"], ["generatedRuleId"]],
+  },
+  {
+    name: "full_chain_traffic_counters",
+    columns: [
+      c("id", "id"), c("chainId", "int", { notNull: true }), c("hostId", "int", { notNull: true }), c("userId", "int", { notNull: true }),
+      c("bytesIn", "bigint", { notNull: true, default: 0 }), c("bytesOut", "bigint", { notNull: true, default: 0 }), c("connections", "bigint", { notNull: true, default: 0 }), c("updatedAt", "epoch", { notNull: true, default: "now" }),
+    ],
+    unique: [["chainId", "hostId"]], indexes: [["chainId"], ["userId"]],
+  },
+  {
+    name: "full_chain_traffic_stats",
+    columns: [
+      c("id", "id"), c("chainId", "int", { notNull: true }), c("hostId", "int", { notNull: true }),
+      c("bytesIn", "bigint", { notNull: true, default: 0 }), c("bytesOut", "bigint", { notNull: true, default: 0 }), c("connections", "bigint", { notNull: true, default: 0 }), c("recordedAt", "epoch", { notNull: true, default: "now" }),
+    ],
+    indexes: [["chainId", "recordedAt"], ["recordedAt"]],
   },
   { name: "full_chain_latency_stats", columns: [c("id", "id"), c("chainId", "int", { notNull: true }), c("latencyMs", "int"), c("isTimeout", "bool", { notNull: true, default: false }), c("details", "text"), c("recordedAt", "epoch", { notNull: true, default: "now" })], indexes: [["chainId", "recordedAt"], ["recordedAt"]] },
   {

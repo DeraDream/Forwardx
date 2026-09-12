@@ -806,7 +806,7 @@ function ForwardGroupSelfTestDialog({
     if (lastFailureToastKey.current !== key) {
       lastFailureToastKey.current = key;
       manualTestRef.current = false;
-      toast.error("\u8f6c\u53d1\u94fe\u81ea\u6d4b\u5931\u8d25", { description: message, duration: 12000 });
+      toast.error("\u8f6c\u53d1\u94fe\u81ea\u6d4b\u5931\u8d25", { description: message });
     }
   }, [groupId, hasFreshResult, isFailed, isTesting, latest?.updatedAt, open, parsedMessage.message, status]);
 

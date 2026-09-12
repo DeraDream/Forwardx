@@ -5101,7 +5101,7 @@ function RulesContent() {
       return;
     }
     if (kernelForwardWarning) {
-      toast.warning(kernelForwardWarning, { duration: 7000 });
+      toast.warning(kernelForwardWarning);
     }
     if (
       editingId &&
@@ -12136,9 +12136,7 @@ function SelfTestDialog({
       if (lastFailureToastKey.current !== key) {
         lastFailureToastKey.current = key;
         manualTestRef.current = false;
-        toast.error(isTimeout ? "转发链路自测超时" : "转发链路自测失败", {
-          duration: 5000,
-        });
+        toast.error(isTimeout ? "转发链路自测超时" : "转发链路自测失败");
       }
     }
   }, [

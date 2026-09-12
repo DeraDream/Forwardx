@@ -1928,7 +1928,6 @@ function TunnelSelfTestDialog({
         manualTestRef.current = false;
         toast.error("隧道链路自测失败", {
           description: message,
-          duration: 12000,
         });
       }
     }
@@ -5021,5 +5020,4 @@ export default function TunnelsPage() {
     </DashboardLayout>
   );
 }
-
 

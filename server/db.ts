@@ -106,6 +106,20 @@ function databaseBool(value: unknown) {
   return value === true || value === 1 || value === "1" || String(value).toLowerCase() === "true";
 }
 
+// A full-chain terminal SS is an internal runtime detail.  Older versions
+// created it as an ordinary landing service, which leaked it into the landing
+// SS list and mixed its counters with forwarding-rule traffic.
+async function isolateLegacyFullChainLandingServicesOnce() {
+  const marker = "full-chain-landing-services-isolated-v1";
+  if (await getSetting(marker)) return 0;
+  const q = quoteIdentifier;
+  const result = await executeRaw(
+    `UPDATE ${q("landing_services")} SET ${q("isFullChainManaged")} = ${boolLiteral(true)} WHERE ${q("id")} IN (SELECT ${q("landingServiceId")} FROM ${q("full_chains")} WHERE ${q("landingServiceId")} IS NOT NULL)`,
+  );
+  await setSetting(marker, String(Math.floor(Date.now() / 1000)));
+  return rawAffectedRows(result);
+}
+
 function normalizedRuntimeType(value: unknown) {
   return String(value || "").trim().toLowerCase();
 }
@@ -363,6 +377,11 @@ export async function initDatabase() {
     }
 
     await runInitializationStep("schema", () => ensureDatabaseSchema());
+    await runInitializationStep("isolate-full-chain-services", () => isolateLegacyFullChainLandingServicesOnce().then((count) => {
+      if (count > 0) console.log(`[Database] Isolated legacy full-chain terminal services count=${count}`);
+    }).catch((error) => {
+      console.warn("[Database] Full-chain service isolation skipped:", error instanceof Error ? error.message : String(error));
+    }));
     await runInitializationStep("clear-legacy-traffic-padding", () => clearLegacyTrafficPaddingOnce().then((count) => {
       if (count > 0) console.log(`[Database] Cleared legacy traffic padding settings count=${count}`);
     }).catch((error) => {

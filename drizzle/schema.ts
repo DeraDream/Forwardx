@@ -341,6 +341,7 @@ export const landingServices = table("landing_services", {
   isEnabled: boolean("isEnabled").notNull().default(true),
   status: varchar("status", { length: 24 }).notNull().default("pending"),
   statusMessage: text("statusMessage"),
+  isFullChainManaged: boolean("isFullChainManaged").notNull().default(false),
   createdAt: epoch("createdAt").notNull().default(nowDefault()),
   updatedAt: epoch("updatedAt").notNull().default(nowDefault()),
 });

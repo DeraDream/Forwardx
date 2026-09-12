@@ -704,6 +704,8 @@ const IMPORT_TABLE_ORDER = [
   "forward_rules",
   "full_chains",
   "full_chain_nodes",
+  "full_chain_traffic_counters",
+  "full_chain_traffic_stats",
   "full_chain_latency_stats",
   "forward_rule_tunnel_exits",
   "tunnel_hops",
@@ -1159,6 +1161,17 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
       row.hostId = mapRequiredId(maps, "hosts", source.hostId);
       row.generatedRuleId = mapOptionalId(maps, "forward_rules", source.generatedRuleId);
       return { row, existingWhere: { chainId: row.chainId, hostId: row.hostId } };
+
+    case "full_chain_traffic_counters":
+      row.chainId = mapRequiredId(maps, "full_chains", source.chainId);
+      row.hostId = mapRequiredId(maps, "hosts", source.hostId);
+      row.userId = mapRequiredId(maps, "users", source.userId);
+      return { row, existingWhere: { chainId: row.chainId, hostId: row.hostId } };
+
+    case "full_chain_traffic_stats":
+      row.chainId = mapRequiredId(maps, "full_chains", source.chainId);
+      row.hostId = mapRequiredId(maps, "hosts", source.hostId);
+      return { row };
 
     case "host_group_members":
       row.groupId = mapRequiredId(maps, "host_groups", source.groupId);

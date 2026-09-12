@@ -17,6 +17,7 @@ export function mapLandingService(row: any, includeSecret = false) {
   const mapped: any = {
     ...row,
     id: Number(row.id), hostId: Number(row.hostId), userId: Number(row.userId), port: Number(row.port),
+    isFullChainManaged: bool(row.isFullChainManaged),
     isEnabled: bool(row.isEnabled), latencyTargetPort: Number(row.latencyTargetPort || 443),
     latestLatencyMs: row.latestLatencyMs === null || row.latestLatencyMs === undefined ? null : Number(row.latestLatencyMs),
     latestLatencyIsTimeout: bool(row.latestLatencyIsTimeout), latestLatencyAt: row.latestLatencyAt ? asDate(row.latestLatencyAt) : null,
@@ -56,10 +57,13 @@ export async function deleteLandingHost(hostId: number) {
   await db.delete(landingHosts).where(eq(landingHosts.hostId, hostId));
 }
 
-export async function getLandingServices(userId?: number, includeSecret = false) {
+export async function getLandingServices(userId?: number, includeSecret = false, includeFullChainManaged = false) {
   const db = await getDb();
   if (!db) return [];
-  const rows = userId ? await db.select().from(landingServices).where(eq(landingServices.userId, userId)).orderBy(asc(landingServices.hostId), asc(landingServices.port)) : await db.select().from(landingServices).orderBy(asc(landingServices.hostId), asc(landingServices.port));
+  const visible = eq(landingServices.isFullChainManaged, false);
+  const rows = userId
+    ? await db.select().from(landingServices).where(includeFullChainManaged ? eq(landingServices.userId, userId) : and(eq(landingServices.userId, userId), visible)).orderBy(asc(landingServices.hostId), asc(landingServices.port))
+    : await db.select().from(landingServices).where(includeFullChainManaged ? undefined : visible).orderBy(asc(landingServices.hostId), asc(landingServices.port));
   const mapped = rows.map((row: any) => mapLandingService(row, includeSecret));
   const summaries = await getLandingServiceTrafficSummaries(mapped.map((row: any) => row.id));
   return mapped.map((row: any) => ({ ...row, traffic: summaries.get(row.id) || { bytesIn24h: 0, bytesOut24h: 0, connections24h: 0, bytesInTotal: 0, bytesOutTotal: 0, connectionsTotal: 0 } }));

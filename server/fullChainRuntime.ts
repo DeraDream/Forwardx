@@ -78,6 +78,7 @@ async function beginDeploy(chainId: number) {
       isEnabled: true,
       status: "pending",
       statusMessage: "全链路正在部署末端 SS",
+      isFullChainManaged: true,
     } as any);
     await db.updateFullChain(chainId, {
       landingServiceId: serviceId,
