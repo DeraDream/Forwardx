@@ -376,7 +376,7 @@ function CreateDialog({
   };
   const add = (value: string) => {
     const host = hosts.get(Number(value));
-    if (!host || host.isLanding) return;
+    if (!host || host.id === landingHostId) return;
     setNodes((old) => {
       const exit = old.find((node) => node.hostId === landingHostId);
       return [
@@ -392,9 +392,7 @@ function CreateDialog({
     const hostId = Number(value);
     setLandingHostId(hostId);
     setNodes((old) => [
-      ...old.filter(
-        (node) => node.hostId !== hostId && node.hostId !== landingHostId,
-      ),
+      ...old.filter((node) => node.hostId !== hostId),
       { hostId, ingressIp: "" },
     ]);
     setPortCheck(null);
@@ -730,7 +728,6 @@ function CreateDialog({
                       .filter(
                         (host: Host) =>
                           host.id !== landingHostId &&
-                          !host.isLanding &&
                           !nodes.some((node) => node.hostId === host.id),
                       )
                       .map((host: Host) => (
