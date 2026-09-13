@@ -22,6 +22,7 @@ import {
 } from "./selfTestTiming";
 import { billingMonthlyBoundary, billingStartOfCalendarDay } from "@shared/billingTime";
 import { expireStalePendingOrders, recoverStaleProcessingPaymentOrders } from "./payment";
+import { startFullChainLatencyCheck } from "./fullChainRuntime";
 
 type TimedOutForwardTest = {
   id: number;
@@ -36,8 +37,17 @@ function timeoutSecondsForForwardTest(test: TimedOutForwardTest) {
 }
 
 const UPDATE_AUTO_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const FULL_CHAIN_LATENCY_INTERVAL_MS = 5 * 60 * 1000;
 
 let hostStatusPrimePromise: Promise<void> | null = null;
+
+async function runFullChainLatencySweep() {
+  for (const chain of await db.listFullChains()) {
+    if (String((chain as any).status) === "running")
+      await startFullChainLatencyCheck(Number((chain as any).id));
+  }
+  return true;
+}
 
 async function refreshUserRuleAgents(userId: number, reason: string) {
   const rules = await db.getForwardRulesForUserSync(userId);
@@ -685,6 +695,7 @@ export function startScheduler() {
   // Let the liveness prime's startup grace accept a live Agent presence before
   // the broad recovery sweep evaluates persisted heartbeat timestamps.
   repeatAfter(forwardingMaintenance, 5 * 60 * 1000, 20_000);
+  repeatAfter(runFullChainLatencySweep, FULL_CHAIN_LATENCY_INTERVAL_MS, 25_000);
   repeatAfter(expirationCheck, 60 * 60 * 1000, 16_000);
   // Keep host expiry dates responsive without changing the account-expiration
   // scan cadence or creating a timer per host.

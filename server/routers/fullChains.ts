@@ -1,8 +1,8 @@
 import { protectedProcedure, router } from "../_core/trpc";
 import { z } from "zod";
 import * as db from "../db";
-import { cancelFullChain, deployFullChain, startFullChain, startFullChainProtocolCheck } from "../fullChainRuntime";
 import { pushAgentRefresh } from "../agentEvents";
+import { cancelFullChain, deployFullChain, startFullChain, startFullChainLatencyCheck, startFullChainProtocolCheck } from "../fullChainRuntime";
 
 const methods = ["aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305", "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"] as const;
 const secret = () => Array.from(crypto.getRandomValues(new Uint8Array(28)), (v) => "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"[v % 64]).join("");
@@ -90,6 +90,9 @@ export const fullChainsRouter = router({
     }
 
     await cancelFullChain(input.id);
+    // Agent-side rule removal is asynchronous.  Do not publish the replacement
+    // configuration until the old same-port rules had a chance to disappear.
+    await new Promise((resolve) => setTimeout(resolve, 5000));
     await db.replaceFullChainConfig(input.id, { ...input, userId: Number(old.userId) });
     return { id: input.id, requiresRedeploy: true };
   }),
@@ -123,8 +126,7 @@ export const fullChainsRouter = router({
   }),
   checkLatency: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ input, ctx }) => {
     await requireChain(ctx.user, input.id);
-    const nodes = await db.getFullChainNodes(input.id);
-    for (const node of nodes.slice(0, -1)) { await db.updateFullChainNode(Number(node.id), { latencyStatus: "checking", latencyMs: null }); pushAgentRefresh(Number(node.hostId), "full-chain-latency", { urgent: true }); }
+    await startFullChainLatencyCheck(input.id);
     return { success: true };
   }),
   resetTraffic: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ input, ctx }) => {

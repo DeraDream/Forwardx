@@ -92,7 +92,7 @@ test("full-chain checks all nodes before deployment", () => {
     const runtime = await import(url("server/dbRuntime.ts"));
     const schema = await import(url("server/dbSchema.ts"));
     const { fullChainsRouter } = await import(url("server/routers/fullChains.ts"));
-    const { applyFullChainLandingStatus, applyFullChainRuleStatus, applyFullChainRuntimeStatus } = await import(url("server/fullChainRuntime.ts"));
+    const { applyFullChainLandingStatus, applyFullChainRuleStatus, applyFullChainRuntimeStatus, startFullChainLatencyCheck } = await import(url("server/fullChainRuntime.ts"));
     try {
       await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
       await schema.ensureDatabaseSchema();
@@ -151,20 +151,23 @@ test("full-chain checks all nodes before deployment", () => {
       assert.ok(bothChain.nodes.every((node) => node.protocolStatus === "available"), "every node reports protocol availability");
       assert.equal(bothChain.nodes[0].generatedRuleId, null, "protocol checks must not deploy");
 
-      await runtime.executeRaw('INSERT INTO "hosts" ("id", "name", "ip", "ipv4", "userId") VALUES (13, ?, ?, ?, 1)', ["中转", "198.51.100.13", "198.51.100.13"]);
-      const complete = await caller.create({ name: "complete-latency", port: 32126, protocol: "both", ssProtocol: "ss", method: "aes-256-gcm", password: "12345678", allowPublicIntermediate: true, nodes: [{ hostId: 11 }, { hostId: 13 }, { hostId: 12 }] });
-      await caller.checkLatency({ id: complete.id });
+      await runtime.executeRaw('INSERT INTO "hosts" ("id", "name", "ip", "ipv4", "userId") VALUES (13, ?, ?, ?, 1)', ["中转1", "198.51.100.13", "198.51.100.13"]);
+      await runtime.executeRaw('INSERT INTO "hosts" ("id", "name", "ip", "ipv4", "userId") VALUES (14, ?, ?, ?, 1)', ["中转2", "198.51.100.14", "198.51.100.14"]);
+      const complete = await caller.create({ name: "complete-latency", port: 32126, protocol: "both", ssProtocol: "ss", method: "aes-256-gcm", password: "12345678", allowPublicIntermediate: true, nodes: [{ hostId: 11 }, { hostId: 13 }, { hostId: 14 }, { hostId: 12 }] });
+      assert.equal(await startFullChainLatencyCheck(complete.id), true, "automatic latency sweep starts a multi-relay chain");
+      assert.equal(await startFullChainLatencyCheck(complete.id), false, "an unfinished sweep is not duplicated");
       const completeNodes = (await caller.list()).find((item) => item.id === complete.id).nodes;
       await applyFullChainRuntimeStatus(11, "full-chain-latency-" + complete.id + "-" + completeNodes[0].id, true, "latency_ms=8");
       await applyFullChainRuntimeStatus(13, "full-chain-latency-" + complete.id + "-" + completeNodes[1].id, true, "latency_ms=12");
+      await applyFullChainRuntimeStatus(14, "full-chain-latency-" + complete.id + "-" + completeNodes[2].id, true, "latency_ms=10");
       const completeChain = (await caller.list()).find((item) => item.id === complete.id);
-      assert.equal(completeChain.latestLatencyMs, 20, "入口到出口延迟为所有跳数累计值");
+      assert.equal(completeChain.latestLatencyMs, 30, "入口到出口延迟为所有跳数累计值");
       const latencyHistory = await caller.latencySeries({ id: complete.id, hours: 72 });
       assert.equal(latencyHistory.length, 1, "完整探测会保存一条全链路延迟记录");
-      assert.equal(latencyHistory[0].latencyMs, 20);
-      assert.deepEqual(JSON.parse(latencyHistory[0].details).map((item) => item.latencyMs), [8, 12, null]);
+      assert.equal(latencyHistory[0].latencyMs, 30);
+      assert.deepEqual(JSON.parse(latencyHistory[0].details).map((item) => item.latencyMs), [8, 12, 10, null]);
 
-      const incomplete = await caller.create({ name: "incomplete-latency", port: 32126, protocol: "both", ssProtocol: "ss", method: "aes-256-gcm", password: "12345678", allowPublicIntermediate: true, nodes: [{ hostId: 11 }, { hostId: 13 }, { hostId: 12 }] });
+      const incomplete = await caller.create({ name: "incomplete-latency", port: 32126, protocol: "both", ssProtocol: "ss", method: "aes-256-gcm", password: "12345678", allowPublicIntermediate: true, nodes: [{ hostId: 11 }, { hostId: 13 }, { hostId: 14 }, { hostId: 12 }] });
       await caller.checkLatency({ id: incomplete.id });
       const incompleteNodes = (await caller.list()).find((item) => item.id === incomplete.id).nodes;
       await applyFullChainRuntimeStatus(11, "full-chain-latency-" + incomplete.id + "-" + incompleteNodes[0].id, true, "latency_ms=8");
