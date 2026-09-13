@@ -58,19 +58,21 @@ test("panel can create only a unique chain ending at a marked landing host", () 
       assert.equal(landingService.name, "HK-JP-renamed");
       assert.equal(landingService.password, "abcdefgh");
       const updated = await caller.update({ ...base, id: created.id, name: "HK-JP-edit", port: 32124, nodes: [{ hostId: 11 }, { hostId: 12 }, { hostId: 13 }] });
-      assert.equal(updated.id, created.id, "编辑必须保留原全链路 ID");
+      assert.notEqual(updated.id, created.id, "编辑重部署必须创建独立待部署链路");
       assert.equal(updated.requiresRedeploy, true, "端口变化必须重新检查并部署");
-      const [chain] = await caller.list();
-      assert.equal(chain.name, "HK-JP-edit");
-      assert.equal(chain.port, 32124);
-      assert.equal(chain.status, "draft");
-      assert.deepEqual(chain.nodes.map((node) => Number(node.hostId)), [11, 12, 13]);
-      assert.equal(chain.nodes[0].portStatus, "pending");
-      assert.equal(chain.traffic.bytesInTotal, 12, "重新部署不得清空全链路流量历史");
-      assert.equal((await caller.latencySeries({ id: created.id, hours: 24 })).length, 1, "重新部署不得清空全链路延迟历史");
-      await caller.remove({ id: created.id });
-      assert.equal((await caller.list()).some((item) => item.id === created.id), false, "删除后全链路 item 不得继续出现");
-      await assert.rejects(() => caller.latencySeries({ id: created.id, hours: 24 }), /全链路不存在/, "删除后全链路历史不得继续读取");
+      const replacement = (await caller.list()).find((item) => item.id === updated.id);
+      const original = (await caller.list()).find((item) => item.id === created.id);
+      assert.equal(replacement.name, "HK-JP-edit");
+      assert.equal(replacement.port, 32124);
+      assert.equal(replacement.status, "checking-link");
+      assert.deepEqual(replacement.nodes.map((node) => Number(node.hostId)), [11, 12, 13]);
+      assert.equal(original.status, "running", "保存并检查不得改变旧链路");
+      assert.equal(original.port, 32123, "保存并检查不得改变旧端口");
+      assert.equal(original.traffic.bytesInTotal, 12, "保存待部署配置不得清空旧链路流量历史");
+      assert.equal((await caller.latencySeries({ id: created.id, hours: 24 })).length, 1, "保存待部署配置不得清空旧链路延迟历史");
+      await caller.remove({ id: updated.id });
+      assert.equal((await caller.list()).some((item) => item.id === updated.id), false, "取消必须删除待部署链路");
+      assert.equal((await caller.list()).some((item) => item.id === created.id), true, "取消待部署链路不得删除旧链路");
 
       complete = true;
     } finally { if (global.gc) global.gc(); await runtime.closeDatabase(); if (complete) process.exit(0); }

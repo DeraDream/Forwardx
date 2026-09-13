@@ -89,12 +89,13 @@ export const fullChainsRouter = router({
       return { id: input.id, requiresRedeploy: false };
     }
 
-    await cancelFullChain(input.id);
-    // Agent-side rule removal is asynchronous.  Do not publish the replacement
-    // configuration until the old same-port rules had a chance to disappear.
-    await new Promise((resolve) => setTimeout(resolve, 5000));
-    await db.replaceFullChainConfig(input.id, { ...input, userId: Number(old.userId) });
-    return { id: input.id, requiresRedeploy: true };
+    const replacementId = await db.createFullChain({ ...input, userId: Number(old.userId) });
+    await db.updateFullChain(replacementId, {
+      replacesChainId: input.id,
+      statusMessage: `配置已保存，等待检查后替换 #${input.id}`,
+    });
+    await startFullChain(replacementId);
+    return { id: replacementId, requiresRedeploy: true };
   }),
   start: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ input, ctx }) => {
     const chain = await requireChain(ctx.user, input.id);

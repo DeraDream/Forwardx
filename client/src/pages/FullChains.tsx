@@ -460,7 +460,7 @@ function CreateDialog({
       return undefined;
     }
     setId(result.id);
-    if (!editingChain) createdDraft.current = result.id;
+    if ((result as { requiresRedeploy?: boolean }).requiresRedeploy || !editingChain) createdDraft.current = result.id;
     return result.id;
   };
   const closeDialog = () => {

@@ -371,6 +371,10 @@ export async function deployFullChain(chainId: number) {
   if (!chain) throw new Error("全链路不存在");
   if (String(chain.status) !== "ready-to-deploy")
     throw new Error("请先完成端口和协议检查");
+  if (Number(chain.replacesChainId) > 0) {
+    await cancelFullChain(Number(chain.replacesChainId));
+    await db.updateFullChain(Number(chain.replacesChainId), { status: "replaced", statusMessage: `已由新配置 #${chainId} 替换` });
+  }
   await beginDeploy(chainId);
 }
 
