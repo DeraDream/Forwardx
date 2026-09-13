@@ -236,7 +236,7 @@ export async function startFullChainLatencyCheck(chainId: number) {
   if (!chain || chain.isEnabled === false || String(chain.status) === "cancelled") return false;
   const nodes = await db.getFullChainNodes(chainId);
   const hops = nodes.slice(0, -1);
-  if (!hops.length || hops.some((node: any) => String(node.latencyStatus) === "checking")) return false;
+  if (!hops.length) return false;
   for (const node of hops) {
     await db.updateFullChainNode(Number(node.id), { latencyStatus: "checking", latencyMs: null });
     pushAgentRefresh(Number(node.hostId), "full-chain-latency", { urgent: true });
