@@ -156,12 +156,17 @@ export async function startFullChain(chainId: number) {
   if (!chain) throw new Error("全链路不存在");
   const nodes = await db.getFullChainNodes(chainId);
   if (nodes.length < 2) throw new Error("全链路至少需要两台机器");
+  const ignoredRuleIds = Number(chain.replacesChainId) > 0
+    ? (await db.getFullChainNodes(Number(chain.replacesChainId)))
+      .map((node: any) => Number(node.generatedRuleId || 0))
+      .filter((id: number) => id > 0)
+    : undefined;
   for (const node of nodes) {
     if (
       await db.isPortUsedOnHost(
         Number(node.hostId),
         Number(chain.port),
-        undefined,
+        ignoredRuleIds,
         chain.protocol,
       )
     ) {

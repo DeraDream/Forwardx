@@ -114,7 +114,7 @@ export async function getFullChainLatencySeries(chainId: number, hours: number) 
 }
 
 export async function getFullChainRuntimeTasks(hostId: number) {
-  return queryRaw<any>(`SELECT n.*, c.${q("port")} AS ${q("chainPort")}, c.${q("protocol")} AS ${q("chainProtocol")}
+  return queryRaw<any>(`SELECT n.*, c.${q("port")} AS ${q("chainPort")}, c.${q("protocol")} AS ${q("chainProtocol")}, c.${q("replacesChainId")} AS ${q("replacesChainId")}
     FROM ${q("full_chain_nodes")} n JOIN ${q("full_chains")} c ON c.${q("id")} = n.${q("chainId")}
     WHERE n.${q("hostId")} = ? AND ((c.${q("isEnabled")} = ? AND (n.${q("portStatus")} = 'checking' OR n.${q("protocolStatus")} = 'checking' OR n.${q("latencyStatus")} = 'checking' OR n.${q("firewallStatus")} = 'checking')) OR n.${q("firewallStatus")} = 'removing')`, [hostId, true]);
 }
