@@ -540,7 +540,7 @@ function CreateDialog({
   const ensureDraft = async () => id || save();
   const run = async (kind: "port" | "latency" | "deploy") => {
     try {
-      const chainId = kind === "deploy" ? id : kind === "latency" && editingChain && !id ? Number(editingChain.id) : await ensureDraft();
+      const chainId = kind === "deploy" ? id : await ensureDraft();
       if (!chainId) return;
       if (kind === "port") await check.mutateAsync({ id: chainId });
       if (kind === "latency") {
