@@ -157,7 +157,7 @@ test("full-chain checks all nodes before deployment", () => {
       await runtime.executeRaw('INSERT INTO "hosts" ("id", "name", "ip", "ipv4", "userId") VALUES (14, ?, ?, ?, 1)', ["中转2", "198.51.100.14", "198.51.100.14"]);
       const complete = await caller.create({ name: "complete-latency", port: 32126, protocol: "both", ssProtocol: "ss", method: "aes-256-gcm", password: "12345678", allowPublicIntermediate: true, nodes: [{ hostId: 11 }, { hostId: 13 }, { hostId: 14 }, { hostId: 12 }] });
       assert.equal(await startFullChainLatencyCheck(complete.id), true, "automatic latency sweep starts a multi-relay chain");
-      assert.equal(await startFullChainLatencyCheck(complete.id), false, "an unfinished sweep is not duplicated");
+      assert.equal(await startFullChainLatencyCheck(complete.id), true, "a new latency sweep may replace an unfinished sweep");
       const completeNodes = (await caller.list()).find((item) => item.id === complete.id).nodes;
       await applyFullChainRuntimeStatus(11, "full-chain-latency-" + complete.id + "-" + completeNodes[0].id, true, "latency_ms=8");
       await applyFullChainRuntimeStatus(13, "full-chain-latency-" + complete.id + "-" + completeNodes[1].id, true, "latency_ms=12");
