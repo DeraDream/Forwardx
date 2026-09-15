@@ -537,7 +537,7 @@ function CreateDialog({
     utils.landing.checkPort,
     utils.landing.portCheckStatus,
   ]);
-  const ensureDraft = async () => id || save();
+  const ensureDraft = async () => id || (!editDirty && editingChain ? Number(editingChain.id) : save());
   const run = async (kind: "port" | "latency" | "deploy") => {
     try {
       const chainId = kind === "deploy" ? id : await ensureDraft();
