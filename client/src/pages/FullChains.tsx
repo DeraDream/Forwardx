@@ -424,7 +424,7 @@ function CreateDialog({
     Number(port) >= 1 &&
     Number(port) <= 65535 &&
     password.length >= 8;
-  const editDirty = useMemo(() => !editingChain || !!id || name.trim() !== String(editingChain.name || "") || Number(port) !== Number(editingChain.port) || protocol !== String(editingChain.protocol || "both") || type !== String(editingChain.ssProtocol || "ss") || method !== String(editingChain.method || "") || password !== String(editingChain.password || "") || nodes.length !== (editingChain.nodes || []).length || nodes.some((node, index) => Number(node.hostId) !== Number(editingChain.nodes?.[index]?.hostId) || String(node.ingressIp || "") !== String(editingChain.nodes?.[index]?.ingressIp || "")), [editingChain, id, method, name, nodes, password, port, protocol, type]);
+  const editDirty = useMemo(() => !editingChain || name.trim() !== String(editingChain.name || "") || Number(port) !== Number(editingChain.port) || protocol !== String(editingChain.protocol || "both") || type !== String(editingChain.ssProtocol || "ss") || method !== String(editingChain.method || "") || password !== String(editingChain.password || "") || nodes.length !== (editingChain.nodes || []).length || nodes.some((node, index) => Number(node.hostId) !== Number(editingChain.nodes?.[index]?.hostId) || String(node.ingressIp || "") !== String(editingChain.nodes?.[index]?.ingressIp || "")), [editingChain, method, name, nodes, password, port, protocol, type]);
   const editNeedsRedeploy = !!editingChain && (Number(port) !== Number(editingChain.port) || protocol !== String(editingChain.protocol || "both") || nodes.length !== (editingChain.nodes || []).length || nodes.some((node, index) => Number(node.hostId) !== Number(editingChain.nodes?.[index]?.hostId) || String(node.ingressIp || "") !== String(editingChain.nodes?.[index]?.ingressIp || "")));
   useEffect(() => {
     if (!open || !editingChain) return;
@@ -537,7 +537,11 @@ function CreateDialog({
     utils.landing.checkPort,
     utils.landing.portCheckStatus,
   ]);
-  const ensureDraft = async () => id || (!editDirty && editingChain ? Number(editingChain.id) : save());
+  const ensureDraft = async () => {
+    const chainId = id || (!editDirty && editingChain ? Number(editingChain.id) : await save());
+    if (chainId && !id) setId(chainId);
+    return chainId;
+  };
   const run = async (kind: "port" | "latency" | "deploy") => {
     try {
       const chainId = kind === "deploy" ? id : await ensureDraft();
