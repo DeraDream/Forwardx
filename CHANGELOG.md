@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.3.350] - 2026-09-16
+
+### 发布修复
+
+- 修复全链路部署失败提示 tooltip 与图表组件同名导致的 TypeScript 构建错误。
+- 面板与 APK Release `2.3.350`，Agent `2.2.207`，ForwardX FXP runtime `2.2.117`，Android APP `2.3.97`。
+
 ## [2.3.349] - 2026-09-16
 
 ### 全链路部署与 TCP 延迟探测

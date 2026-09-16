@@ -56,7 +56,7 @@ import { LatencyStabilityStats } from "@/components/LatencyStabilityStats";
 import { LatencyPeakCutToggle } from "@/components/LatencyPeakCutToggle";
 import { DEFAULT_LATENCY_TIME_RANGE_HOURS, filterLatencySeriesByTimeRange, latencyTimeRangeLabel, LatencyTimeRangeSelect, type LatencyTimeRangeHours } from "@/components/LatencyTimeRangeSelect";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip as UiTooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { applyLatencyPeakCut, clipLatencyForChart, getLatencyStabilityStats, getLatencyYAxisMax, getLatencyYAxisTicks } from "@/lib/latencyChart";
 
 type Host = { id: number; name: string; ip: string; isLanding: boolean };
@@ -105,7 +105,7 @@ function StatusBadge({ status, available, checking, unavailable, pending, messag
     </span>
   );
   if (kind !== "error" || !message) return badge;
-  return <TooltipProvider delayDuration={120}><Tooltip><TooltipTrigger asChild>{badge}</TooltipTrigger><TooltipContent side="top" className="relative max-w-72 overflow-visible border-destructive/30 bg-destructive/5 text-destructive"><span className="absolute -bottom-1 left-1/2 h-2 w-2 -translate-x-1/2 rotate-45 border-b border-r border-destructive/30 bg-destructive/5" />{message}</TooltipContent></Tooltip></TooltipProvider>;
+  return <TooltipProvider delayDuration={120}><UiTooltip><TooltipTrigger asChild>{badge}</TooltipTrigger><TooltipContent side="top" className="relative max-w-72 overflow-visible border-destructive/30 bg-destructive/5 text-destructive"><span className="absolute -bottom-1 left-1/2 h-2 w-2 -translate-x-1/2 rotate-45 border-b border-r border-destructive/30 bg-destructive/5" />{message}</TooltipContent></UiTooltip></TooltipProvider>;
 }
 
 function Status({ node, protocol, deploying }: { node: any; protocol?: string; deploying?: boolean }) {
