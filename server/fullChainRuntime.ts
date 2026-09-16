@@ -1,5 +1,6 @@
 import * as db from "./db";
 import { pushAgentRefresh } from "./agentEvents";
+import { createHopTestBatch, recordHopTestResult, registerHopTest } from "./hopTestState";
 
 const runtimePrefix = "full-chain-";
 const AGENT_STEP_TIMEOUT_MS = 3 * 60 * 1000;
@@ -264,19 +265,25 @@ export async function startFullChainLatencyCheck(chainId: number) {
   const nodes = await db.getFullChainNodes(chainId);
   const hops = nodes.slice(0, -1);
   if (!hops.length) return false;
-  const batchId = `fc-${chainId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const batchId = createHopTestBatch("full-chain", chainId);
   await db.updateFullChain(chainId, { latencyBatchId: batchId, latestLatencyMs: null });
+  const unavailable: any[] = [];
   for (const [index, node] of hops.entries()) {
     const target = nodes[index + 1];
     const targetIp = endpoint(target, target?.ingressIp);
+    const meta = { kind: "full-chain", chainId, nodeId: Number(node.id), targetIp, targetPort: Number(chain.port), method: "tcp", hopLabel: `${index + 1}/${hops.length}`, routeLabel: `${node.hostName || `主机${node.hostId}`} -> ${target.hostName || `主机${target.hostId}`}`, batchId, latencyMode: "remaining-path" as const };
+    registerHopTest(batchId, Number(node.id));
     if (!targetIp) {
-      await db.updateFullChainNode(Number(node.id), { latencyStatus: "error", latencyMs: null });
+      await db.updateFullChainNode(Number(node.id), { latencyStatus: "checking", latencyMs: null });
+      unavailable.push(meta);
       continue;
     }
     await db.updateFullChainNode(Number(node.id), { latencyStatus: "checking", latencyMs: null });
-    await db.createForwardTest({ ruleId: 0, hostId: Number(node.hostId), userId: Number(chain.userId), status: "pending", listenOk: false, targetReachable: false, forwardOk: false, message: JSON.stringify({ kind: "full-chain", chainId, nodeId: Number(node.id), targetIp, targetPort: Number(chain.port), hopLabel: `${index + 1}/${hops.length}`, routeLabel: `${node.hostName || `主机${node.hostId}`} -> ${target.hostName || `主机${target.hostId}`}`, batchId }) } as any);
+    await db.createForwardTest({ ruleId: 0, hostId: Number(node.hostId), userId: Number(chain.userId), status: "pending", listenOk: false, targetReachable: false, forwardOk: false, message: JSON.stringify(meta) } as any);
     pushAgentRefresh(Number(node.hostId), "full-chain-latency", { urgent: true });
   }
+  for (const meta of unavailable)
+    await applyFullChainLatencyTestResult(meta, false, null, "下一跳没有可用入口 IP");
   await finishLatencyCheck(chainId);
   return true;
 }
@@ -289,16 +296,26 @@ export async function applyFullChainLatencyTestResult(meta: any, success: boolea
   const nodes = await db.getFullChainNodes(chainId);
   const node = nodes.find((item: any) => Number(item.id) === nodeId);
   if (!node || node.latencyStatus !== "checking") return true;
-  await db.updateFullChainNode(nodeId, { latencyStatus: success && Number(latencyMs) > 0 ? "done" : "error", latencyMs: success ? Math.round(Number(latencyMs)) : null });
+  const measurable = success && Number.isFinite(Number(latencyMs));
+  await db.updateFullChainNode(nodeId, { latencyStatus: measurable ? "done" : "error", latencyMs: measurable ? Number(latencyMs) : null });
+  const aggregate = recordHopTestResult(nodeId, {
+    success: measurable,
+    latencyMs: measurable ? Number(latencyMs) : null,
+    message: detail,
+    hopLabel: String(meta.hopLabel || "hop"),
+    routeLabel: typeof meta.routeLabel === "string" ? meta.routeLabel : null,
+    method: "tcp",
+  }, {
+    successPrefix: "全链路逐跳测试成功",
+    failurePrefix: "全链路逐跳测试失败",
+    latencyMode: "remaining-path",
+  });
+  if (!aggregate) return true;
   const fresh = await db.getFullChainNodes(chainId), hops = fresh.slice(0, -1);
-  if (hops.some((item: any) => item.latencyStatus === "checking")) return true;
-  const allDone = hops.every((item: any) => item.latencyStatus === "done");
-  const raw = hops.map((item: any) => Math.max(0, Number(item.latencyMs) || 0));
-  const details = hops.map((item: any, index: number) => ({ hostId: item.hostId, name: item.hostName, latencyMs: item.latencyStatus === "done" ? index === hops.length - 1 ? raw[index] : Math.max(0, raw[index] - raw[index + 1]) : null, isTimeout: item.latencyStatus !== "done", message: item.id === nodeId ? detail : null }));
-  const total = allDone ? raw[0] : null;
-  if (allDone) await Promise.all(hops.map((item: any, index: number) => db.updateFullChainNode(Number(item.id), { latencyMs: details[index].latencyMs })));
-  await db.updateFullChain(chainId, { latestLatencyMs: total });
-  await db.recordFullChainLatency(chainId, total, details);
+  const details = aggregate.details.map((detail, index) => ({ hostId: hops[index]?.hostId, name: hops[index]?.hostName, latencyMs: detail.latencyMs, isTimeout: !detail.success, message: detail.message }));
+  await Promise.all(hops.map((node: any, index: number) => db.updateFullChainNode(Number(node.id), { latencyStatus: aggregate.details[index]?.success ? "done" : "error", latencyMs: aggregate.details[index]?.latencyMs ?? null })));
+  await db.updateFullChain(chainId, { latestLatencyMs: aggregate.success ? aggregate.latencyMs : null });
+  await db.recordFullChainLatency(chainId, aggregate.success ? aggregate.latencyMs : null, details);
   return true;
 }
 
