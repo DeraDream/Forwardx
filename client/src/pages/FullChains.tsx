@@ -72,6 +72,19 @@ const nodeLatencyDetails = (node: any): any[] => {
     return [];
   }
 };
+const nodeLabel = (node: any) => node?.forwardGroupName || node?.hostName || `主机 #${node?.hostId || "-"}`;
+const routeEnds = (value: unknown) => {
+  const parts = String(value || "").split(/\s*(?:->|→)\s*/).filter(Boolean);
+  return parts.length > 1 ? [parts[0], parts.slice(1).join(" -> ")] : [];
+};
+const displayedHop = (node: any, forwardChainExitOnly = false) => {
+  const detail = forwardChainExitOnly && String(node?.nodeType || "host") === "forward-chain"
+    ? nodeLatencyDetails(node).at(-1)
+    : null;
+  return detail
+    ? { latencyMs: detail.latencyMs, status: detail.success ? "done" : "error" }
+    : { latencyMs: node?.latencyMs, status: node?.latencyStatus };
+};
 type PortCheck = { available: boolean | null; message: string } | null;
 const busy = new Set(["checking-link", "checking-port", "checking-protocol", "deploying"]);
 const normal = ["aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305"];
@@ -137,6 +150,8 @@ function ChainNodes({
   fixedLast = false,
   protocol,
   deploying,
+  showForwardChainDetails = true,
+  forwardChainExitOnly = false,
 }: {
   nodes: any[];
   hosts: Map<number, Host>;
@@ -146,6 +161,8 @@ function ChainNodes({
   fixedLast?: boolean;
   protocol?: string;
   deploying?: boolean;
+  showForwardChainDetails?: boolean;
+  forwardChainExitOnly?: boolean;
 }) {
   const sortable = useSortableReorder({
     items: nodes,
@@ -284,7 +301,7 @@ function ChainNodes({
               </div>
             )}
           </SortableItem>
-          {runtime && String(node.nodeType || "host") === "forward-chain" && nodeLatencyDetails(node).length > 0 && (
+          {runtime && showForwardChainDetails && String(node.nodeType || "host") === "forward-chain" && nodeLatencyDetails(node).length > 0 && (
             <div className="mx-4 border-x border-dashed px-3 py-1.5 text-[11px] text-muted-foreground">
               {nodeLatencyDetails(node).map((detail: any, detailIndex: number) => (
                 <div key={`${node.id || nodeKey(node)}-detail-${detailIndex}`} className="flex justify-between gap-3">
@@ -301,14 +318,14 @@ function ChainNodes({
               <span className="h-3 border-l border-dashed" />
               <span>
                 下一跳延迟：
-                {node.latencyMs !== null && node.latencyMs !== undefined ? (
-                  `${node.latencyMs} ms`
-                ) : node.latencyStatus === "checking" ? (
+                {displayedHop(node, forwardChainExitOnly).latencyMs !== null && displayedHop(node, forwardChainExitOnly).latencyMs !== undefined ? (
+                  `${displayedHop(node, forwardChainExitOnly).latencyMs} ms`
+                ) : displayedHop(node, forwardChainExitOnly).status === "checking" ? (
                   <span className="inline-flex items-center gap-1">
                     <Loader2 className="inline h-3 w-3 animate-spin" />
                     检测中…
                   </span>
-                ) : node.latencyStatus === "error" ? (
+                ) : displayedHop(node, forwardChainExitOnly).status === "error" ? (
                   "检测失败"
                 ) : (
                   "待检测"
@@ -321,6 +338,61 @@ function ChainNodes({
       ))}
     </SortableReorderContext>
   );
+}
+
+type ProbeSegment = { from: string; to: string; latencyMs: number | null; status: string };
+
+function fullChainProbeSegments(nodes: any[]): ProbeSegment[] {
+  const segments: ProbeSegment[] = [];
+  for (let index = 0; index < nodes.length - 1; index += 1) {
+    const node = nodes[index];
+    const details = String(node?.nodeType || "host") === "forward-chain" ? nodeLatencyDetails(node) : [];
+    if (!details.length) {
+      segments.push({ from: nodeLabel(node), to: nodeLabel(nodes[index + 1]), latencyMs: node.latencyMs ?? null, status: node.latencyStatus || "pending" });
+      continue;
+    }
+    const detailSegments = details.map((detail: any, detailIndex: number) => {
+      const ends = routeEnds(detail.routeLabel);
+      return {
+        from: ends[0] || (detailIndex ? segments.at(-1)?.to || nodeLabel(node) : nodeLabel(node)),
+        to: ends[1] || `链内节点 ${detailIndex + 2}`,
+        latencyMs: detail.success && detail.latencyMs !== null ? Number(detail.latencyMs) : null,
+        status: detail.success ? "done" : "error",
+      };
+    });
+    if (segments.length && detailSegments[0]?.from) segments[segments.length - 1].to = detailSegments[0].from;
+    const measuredTotal = detailSegments.every((segment) => segment.latencyMs !== null)
+      ? detailSegments.reduce((sum, segment) => sum + Number(segment.latencyMs), 0)
+      : null;
+    const logicalTotal = node.latencyStatus === "done" && node.latencyMs !== null ? Number(node.latencyMs) : null;
+    if (measuredTotal !== null && logicalTotal !== null && measuredTotal > logicalTotal && detailSegments.at(-1)?.latencyMs !== null) {
+      detailSegments[detailSegments.length - 1].latencyMs = Math.max(0, Number(detailSegments.at(-1)!.latencyMs) - (measuredTotal - logicalTotal));
+    }
+    segments.push(...detailSegments);
+  }
+  return segments;
+}
+
+function FullChainProbePath({ chain }: { chain: any }) {
+  const segments = fullChainProbeSegments(chain.nodes || []);
+  if (!segments.length) return <div className="py-8 text-center text-sm text-muted-foreground">暂无可探测链路</div>;
+  return <div className="py-2">
+    <div className="rounded-lg border bg-card px-4 py-3 text-sm font-medium shadow-sm">{segments[0].from}</div>
+    {segments.map((segment, index) => {
+      const checking = segment.status === "checking";
+      const failed = segment.status === "error";
+      const complete = segment.latencyMs !== null;
+      return <div key={`${segment.from}-${segment.to}-${index}`}>
+        <div className="relative flex h-14 items-center justify-center">
+          <span className={`absolute inset-y-0 w-px ${checking ? "animate-pulse bg-primary/70" : failed ? "bg-destructive/70" : complete ? "bg-emerald-500/70" : "bg-border"}`} />
+          <span className={`relative rounded-full bg-background px-3 py-1 text-xs font-medium tabular-nums ${failed ? "text-destructive" : complete ? "text-emerald-600" : "text-muted-foreground"}`}>
+            {checking ? <span className="inline-flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" />探测中</span> : failed ? "失败" : complete ? `${segment.latencyMs} ms` : "待探测"}
+          </span>
+        </div>
+        <div className="rounded-lg border bg-card px-4 py-3 text-sm font-medium shadow-sm">{segment.to}</div>
+      </div>;
+    })}
+  </div>;
 }
 
 type FullChainLatencyPoint = { label: string; fullLabel: string; latency: number; latencyMs: number; chartLatency: number; isTimeout: boolean };
@@ -846,6 +918,8 @@ function CreateDialog({
                 fixedLast
                 protocol={active?.protocol || protocol}
                 deploying={active?.status === "deploying"}
+                showForwardChainDetails={false}
+                forwardChainExitOnly
               />
             </div>
           </>
@@ -983,7 +1057,7 @@ export default function FullChainsPage() {
           editingChain={editingChain}
         />
         <Dialog open={latencyChainId !== null} onOpenChange={(next) => !next && setLatencyChainId(null)}>
-          <DialogContent className="max-w-2xl"><DialogHeader><DialogTitle>全链路延迟探测</DialogTitle><DialogDescription>逐跳探测入口到出口；总延迟为全部跳数累计。</DialogDescription></DialogHeader>{data.filter((chain: any) => Number(chain.id) === latencyChainId).map((chain: any) => <div key={chain.id} className="space-y-4"><ChainNodes nodes={chain.nodes || []} hosts={new Map()} runtime /><div className="flex items-center justify-between border-t pt-3 text-sm"><span>入口到出口总延迟</span><span>{chain.latestLatencyMs !== null && chain.latestLatencyMs !== undefined ? `${chain.latestLatencyMs} ms` : "待检测"}</span></div><DialogFooter><Button disabled={checkLatency.isPending} onClick={() => checkLatency.mutate({ id: chain.id })}>{checkLatency.isPending ? "探测中..." : "链路测试"}</Button></DialogFooter></div>)}</DialogContent>
+          <DialogContent className="max-h-[92vh] max-w-xl overflow-y-auto"><DialogHeader><DialogTitle className="flex items-center gap-2"><Activity className="h-5 w-5" />延迟探测</DialogTitle>{data.filter((chain: any) => Number(chain.id) === latencyChainId).map((chain: any) => <DialogDescription key={chain.id}>{chain.name}</DialogDescription>)}</DialogHeader>{data.filter((chain: any) => Number(chain.id) === latencyChainId).map((chain: any) => { const testing = (chain.nodes || []).slice(0, -1).some((node: any) => node.latencyStatus === "checking"); return <div key={chain.id} className="space-y-3"><FullChainProbePath chain={chain} /><div className="flex items-center justify-between border-t pt-3 text-sm"><span className="text-muted-foreground">合计</span><span className={`font-semibold tabular-nums ${chain.latestLatencyMs !== null && chain.latestLatencyMs !== undefined ? "text-emerald-600" : "text-muted-foreground"}`}>{testing ? "探测中" : chain.latestLatencyMs !== null && chain.latestLatencyMs !== undefined ? `${chain.latestLatencyMs} ms` : "-"}</span></div><DialogFooter><Button disabled={checkLatency.isPending || testing} onClick={() => checkLatency.mutate({ id: chain.id })}>{checkLatency.isPending || testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Activity className="h-4 w-4" />}{checkLatency.isPending || testing ? "探测中..." : "链路测试"}</Button></DialogFooter></div>; })}</DialogContent>
         </Dialog>
         <FullChainLatencyHistory chainId={historyChainId} chainName={data.find((chain: any) => Number(chain.id) === historyChainId)?.name || ""} open={historyChainId !== null} onOpenChange={(next) => !next && setHistoryChainId(null)} />
         <Dialog open={!!qrChain} onOpenChange={(next) => !next && setQrChain(null)}><DialogContent className="max-w-sm"><DialogTitle>{qrChain?.name || "全链路"} SS 二维码</DialogTitle><DialogDescription>使用 Shadowsocks 客户端扫码添加。</DialogDescription><div className="flex justify-center py-3">{qrData ? <img className="h-60 w-60 rounded-md bg-white p-2" src={qrData} alt="全链路 SS 二维码" /> : <div className="grid h-60 w-60 place-items-center text-sm text-muted-foreground">二维码生成中…</div>}</div><DialogFooter><Button variant="outline" onClick={() => void copyTextToClipboard(fullChainSsUri(qrChain)).then(() => toast.success("全链路 SS 链接已复制")).catch(() => toast.error("复制失败"))}>复制 SS 链接</Button><Button onClick={() => setQrChain(null)}>关闭</Button></DialogFooter></DialogContent></Dialog>

@@ -272,16 +272,15 @@ test("full-chain waits for referenced chain rules and records its internal hop l
       const pending = (await runtime.queryRaw('SELECT "message" FROM "forward_tests" WHERE "status" = ? ORDER BY "id"', ["pending"])).map((row) => JSON.parse(row.message)).filter((meta) => meta.chainId === created.id);
       const main = pending.filter((meta) => !meta.diagnosticOnly);
       const detail = pending.filter((meta) => meta.diagnosticOnly);
-      assert.equal(main.length, 3, "全链路总延迟仍按逻辑节点探测");
+      assert.equal(main.length, 2, "普通节点按剩余路径探测，转发链不得依赖入口机回探自身公网端口");
       assert.equal(detail.length, 2, "引用转发链额外探测内部两跳");
       await applyFullChainLatencyTestResult(detail[0], true, 80, "80ms");
       await applyFullChainLatencyTestResult(detail[1], true, 30, "30ms");
       await applyFullChainLatencyTestResult(main[0], true, 120, "120ms");
-      await applyFullChainLatencyTestResult(main[1], true, 100, "100ms");
-      await applyFullChainLatencyTestResult(main[2], true, 20, "20ms");
+      await applyFullChainLatencyTestResult(main[1], true, 20, "20ms");
       chain = (await caller.list()).find((item) => item.id === created.id);
       assert.equal(chain.latestLatencyMs, 120, "链内明细不得重复累加到入口总延迟");
-      assert.deepEqual(chain.nodes.slice(0, -1).map((node) => node.latencyMs), [20, 80, 20]);
+      assert.deepEqual(chain.nodes.slice(0, -1).map((node) => node.latencyMs), [40, 60, 20]);
       assert.deepEqual(JSON.parse(chain.nodes[1].latencyDetails).map((item) => item.latencyMs), [50, 30]);
     } finally { await runtime.closeDatabase(); }
   `;

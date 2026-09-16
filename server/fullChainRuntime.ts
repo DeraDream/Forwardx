@@ -327,21 +327,17 @@ export async function startFullChainLatencyCheck(chainId: number) {
   for (const [index, node] of hops.entries()) {
     const target = nodes[index + 1];
     const sourceEntry = await nodeEntry(node);
-    const targetEntry = String(node.nodeType || "host") === "forward-chain" ? sourceEntry : await nodeEntry(target);
+    const targetEntry = await nodeEntry(target);
     const targetIp = targetEntry.ip;
     const sourceName = node.forwardGroupName || node.hostName || `主机${sourceEntry.hostId}`;
-    const targetName = String(node.nodeType || "host") === "forward-chain" ? `${sourceName}入口` : target.forwardGroupName || target.hostName || `主机${targetEntry.hostId}`;
+    const targetName = target.forwardGroupName || target.hostName || `主机${targetEntry.hostId}`;
     const meta = { kind: "full-chain", chainId, nodeId: Number(node.id), targetIp, targetPort: Number(chain.port), method: "tcp", hopLabel: `${index + 1}/${hops.length}`, routeLabel: `${sourceName} -> ${targetName}`, batchId, latencyMode: "remaining-path" as const };
     registerHopTest(batchId, Number(node.id));
-    if (!targetIp) {
-      await db.updateFullChainNode(Number(node.id), { latencyStatus: "checking", latencyMs: null, latencyDetails: null });
-      unavailable.push(meta);
-      continue;
-    }
     await db.updateFullChainNode(Number(node.id), { latencyStatus: "checking", latencyMs: null, latencyDetails: null });
-    await db.createForwardTest({ ruleId: 0, hostId: sourceEntry.hostId, userId: Number(chain.userId), status: "pending", listenOk: false, targetReachable: false, forwardOk: false, message: JSON.stringify(meta) } as any);
-    pushAgentRefresh(sourceEntry.hostId, "full-chain-latency", { urgent: true });
 
+    // A referenced chain must be measured from its real member hosts. Asking
+    // its entry host to connect back to its own public listener depends on NAT
+    // hairpin support and can fail even while every real hop is healthy.
     if (String(node.nodeType || "host") === "forward-chain" && Number(node.generatedRuleId) > 0) {
       const templateRule = await db.getForwardRuleById(Number(node.generatedRuleId));
       const group = await db.getForwardGroupById(Number(node.forwardGroupId)) as any;
@@ -365,8 +361,15 @@ export async function startFullChainLatencyCheck(chainId: number) {
           await db.createForwardTest({ ruleId: 0, hostId: Number(probe.fromHostId), userId: Number(chain.userId), status: "pending", listenOk: false, targetReachable: false, forwardOk: false, message: JSON.stringify(probeMeta) } as any);
           pushAgentRefresh(Number(probe.fromHostId), "full-chain-latency-detail", { urgent: true });
         }
+        continue;
       }
     }
+    if (!targetIp) {
+      unavailable.push(meta);
+      continue;
+    }
+    await db.createForwardTest({ ruleId: 0, hostId: sourceEntry.hostId, userId: Number(chain.userId), status: "pending", listenOk: false, targetReachable: false, forwardOk: false, message: JSON.stringify(meta) } as any);
+    pushAgentRefresh(sourceEntry.hostId, "full-chain-latency", { urgent: true });
   }
   for (const meta of unavailable)
     await applyFullChainLatencyTestResult(meta, false, null, "下一跳没有可用入口 IP");
@@ -383,7 +386,7 @@ export async function applyFullChainLatencyTestResult(meta: any, success: boolea
   const nodes = await db.getFullChainNodes(chainId);
   const node = nodes.find((item: any) => Number(item.id) === nodeId);
   if (!node || (!meta?.diagnosticOnly && node.latencyStatus !== "checking")) return true;
-  const measurable = success && Number.isFinite(Number(latencyMs));
+  let measurable = success && Number.isFinite(Number(latencyMs));
   if (meta?.diagnosticOnly) {
     const aggregate = recordHopTestResult(Number(meta.probeKey), {
       success: measurable,
@@ -397,8 +400,22 @@ export async function applyFullChainLatencyTestResult(meta: any, success: boolea
       failurePrefix: "转发链逐跳测试失败",
       latencyMode: meta.latencyMode === "multi-source-remaining-path" ? "multi-source-remaining-path" : meta.latencyMode === "remaining-path" ? "remaining-path" : "sum",
     });
-    if (aggregate) await db.updateFullChainNode(nodeId, { latencyDetails: JSON.stringify(aggregate.details) });
-    return true;
+    if (!aggregate) return true;
+    await db.updateFullChainNode(nodeId, { latencyDetails: JSON.stringify(aggregate.details) });
+    success = aggregate.success;
+    latencyMs = aggregate.latencyMs;
+    detail = aggregate.message;
+    const nodeIndex = nodes.findIndex((item: any) => Number(item.id) === nodeId);
+    const nextNode = nodes[nodeIndex + 1];
+    meta = {
+      ...meta,
+      diagnosticOnly: false,
+      batchId: meta.parentBatchId,
+      method: "tcp",
+      hopLabel: `${nodeIndex + 1}/${Math.max(1, nodes.length - 1)}`,
+      routeLabel: `${node.forwardGroupName || node.hostName || "转发链"} -> ${nextNode?.forwardGroupName || nextNode?.hostName || "下一跳"}`,
+    };
+    measurable = success && Number.isFinite(Number(latencyMs));
   }
   await db.updateFullChainNode(nodeId, { latencyStatus: measurable ? "done" : "error", latencyMs: measurable ? Number(latencyMs) : null });
   const aggregate = recordHopTestResult(nodeId, {
