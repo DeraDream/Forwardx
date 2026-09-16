@@ -312,10 +312,12 @@ export async function applyFullChainLatencyTestResult(meta: any, success: boolea
   });
   if (!aggregate) return true;
   const fresh = await db.getFullChainNodes(chainId), hops = fresh.slice(0, -1);
-  const details = aggregate.details.map((detail, index) => ({ hostId: hops[index]?.hostId, name: hops[index]?.hostName, latencyMs: detail.latencyMs, isTimeout: !detail.success, message: detail.message }));
-  await Promise.all(hops.map((node: any, index: number) => db.updateFullChainNode(Number(node.id), { latencyStatus: aggregate.details[index]?.success ? "done" : "error", latencyMs: aggregate.details[index]?.latencyMs ?? null })));
-  await db.updateFullChain(chainId, { latestLatencyMs: aggregate.success ? aggregate.latencyMs : null });
-  await db.recordFullChainLatency(chainId, aggregate.success ? aggregate.latencyMs : null, details);
+  const segmentTotal = aggregate.details.reduce((sum, item) => sum + (item.success ? Number(item.latencyMs) || 0 : 0), 0);
+  const consistent = aggregate.success && segmentTotal === Number(aggregate.latencyMs);
+  const details = aggregate.details.map((item, index) => ({ hostId: hops[index]?.hostId, name: hops[index]?.hostName, latencyMs: item.latencyMs, isTimeout: aggregate.success ? !consistent : !item.success, message: item.message || (aggregate.success && !consistent ? "逐跳延迟与入口总延迟不一致" : null) }));
+  await Promise.all(hops.map((node: any, index: number) => db.updateFullChainNode(Number(node.id), { latencyStatus: aggregate.success && !consistent ? "error" : (aggregate.details[index]?.success ? "done" : "error"), latencyMs: aggregate.details[index]?.latencyMs ?? null })));
+  await db.updateFullChain(chainId, { latestLatencyMs: consistent ? aggregate.latencyMs : null });
+  await db.recordFullChainLatency(chainId, consistent ? aggregate.latencyMs : null, details);
   return true;
 }
 
