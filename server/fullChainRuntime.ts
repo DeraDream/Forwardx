@@ -296,6 +296,7 @@ export async function applyFullChainLatencyTestResult(meta: any, success: boolea
   const raw = hops.map((item: any) => Math.max(0, Number(item.latencyMs) || 0));
   const details = hops.map((item: any, index: number) => ({ hostId: item.hostId, name: item.hostName, latencyMs: item.latencyStatus === "done" ? index === hops.length - 1 ? raw[index] : Math.max(0, raw[index] - raw[index + 1]) : null, isTimeout: item.latencyStatus !== "done", message: item.id === nodeId ? detail : null }));
   const total = allDone ? raw[0] : null;
+  if (allDone) await Promise.all(hops.map((item: any, index: number) => db.updateFullChainNode(Number(item.id), { latencyMs: details[index].latencyMs })));
   await db.updateFullChain(chainId, { latestLatencyMs: total });
   await db.recordFullChainLatency(chainId, total, details);
   return true;

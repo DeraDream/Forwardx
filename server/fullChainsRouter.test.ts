@@ -178,6 +178,7 @@ test("full-chain checks all nodes before deployment", () => {
       await applyFullChainLatencyTestResult(currentMeta[2], true, 100, "100ms");
       const completeChain = (await caller.list()).find((item) => item.id === complete.id);
       assert.equal(completeChain.latestLatencyMs, 146, "入口 TCP 探测值就是入口到出口总延迟");
+      assert.deepEqual(completeChain.nodes.slice(0, -1).map((item) => item.latencyMs), [2, 44, 100], "延迟弹窗必须从全链路列表得到逐跳差分值");
       const latencyHistory = await caller.latencySeries({ id: complete.id, hours: 72 });
       assert.equal(latencyHistory.length, 1, "完整探测会保存一条全链路延迟记录");
       assert.equal(latencyHistory[0].latencyMs, 146);
@@ -191,6 +192,7 @@ test("full-chain checks all nodes before deployment", () => {
       await applyFullChainLatencyTestResult(incompleteMeta[2], true, 10, "10ms");
       const incompleteChain = (await caller.list()).find((item) => item.id === incomplete.id);
       assert.equal(incompleteChain.latestLatencyMs, null, "入口到出口缺少任一跳延迟时不得显示链路总延迟");
+      assert.deepEqual(incompleteChain.nodes.slice(0, -1).map((item) => item.latencyStatus), ["done", "error", "done"], "延迟弹窗必须从全链路列表得知哪一跳检测失败");
       const incompleteHistory = await caller.latencySeries({ id: incomplete.id, hours: 72 });
       assert.equal(incompleteHistory.length, 1, "任一跳失败也必须保存一次全链路探测结果");
       assert.equal(incompleteHistory[0].isTimeout, true, "失败探测必须作为失败记录保存");
