@@ -115,7 +115,8 @@ export async function recordFullChainLatency(chainId: number, latencyMs: number 
 }
 
 export async function getFullChainLatencySeries(chainId: number, hours: number) {
-  return queryRaw<any>(`SELECT * FROM ${q("full_chain_latency_stats")} WHERE ${q("chainId")} = ? AND ${q("recordedAt")} >= ? ORDER BY ${q("recordedAt")} ASC`, [chainId, now() - hours * 3600]);
+  const rows = await queryRaw<any>(`SELECT * FROM ${q("full_chain_latency_stats")} WHERE ${q("chainId")} = ? AND ${q("recordedAt")} >= ? ORDER BY ${q("recordedAt")} ASC`, [chainId, now() - hours * 3600]);
+  return rows.map((row) => ({ ...row, isTimeout: !!row.isTimeout }));
 }
 
 export async function getFullChainRuntimeTasks(hostId: number) {
