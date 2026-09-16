@@ -16,18 +16,49 @@ async function requireChain(user: any, id: number) {
   return chain;
 }
 
-const nodeInput = z.object({ hostId: z.number().int().positive(), ingressIp: z.string().trim().max(253).optional().nullable() });
+const hostNodeInput = z.object({ nodeType: z.literal("host").optional(), hostId: z.number().int().positive(), forwardGroupId: z.never().optional(), ingressIp: z.string().trim().max(253).optional().nullable() });
+const forwardChainNodeInput = z.object({ nodeType: z.literal("forward-chain"), forwardGroupId: z.number().int().positive(), hostId: z.never().optional(), ingressIp: z.never().optional() });
+const nodeInput = z.union([hostNodeInput, forwardChainNodeInput]);
 const createInput = z.object({
   name: z.string().trim().min(1).max(80), port: z.number().int().min(1).max(65535), protocol: z.enum(["tcp", "both"]).default("both"),
   ssProtocol: z.enum(["ss", "ss2022"]), method: z.enum(methods), password: z.string().trim().min(8).max(256),
   allowPublicIntermediate: z.boolean().default(true), nodes: z.array(nodeInput).min(2).max(12),
 });
 
-function sameNodes(current: any[], next: Array<{ hostId: number; ingressIp?: string | null }>) {
+function sameNodes(current: any[], next: Array<{ nodeType?: "host" | "forward-chain"; hostId?: number; forwardGroupId?: number; ingressIp?: string | null }>) {
   return current.length === next.length && current.every((node, index) =>
-    Number(node.hostId) === Number(next[index].hostId) &&
+    String(node.nodeType || "host") === String(next[index].nodeType || "host") &&
+    Number(node.hostId || 0) === Number(next[index].hostId || 0) &&
+    Number(node.forwardGroupId || 0) === Number(next[index].forwardGroupId || 0) &&
     String(node.ingressIp || "") === String(next[index].ingressIp || ""),
   );
+}
+
+async function validateNodes(user: any, nodes: z.infer<typeof nodeInput>[]) {
+  const hostIds = nodes.flatMap((node) => "hostId" in node && node.hostId ? [node.hostId] : []);
+  const groupIds = nodes.flatMap((node) => "forwardGroupId" in node && node.forwardGroupId ? [node.forwardGroupId] : []);
+  if (new Set(hostIds).size !== hostIds.length) throw new Error("同一台机器只能出现一次");
+  if (new Set(groupIds).size !== groupIds.length) throw new Error("同一条转发链只能出现一次");
+  for (const hostId of hostIds) {
+    const host = await db.getHostById(hostId) as any;
+    if (!host || (!isAdmin(user) && Number(host.userId) !== Number(user.id))) throw new Error("链路中包含无权使用的主机");
+  }
+  const physicalHostIds = new Set(hostIds);
+  for (const groupId of groupIds) {
+    const group = await db.getForwardGroupById(groupId) as any;
+    if (!group || String(group.groupMode) !== "chain" || group.isEnabled === false || (!isAdmin(user) && Number(group.userId) !== Number(user.id))) throw new Error("链路中包含不可用的转发链");
+    const entryGroup = Number(group.entryGroupId) > 0 ? await db.getForwardGroupById(Number(group.entryGroupId)) as any : null;
+    const memberHostIds = [...(entryGroup?.members || []), ...(group.members || [])]
+      .filter((member: any) => member.isEnabled !== false)
+      .map((member: any) => Number(member.hostId || 0))
+      .filter((hostId: number) => hostId > 0);
+    for (const hostId of memberHostIds) {
+      if (physicalHostIds.has(hostId)) throw new Error("同一台机器不能在全链路及所选转发链中重复出现");
+      physicalHostIds.add(hostId);
+    }
+  }
+  const last = nodes.at(-1);
+  if (!last || !("hostId" in last) || !last.hostId || !await db.getLandingHostByHostId(last.hostId)) throw new Error("末端 SS 必须选择已标记的落地机");
 }
 
 export const fullChainsRouter = router({
@@ -42,29 +73,28 @@ export const fullChainsRouter = router({
     const landingIds = new Set(markers.map((row: any) => Number(row.hostId)));
     return hosts.map((host: any) => ({ id: Number(host.id), name: host.name, ip: host.entryIp || host.ipv4 || host.ip || "", isOnline: !!host.isOnline, isLanding: landingIds.has(Number(host.id)) }));
   }),
+  forwardChains: protectedProcedure.query(async ({ ctx }) => Promise.all(((await db.getForwardGroups(ownerId(ctx.user), { includeRuntime: false }) as any[])
+    .filter((group) => String(group.groupMode) === "chain" && group.isEnabled !== false)
+    .map(async (group) => {
+      const entryGroup = Number(group.entryGroupId) > 0 ? await db.getForwardGroupById(Number(group.entryGroupId)) as any : null;
+      const hostIds = [...(entryGroup?.members || []), ...(group.members || [])]
+        .filter((member: any) => member.isEnabled !== false)
+        .map((member: any) => Number(member.hostId || 0))
+        .filter((hostId: number) => hostId > 0);
+      return { id: Number(group.id), name: group.name, forwardType: group.forwardType, members: group.members || [], hostIds: Array.from(new Set(hostIds)) };
+    })) )),
   random: protectedProcedure.query(() => ({ password: secret(), port: Math.floor(20000 + Math.random() * 30000) })),
   create: protectedProcedure.input(createInput).mutation(async ({ input, ctx }) => {
-    if (new Set(input.nodes.map((node) => node.hostId)).size !== input.nodes.length) throw new Error("同一台机器只能出现一次");
+    await validateNodes(ctx.user, input.nodes);
     if ((input.ssProtocol === "ss2022") !== input.method.startsWith("2022-")) throw new Error("SS 类型与加密方式不匹配");
-    for (const node of input.nodes) {
-      const host = await db.getHostById(node.hostId) as any;
-      if (!host || (!isAdmin(ctx.user) && Number(host.userId) !== Number(ctx.user.id))) throw new Error("链路中包含无权使用的主机");
-    }
-    const last = input.nodes[input.nodes.length - 1];
-    if (!await db.getLandingHostByHostId(last.hostId)) throw new Error("末端 SS 必须选择已标记的落地机");
     const id = await db.createFullChain({ ...input, userId: Number(ctx.user.id) });
     return { id };
   }),
   update: protectedProcedure.input(createInput.extend({ id: z.number().int().positive() })).mutation(async ({ input, ctx }) => {
     const old = await requireChain(ctx.user, input.id);
     if (["checking-link", "checking-port", "checking-protocol", "deploying"].includes(String(old.status))) throw new Error("全链路正在执行，暂不能编辑");
-    if (new Set(input.nodes.map((node) => node.hostId)).size !== input.nodes.length) throw new Error("同一台机器只能出现一次");
+    await validateNodes(ctx.user, input.nodes);
     if ((input.ssProtocol === "ss2022") !== input.method.startsWith("2022-")) throw new Error("SS 类型与加密方式不匹配");
-    for (const node of input.nodes) {
-      const host = await db.getHostById(node.hostId) as any;
-      if (!host || (!isAdmin(ctx.user) && Number(host.userId) !== Number(ctx.user.id))) throw new Error("链路中包含无权使用的主机");
-    }
-    if (!await db.getLandingHostByHostId(input.nodes[input.nodes.length - 1].hostId)) throw new Error("末端 SS 必须选择已标记的落地机");
     const oldNodes = await db.getFullChainNodes(input.id);
     let requiresRedeploy =
       Number(old.port) !== input.port ||

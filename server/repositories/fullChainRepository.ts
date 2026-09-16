@@ -7,7 +7,7 @@ const now = () => Math.floor(Date.now() / 1000);
 export type FullChainCreate = {
   userId: number; name: string; port: number; protocol: "tcp" | "both";
   ssProtocol: "ss" | "ss2022"; method: string; password: string;
-  allowPublicIntermediate: boolean; nodes: { hostId: number; ingressIp?: string | null }[];
+  allowPublicIntermediate: boolean; nodes: { nodeType?: "host" | "forward-chain"; hostId?: number; forwardGroupId?: number; ingressIp?: string | null }[];
 };
 
 export async function createFullChain(input: FullChainCreate) {
@@ -17,7 +17,7 @@ export async function createFullChain(input: FullChainCreate) {
     allowPublicIntermediate: input.allowPublicIntermediate, status: "draft", isEnabled: true,
   });
   for (const [sortOrder, node] of input.nodes.entries()) {
-    await insertAndGetId("full_chain_nodes", { chainId: id, hostId: node.hostId, sortOrder, ingressIp: node.ingressIp || null, portStatus: "pending", protocolStatus: "pending", deployStatus: "pending", latencyStatus: "pending" });
+    await insertAndGetId("full_chain_nodes", { chainId: id, nodeType: node.nodeType || "host", hostId: node.hostId || null, forwardGroupId: node.forwardGroupId || null, sortOrder, ingressIp: node.ingressIp || null, portStatus: "pending", protocolStatus: "pending", deployStatus: "pending", latencyStatus: "pending" });
   }
   return id;
 }
@@ -28,8 +28,8 @@ export async function getFullChainById(id: number) {
 }
 
 export async function getFullChainNodes(chainId: number) {
-  return queryRaw<any>(`SELECT n.*, h.${q("name")} AS ${q("hostName")}, COALESCE(h.${q("entryIp")}, h.${q("ipv4")}, h.${q("ip")}) AS ${q("publicIp")}, h.${q("isOnline")} AS ${q("hostOnline")}
-    FROM ${q("full_chain_nodes")} n LEFT JOIN ${q("hosts")} h ON h.${q("id")} = n.${q("hostId")}
+  return queryRaw<any>(`SELECT n.*, h.${q("name")} AS ${q("hostName")}, g.${q("name")} AS ${q("forwardGroupName")}, COALESCE(h.${q("entryIp")}, h.${q("ipv4")}, h.${q("ip")}) AS ${q("publicIp")}, h.${q("isOnline")} AS ${q("hostOnline")}
+    FROM ${q("full_chain_nodes")} n LEFT JOIN ${q("hosts")} h ON h.${q("id")} = n.${q("hostId")} LEFT JOIN ${q("forward_groups")} g ON g.${q("id")} = n.${q("forwardGroupId")}
     WHERE n.${q("chainId")} = ? ORDER BY n.${q("sortOrder")} ASC`, [chainId]);
 }
 
@@ -106,7 +106,7 @@ export async function replaceFullChainConfig(id: number, input: FullChainCreate)
     landingServiceId: null, latestLatencyMs: null, isEnabled: true, status: "draft", statusMessage: "配置已保存，等待重新检查",
   });
   for (const [sortOrder, node] of input.nodes.entries()) {
-    await insertAndGetId("full_chain_nodes", { chainId: id, hostId: node.hostId, sortOrder, ingressIp: node.ingressIp || null, portStatus: "pending", protocolStatus: "pending", deployStatus: "pending", latencyStatus: "pending" });
+    await insertAndGetId("full_chain_nodes", { chainId: id, nodeType: node.nodeType || "host", hostId: node.hostId || null, forwardGroupId: node.forwardGroupId || null, sortOrder, ingressIp: node.ingressIp || null, portStatus: "pending", protocolStatus: "pending", deployStatus: "pending", latencyStatus: "pending" });
   }
 }
 

@@ -190,6 +190,12 @@ test("normalizes PostgreSQL string numbers for every Agent self-test payload", (
     targetIp: "198.51.100.12",
     targetPort: 32123,
   });
+  assert.deepEqual(buildMetaAgentSelfTestPayload({ id: "92", ruleId: "0" }, {
+    kind: "full-chain", chainId: 7, nodeId: 12, method: "ping", targetIp: "198.51.100.13", targetPort: 0,
+  }), {
+    testId: 92, kind: "full-chain", ruleId: 0, forwardType: "full-chain",
+    protocol: "ping", method: "ping", sourcePort: 0, targetIp: "198.51.100.13", targetPort: 0,
+  }, "全链路引用转发链时必须保留链内探测方式");
 
   const metaPayload = buildMetaAgentSelfTestPayload({ id: "93", ruleId: "19" }, {
     kind: "forward-via-tunnel-entry",

@@ -31,6 +31,14 @@ test("panel can create only a unique chain ending at a marked landing host", () 
       const base = { name: "HK-JP", port: 32123, protocol: "both", ssProtocol: "ss", method: "aes-256-gcm", password: "12345678", allowPublicIntermediate: false };
       await assert.rejects(() => caller.create({ ...base, nodes: [{ hostId: 11 }, { hostId: 11 }] }), /只能出现一次/);
       await assert.rejects(() => caller.create({ ...base, nodes: [{ hostId: 11 }, { hostId: 12 }] }), /末端 SS/);
+      await runtime.executeRaw('INSERT INTO "forward_groups" ("id", "name", "groupMode", "targetIp", "userId") VALUES (21, ?, ?, ?, 1)', ["引用链", "chain", "198.51.100.13"]);
+      await runtime.executeRaw('INSERT INTO "forward_group_members" ("groupId", "memberType", "hostId", "priority") VALUES (21, ?, 11, 0), (21, ?, 12, 1)', ["host", "host"]);
+      assert.deepEqual((await caller.forwardChains()).map((group) => group.id), [21], "全链路只列出当前用户可用的转发链");
+      await assert.rejects(() => caller.create({ ...base, nodes: [{ nodeType: "forward-chain", forwardGroupId: 21 }, { nodeType: "forward-chain", forwardGroupId: 21 }, { hostId: 13 }] }), /转发链只能出现一次/);
+      await assert.rejects(() => caller.create({ ...base, nodes: [{ hostId: 11 }, { nodeType: "forward-chain", forwardGroupId: 21 }, { hostId: 13 }] }), /重复出现/);
+      const referenced = await caller.create({ ...base, name: "引用转发链", nodes: [{ nodeType: "forward-chain", forwardGroupId: 21 }, { hostId: 13 }] });
+      const referencedNodes = await db.getFullChainNodes(referenced.id);
+      assert.deepEqual(referencedNodes.map((node) => [node.nodeType, node.hostId, node.forwardGroupId]), [["forward-chain", null, 21], ["host", 13, null]]);
       const created = await caller.create({ ...base, nodes: [{ hostId: 11 }, { hostId: 12 }, { hostId: 13 }] });
       assert.ok(created.id > 0);
       const landingServiceId = await db.createLandingService({ hostId: 13, userId: 1, name: "HK-JP", protocol: "ss", method: "aes-256-gcm", password: "12345678", port: 32123, endpoint: "198.51.100.13:32123", isEnabled: true, status: "running" });
@@ -196,6 +204,85 @@ test("full-chain checks all nodes before deployment", () => {
       const incompleteHistory = await caller.latencySeries({ id: incomplete.id, hours: 72 });
       assert.equal(incompleteHistory.length, 1, "任一跳失败也必须保存一次全链路探测结果");
       assert.equal(incompleteHistory[0].isTimeout, true, "失败探测必须作为失败记录保存");
+    } finally { await runtime.closeDatabase(); }
+  `;
+  try {
+    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", script], { cwd: process.cwd(), env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: databasePath }, encoding: "utf8" });
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("full-chain waits for referenced chain rules and records its internal hop latency", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-full-chain-reference-"));
+  const databasePath = path.join(directory, "full-chain.db");
+  const script = String.raw`
+    import assert from "node:assert/strict";
+    import path from "node:path";
+    import { pathToFileURL } from "node:url";
+    const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
+    const runtime = await import(url("server/dbRuntime.ts"));
+    const schema = await import(url("server/dbSchema.ts"));
+    const db = await import(url("server/db.ts"));
+    const { fullChainsRouter } = await import(url("server/routers/fullChains.ts"));
+    const { applyFullChainLandingStatus, applyFullChainLatencyTestResult, applyFullChainRuleStatus, applyFullChainRuntimeStatus } = await import(url("server/fullChainRuntime.ts"));
+    try {
+      await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
+      await schema.ensureDatabaseSchema();
+      await runtime.executeRaw('INSERT INTO "users" ("id", "username", "password", "name", "role") VALUES (1, ?, ?, ?, ?)', ["chain-user", "x", "Chain User", "user"]);
+      for (const [id, name, ip] of [[11, "入口", "198.51.100.11"], [12, "落地", "198.51.100.12"], [13, "链入口", "198.51.100.13"], [14, "链出口", "198.51.100.14"], [15, "链后中转", "198.51.100.15"]]) {
+        await runtime.executeRaw('INSERT INTO "hosts" ("id", "name", "ip", "ipv4", "userId") VALUES (?, ?, ?, ?, 1)', [id, name, ip, ip]);
+      }
+      await runtime.executeRaw('INSERT INTO "landing_hosts" ("hostId", "userId") VALUES (12, 1)');
+      await runtime.executeRaw('INSERT INTO "forward_groups" ("id", "name", "groupMode", "forwardType", "protocol", "targetIp", "userId") VALUES (31, ?, ?, ?, ?, ?, 1)', ["链路管理转发链", "chain", "iptables", "both", "198.51.100.12"]);
+      await runtime.executeRaw('INSERT INTO "forward_group_members" ("groupId", "memberType", "hostId", "priority") VALUES (31, ?, 13, 0), (31, ?, 14, 1)', ["host", "host"]);
+      const caller = fullChainsRouter.createCaller({ req: { headers: {} }, res: { clearCookie() {} }, user: { id: 1, username: "chain-user", role: "user", accountEnabled: true }, authSession: null, authFailureReason: null });
+      const created = await caller.create({ name: "host-group-host-landing", port: 32127, protocol: "both", ssProtocol: "ss", method: "aes-256-gcm", password: "12345678", allowPublicIntermediate: false, nodes: [{ hostId: 11 }, { nodeType: "forward-chain", forwardGroupId: 31 }, { hostId: 15 }, { hostId: 12 }] });
+      await caller.check({ id: created.id });
+      let chain = (await caller.list()).find((item) => item.id === created.id);
+      for (const node of chain.nodes.filter((item) => item.nodeType !== "forward-chain")) {
+        await applyFullChainRuntimeStatus(node.hostId, "full-chain-port-" + created.id + "-" + node.id, true, "端口可用");
+        await applyFullChainRuntimeStatus(node.hostId, "full-chain-protocol-" + created.id + "-" + node.id, true, "协议可用");
+      }
+      await caller.deploy({ id: created.id });
+      chain = (await caller.list()).find((item) => item.id === created.id);
+      await db.updateRuleRunningStatus(chain.nodes[0].generatedRuleId, true);
+      await applyFullChainRuleStatus(chain.nodes[0].generatedRuleId, true, "入口规则运行");
+      chain = (await caller.list()).find((item) => item.id === created.id);
+      const groupNode = chain.nodes[1];
+      assert.equal(groupNode.deployStatus, "checking", "生成转发链规则后仍须等待各 Agent 回报");
+      const childRules = await db.getForwardGroupChildRulesForTemplate(groupNode.generatedRuleId);
+      assert.equal(childRules.length, 2);
+      await db.updateRuleRunningStatus(childRules[0].id, true);
+      await applyFullChainRuleStatus(childRules[0].id, true, "第一跳运行");
+      assert.equal((await caller.list()).find((item) => item.id === created.id).nodes[1].deployStatus, "checking", "部分子规则运行不能提前完成");
+      await db.updateRuleRunningStatus(childRules[1].id, true);
+      await applyFullChainRuleStatus(childRules[1].id, true, "全部运行");
+      chain = (await caller.list()).find((item) => item.id === created.id);
+      assert.equal(chain.nodes[1].deployStatus, "done");
+      assert.equal(chain.nodes[2].deployStatus, "checking", "转发链全部运行后才部署后续中转");
+      await db.updateRuleRunningStatus(chain.nodes[2].generatedRuleId, true);
+      await applyFullChainRuleStatus(chain.nodes[2].generatedRuleId, true, "后续中转运行");
+      chain = (await caller.list()).find((item) => item.id === created.id);
+      await applyFullChainLandingStatus(chain.landingServiceId, true, "落地运行");
+      chain = (await caller.list()).find((item) => item.id === created.id);
+      assert.equal(chain.status, "deploying", "转发链出口 IP 可用于限制后续中转入口");
+      assert.equal(chain.nodes[2].firewallStatus, "checking");
+
+      await caller.checkLatency({ id: created.id });
+      const pending = (await runtime.queryRaw('SELECT "message" FROM "forward_tests" WHERE "status" = ? ORDER BY "id"', ["pending"])).map((row) => JSON.parse(row.message)).filter((meta) => meta.chainId === created.id);
+      const main = pending.filter((meta) => !meta.diagnosticOnly);
+      const detail = pending.filter((meta) => meta.diagnosticOnly);
+      assert.equal(main.length, 3, "全链路总延迟仍按逻辑节点探测");
+      assert.equal(detail.length, 2, "引用转发链额外探测内部两跳");
+      await applyFullChainLatencyTestResult(detail[0], true, 80, "80ms");
+      await applyFullChainLatencyTestResult(detail[1], true, 30, "30ms");
+      await applyFullChainLatencyTestResult(main[0], true, 120, "120ms");
+      await applyFullChainLatencyTestResult(main[1], true, 100, "100ms");
+      await applyFullChainLatencyTestResult(main[2], true, 20, "20ms");
+      chain = (await caller.list()).find((item) => item.id === created.id);
+      assert.equal(chain.latestLatencyMs, 120, "链内明细不得重复累加到入口总延迟");
+      assert.deepEqual(chain.nodes.slice(0, -1).map((node) => node.latencyMs), [20, 80, 20]);
+      assert.deepEqual(JSON.parse(chain.nodes[1].latencyDetails).map((item) => item.latencyMs), [50, 30]);
     } finally { await runtime.closeDatabase(); }
   `;
   try {

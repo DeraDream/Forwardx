@@ -276,14 +276,14 @@ const tables: TableDef[] = [
   {
     name: "full_chain_nodes",
     columns: [
-      c("id", "id"), c("chainId", "int", { notNull: true }), c("hostId", "int", { notNull: true }), c("sortOrder", "int", { notNull: true }), c("ingressIp", "text"),
+      c("id", "id"), c("chainId", "int", { notNull: true }), c("nodeType", "varchar", { length: 24, notNull: true, default: "host" }), c("hostId", "int"), c("forwardGroupId", "int"), c("sortOrder", "int", { notNull: true }), c("ingressIp", "text"),
       c("portStatus", "varchar", { length: 24, notNull: true, default: "pending" }), c("portMessage", "text"),
       c("protocolStatus", "varchar", { length: 24, notNull: true, default: "pending" }), c("protocolMessage", "text"),
       c("deployStatus", "varchar", { length: 24, notNull: true, default: "pending" }), c("deployMessage", "text"), c("firewallStatus", "varchar", { length: 24, notNull: true, default: "pending" }), c("generatedRuleId", "int"),
-      c("latencyMs", "int"), c("latencyStatus", "varchar", { length: 24, notNull: true, default: "pending" }),
+      c("latencyMs", "int"), c("latencyStatus", "varchar", { length: 24, notNull: true, default: "pending" }), c("latencyDetails", "text"),
       c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }),
     ],
-    unique: [["chainId", "hostId"], ["chainId", "sortOrder"]], indexes: [["chainId", "sortOrder"], ["hostId"], ["generatedRuleId"]],
+    unique: [["chainId", "hostId"], ["chainId", "forwardGroupId"], ["chainId", "sortOrder"]], indexes: [["chainId", "sortOrder"], ["hostId"], ["forwardGroupId"], ["generatedRuleId"]],
   },
   {
     name: "full_chain_traffic_counters",
@@ -589,6 +589,7 @@ async function ensureMysqlSchema(pool: Pool) {
       await pool.query(`ALTER TABLE ${quote("mysql", table.name)} ADD ${uniquePrefix === "uniq" ? "UNIQUE " : ""}INDEX ${key.name} (${key.expr})`).catch(() => undefined);
     }
   }
+  await pool.query(`ALTER TABLE ${quote("mysql", "full_chain_nodes")} MODIFY COLUMN ${quote("mysql", "hostId")} INT NULL`).catch(() => undefined);
   for (const [key, value] of seedSettings) {
     await pool.execute(
       "INSERT INTO system_settings (`key`, value, updatedAt) VALUES (?, ?, UNIX_TIMESTAMP()) ON DUPLICATE KEY UPDATE `key` = `key`",
@@ -622,6 +623,7 @@ async function ensurePostgresqlSchema(pool: pg.Pool) {
       await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS ${name} ON ${quote("postgresql", table.name)} (${cols.map((col) => quote("postgresql", col)).join(", ")})`).catch(() => undefined);
     }
   }
+  await pool.query(`ALTER TABLE ${quote("postgresql", "full_chain_nodes")} ALTER COLUMN ${quote("postgresql", "hostId")} DROP NOT NULL`).catch(() => undefined);
   for (const [key, value] of seedSettings) {
     await pool.query(
       'INSERT INTO system_settings ("key", value, "updatedAt") VALUES ($1, $2, EXTRACT(EPOCH FROM NOW())::INT) ON CONFLICT ("key") DO NOTHING',
@@ -632,6 +634,19 @@ async function ensurePostgresqlSchema(pool: pg.Pool) {
 }
 
 function ensureSqliteSchema(sqlite: Database.Database) {
+  const oldFullChainHost = sqlite.prepare("PRAGMA table_info(full_chain_nodes)").all().find((column: any) => column.name === "hostId") as any;
+  if (oldFullChainHost?.notnull) {
+    const table = tables.find((item) => item.name === "full_chain_nodes")!;
+    const columns = table.columns.map((column) => columnSql("sqlite", column)).filter(Boolean);
+    const unique = (table.unique || []).map((cols) => `UNIQUE (${cols.map((col) => quote("sqlite", col)).join(", ")})`);
+    const oldColumns = (sqlite.prepare("PRAGMA table_info(full_chain_nodes)").all() as any[]).map((column) => String(column.name));
+    sqlite.transaction(() => {
+      sqlite.exec(`ALTER TABLE ${quote("sqlite", table.name)} RENAME TO ${quote("sqlite", `${table.name}_legacy`)}`);
+      sqlite.exec(`CREATE TABLE ${quote("sqlite", table.name)} (${[...columns, ...unique].join(", ")})`);
+      sqlite.exec(`INSERT INTO ${quote("sqlite", table.name)} (${oldColumns.map((column) => quote("sqlite", column)).join(", ")}) SELECT ${oldColumns.map((column) => quote("sqlite", column)).join(", ")} FROM ${quote("sqlite", `${table.name}_legacy`)}`);
+      sqlite.exec(`DROP TABLE ${quote("sqlite", `${table.name}_legacy`)}`);
+    })();
+  }
   for (const table of tables) {
     const columns = table.columns.map((column) => columnSql("sqlite", column)).filter(Boolean);
     const unique = (table.unique || []).map((cols) => `UNIQUE (${cols.map((col) => quote("sqlite", col)).join(", ")})`);

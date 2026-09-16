@@ -10,10 +10,39 @@ const message = (value: unknown, fallback: string) =>
     .trim()
     .slice(0, 500);
 
+const latencyDetails = (value: unknown) => {
+  try {
+    const parsed = value ? JSON.parse(String(value)) : null;
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+};
+
 function endpoint(host: any, ingressIp?: string | null) {
   return String(
     ingressIp || host?.entryIp || host?.publicIp || host?.ipv4 || host?.ip || "",
   ).trim();
+}
+
+async function nodeEntry(node: any) {
+  if (String(node?.nodeType || "host") !== "forward-chain") {
+    const host = await db.getHostById(Number(node?.hostId));
+    return { hostId: Number(node?.hostId), host, ip: endpoint(host, node?.ingressIp) };
+  }
+  const group = await db.getForwardGroupById(Number(node?.forwardGroupId)) as any;
+  if (!group || String(group.groupMode) !== "chain" || group.isEnabled === false) throw new Error("引用的转发链不可用");
+  const hostId = await db.getForwardGroupDefaultHostId(Number(group.id));
+  const host = await db.getHostById(hostId);
+  return { hostId, host, ip: endpoint(host) };
+}
+
+async function nodeExitIp(node: any) {
+  if (String(node?.nodeType || "host") !== "forward-chain") return String(node?.publicIp || "").trim();
+  const group = await db.getForwardGroupById(Number(node?.forwardGroupId)) as any;
+  const member = (group?.members || []).filter((item: any) => item.isEnabled !== false).at(-1);
+  const host = member?.hostId ? await db.getHostById(Number(member.hostId)) : null;
+  return endpoint(host);
 }
 
 const timestamp = (value: any) => {
@@ -31,7 +60,7 @@ async function finishLatencyCheck(chainId: number) {
     ? hops.reduce((sum: number, node: any) => sum + Math.max(0, Number(node.latencyMs) || 0), 0)
     : null;
   await db.updateFullChain(chainId, { latestLatencyMs });
-  await db.recordFullChainLatency(chainId, latestLatencyMs, nodes.map((node: any, index: number) => ({ hostId: node.hostId, name: node.hostName, latencyMs: index < hops.length ? node.latencyMs : null, isTimeout: index < hops.length && node.latencyStatus !== "done" })));
+  await db.recordFullChainLatency(chainId, latestLatencyMs, nodes.map((node: any, index: number) => ({ hostId: node.hostId, forwardGroupId: node.forwardGroupId, name: node.forwardGroupName || node.hostName, latencyMs: index < hops.length ? node.latencyMs : null, isTimeout: index < hops.length && node.latencyStatus !== "done", details: latencyDetails(node.latencyDetails) })));
 }
 
 async function fail(
@@ -78,6 +107,31 @@ async function beginDeploy(chainId: number) {
   const index = nodes.findIndex(
     (node: any) => Number(node.id) === Number(next.id),
   );
+  if (String(next.nodeType || "host") === "forward-chain") {
+    const downstream = nodes[index + 1];
+    if (!downstream) return fail(chainId, Number(next.id), "deploy", "转发链不能作为落地节点");
+    try {
+      const group = await db.getForwardGroupById(Number(next.forwardGroupId)) as any;
+      const entry = await nodeEntry(next);
+      const target = await nodeEntry(downstream);
+      if (!entry.hostId || !target.ip) throw new Error("转发链入口或下一跳不可用");
+      const createTemplate = () => db.createForwardRule({
+        userId: Number(chain.userId), hostId: entry.hostId, name: `[全链路:${chainId}] ${chain.name} 转发链`,
+        forwardType: String(group.forwardType || "iptables"), protocol: chain.protocol,
+        sourcePort: Number(chain.port), targetIp: target.ip, targetPort: Number(chain.port),
+        forwardGroupId: Number(group.id), isForwardGroupTemplate: true,
+        isEnabled: true, telegramErrorNotifyEnabled: false,
+        blockHttp: false, blockSocks: false, blockTls: false,
+      } as any);
+      const ruleId = await db.withForwardGroupSyncTransaction(Number(group.id), createTemplate);
+      const childRules = await db.getForwardGroupChildRulesForTemplate(ruleId);
+      if (!childRules.length) throw new Error("转发链没有生成可部署的子规则");
+      await db.updateFullChainNode(Number(next.id), { generatedRuleId: ruleId, deployMessage: `等待转发链 ${childRules.length} 条规则运行` });
+      return;
+    } catch (error) {
+      return fail(chainId, Number(next.id), "deploy", message(error, "转发链部署失败"));
+    }
+  }
   const host = (await db.getHostById(Number(next.hostId))) as any;
   if (!host) return fail(chainId, Number(next.id), "deploy", "主机不存在");
   if (index === nodes.length - 1) {
@@ -118,8 +172,7 @@ async function beginDeploy(chainId: number) {
     return;
   }
   const downstream = nodes[index + 1];
-  const targetHost = (await db.getHostById(Number(downstream.hostId))) as any;
-  const targetIp = endpoint(targetHost, downstream.ingressIp);
+  const targetIp = (await nodeEntry(downstream)).ip;
   if (!targetIp)
     return fail(chainId, Number(next.id), "deploy", "下一跳没有可用入口 IP");
   const ruleId = await db.createForwardRule({
@@ -147,7 +200,7 @@ async function finishDeploy(chainId: number) {
   const chain = (await db.getFullChainById(chainId)) as any;
   if (!chain) return;
   const nodes = await db.getFullChainNodes(chainId);
-  const protectedNodes = nodes.slice(1, -1);
+  const protectedNodes = nodes.slice(1, -1).filter((node: any) => String(node.nodeType || "host") !== "forward-chain");
   if (chain.allowPublicIntermediate || protectedNodes.length === 0) {
     for (const node of protectedNodes)
       await db.updateFullChainNode(Number(node.id), { firewallStatus: "done" });
@@ -159,7 +212,8 @@ async function finishDeploy(chainId: number) {
   }
   for (const [index, node] of nodes.entries()) {
     if (index === 0 || index === nodes.length - 1) continue;
-    if (!String(nodes[index - 1]?.publicIp || "").trim())
+    if (String(node.nodeType || "host") === "forward-chain") continue;
+    if (!await nodeExitIp(nodes[index - 1]))
       return fail(
         chainId,
         Number(node.id),
@@ -190,6 +244,7 @@ export async function startFullChain(chainId: number) {
       .filter((id: number) => id > 0)
     : undefined;
   for (const node of nodes) {
+    if (String(node.nodeType || "host") === "forward-chain") continue;
     if (
       await db.isPortUsedOnHost(
         Number(node.hostId),
@@ -208,10 +263,11 @@ export async function startFullChain(chainId: number) {
     }
   }
   for (const node of nodes) {
+    const referenced = String(node.nodeType || "host") === "forward-chain";
     await db.updateFullChainNode(Number(node.id), {
-      portStatus: "checking",
+      portStatus: referenced ? "available" : "checking",
       portMessage: null,
-      protocolStatus: String(chain.protocol) === "both" ? "checking" : "pending",
+      protocolStatus: referenced ? "available" : String(chain.protocol) === "both" ? "checking" : "pending",
       protocolMessage: null,
       deployStatus: "pending",
       deployMessage: null,
@@ -224,7 +280,7 @@ export async function startFullChain(chainId: number) {
     landingServiceId: null,
     isEnabled: true,
   });
-  for (const node of nodes)
+  for (const node of nodes) if (String(node.nodeType || "host") !== "forward-chain")
     pushAgentRefresh(Number(node.hostId), "full-chain-check", { urgent: true });
 }
 
@@ -246,14 +302,14 @@ export async function startFullChainProtocolCheck(chainId: number) {
     throw new Error("请先完成端口检查");
   for (const node of nodes)
     await db.updateFullChainNode(Number(node.id), {
-      protocolStatus: "checking",
+      protocolStatus: String(node.nodeType || "host") === "forward-chain" ? "available" : "checking",
       protocolMessage: null,
     });
   await db.updateFullChain(chainId, {
     status: "checking-protocol",
     statusMessage: "正在逐台检查 UDP 协议",
   });
-  for (const node of nodes)
+  for (const node of nodes) if (String(node.nodeType || "host") !== "forward-chain")
     pushAgentRefresh(Number(node.hostId), "full-chain-protocol-check", {
       urgent: true,
     });
@@ -270,17 +326,47 @@ export async function startFullChainLatencyCheck(chainId: number) {
   const unavailable: any[] = [];
   for (const [index, node] of hops.entries()) {
     const target = nodes[index + 1];
-    const targetIp = endpoint(target, target?.ingressIp);
-    const meta = { kind: "full-chain", chainId, nodeId: Number(node.id), targetIp, targetPort: Number(chain.port), method: "tcp", hopLabel: `${index + 1}/${hops.length}`, routeLabel: `${node.hostName || `主机${node.hostId}`} -> ${target.hostName || `主机${target.hostId}`}`, batchId, latencyMode: "remaining-path" as const };
+    const sourceEntry = await nodeEntry(node);
+    const targetEntry = String(node.nodeType || "host") === "forward-chain" ? sourceEntry : await nodeEntry(target);
+    const targetIp = targetEntry.ip;
+    const sourceName = node.forwardGroupName || node.hostName || `主机${sourceEntry.hostId}`;
+    const targetName = String(node.nodeType || "host") === "forward-chain" ? `${sourceName}入口` : target.forwardGroupName || target.hostName || `主机${targetEntry.hostId}`;
+    const meta = { kind: "full-chain", chainId, nodeId: Number(node.id), targetIp, targetPort: Number(chain.port), method: "tcp", hopLabel: `${index + 1}/${hops.length}`, routeLabel: `${sourceName} -> ${targetName}`, batchId, latencyMode: "remaining-path" as const };
     registerHopTest(batchId, Number(node.id));
     if (!targetIp) {
-      await db.updateFullChainNode(Number(node.id), { latencyStatus: "checking", latencyMs: null });
+      await db.updateFullChainNode(Number(node.id), { latencyStatus: "checking", latencyMs: null, latencyDetails: null });
       unavailable.push(meta);
       continue;
     }
-    await db.updateFullChainNode(Number(node.id), { latencyStatus: "checking", latencyMs: null });
-    await db.createForwardTest({ ruleId: 0, hostId: Number(node.hostId), userId: Number(chain.userId), status: "pending", listenOk: false, targetReachable: false, forwardOk: false, message: JSON.stringify(meta) } as any);
-    pushAgentRefresh(Number(node.hostId), "full-chain-latency", { urgent: true });
+    await db.updateFullChainNode(Number(node.id), { latencyStatus: "checking", latencyMs: null, latencyDetails: null });
+    await db.createForwardTest({ ruleId: 0, hostId: sourceEntry.hostId, userId: Number(chain.userId), status: "pending", listenOk: false, targetReachable: false, forwardOk: false, message: JSON.stringify(meta) } as any);
+    pushAgentRefresh(sourceEntry.hostId, "full-chain-latency", { urgent: true });
+
+    if (String(node.nodeType || "host") === "forward-chain" && Number(node.generatedRuleId) > 0) {
+      const templateRule = await db.getForwardRuleById(Number(node.generatedRuleId));
+      const group = await db.getForwardGroupById(Number(node.forwardGroupId)) as any;
+      const probes = await db.getForwardGroupChainProbes(Number(node.forwardGroupId), { includeFinalTarget: true, templateRule });
+      if (probes.length) {
+        const detailLatencyMode = probes.some((probe: any) => probe.method === "tcp")
+          && ["iptables", "nftables"].includes(String(group?.forwardType || "").trim().toLowerCase())
+          ? Number(group?.entryGroupId || 0) > 0 ? "multi-source-remaining-path" : "remaining-path"
+          : "sum";
+        const detailBatchId = createHopTestBatch("full-chain-detail", Number(node.id));
+        for (const [probeIndex, probe] of probes.entries()) {
+          const probeKey = -(Number(node.id) * 1000 + probeIndex + 1);
+          const probeMeta = {
+            kind: "full-chain", chainId, nodeId: Number(node.id), diagnosticOnly: true,
+            probeKey, parentBatchId: batchId, batchId: detailBatchId,
+            targetIp: probe.targetIp, targetPort: probe.targetPort, method: probe.method,
+            hopLabel: probe.hopLabel, routeLabel: probe.routeLabel,
+            latencyMode: detailLatencyMode,
+          };
+          registerHopTest(detailBatchId, probeKey);
+          await db.createForwardTest({ ruleId: 0, hostId: Number(probe.fromHostId), userId: Number(chain.userId), status: "pending", listenOk: false, targetReachable: false, forwardOk: false, message: JSON.stringify(probeMeta) } as any);
+          pushAgentRefresh(Number(probe.fromHostId), "full-chain-latency-detail", { urgent: true });
+        }
+      }
+    }
   }
   for (const meta of unavailable)
     await applyFullChainLatencyTestResult(meta, false, null, "下一跳没有可用入口 IP");
@@ -292,11 +378,28 @@ export async function applyFullChainLatencyTestResult(meta: any, success: boolea
   const chainId = Number(meta?.chainId), nodeId = Number(meta?.nodeId);
   if (!chainId || !nodeId) return false;
   const chain = await db.getFullChainById(chainId) as any;
-  if (!chain || !meta?.batchId || String(chain.latencyBatchId || "") !== String(meta.batchId)) return true;
+  const activeBatchId = meta?.diagnosticOnly ? meta?.parentBatchId : meta?.batchId;
+  if (!chain || !meta?.batchId || String(chain.latencyBatchId || "") !== String(activeBatchId || "")) return true;
   const nodes = await db.getFullChainNodes(chainId);
   const node = nodes.find((item: any) => Number(item.id) === nodeId);
-  if (!node || node.latencyStatus !== "checking") return true;
+  if (!node || (!meta?.diagnosticOnly && node.latencyStatus !== "checking")) return true;
   const measurable = success && Number.isFinite(Number(latencyMs));
+  if (meta?.diagnosticOnly) {
+    const aggregate = recordHopTestResult(Number(meta.probeKey), {
+      success: measurable,
+      latencyMs: measurable ? Number(latencyMs) : null,
+      message: detail,
+      hopLabel: String(meta.hopLabel || "hop"),
+      routeLabel: typeof meta.routeLabel === "string" ? meta.routeLabel : null,
+      method: String(meta.method || "tcp"),
+    }, {
+      successPrefix: "转发链逐跳测试成功",
+      failurePrefix: "转发链逐跳测试失败",
+      latencyMode: meta.latencyMode === "multi-source-remaining-path" ? "multi-source-remaining-path" : meta.latencyMode === "remaining-path" ? "remaining-path" : "sum",
+    });
+    if (aggregate) await db.updateFullChainNode(nodeId, { latencyDetails: JSON.stringify(aggregate.details) });
+    return true;
+  }
   await db.updateFullChainNode(nodeId, { latencyStatus: measurable ? "done" : "error", latencyMs: measurable ? Number(latencyMs) : null });
   const aggregate = recordHopTestResult(nodeId, {
     success: measurable,
@@ -363,7 +466,7 @@ export async function applyFullChainRuntimeStatus(
     }
     const fresh = await db.getFullChainNodes(chainId);
     if (
-      fresh.slice(1, -1).every((item: any) => item.firewallStatus === "done")
+      fresh.slice(1, -1).filter((item: any) => String(item.nodeType || "host") !== "forward-chain").every((item: any) => item.firewallStatus === "done")
     ) {
       await db.updateFullChain(chainId, {
         status: "running",
@@ -420,7 +523,11 @@ export async function applyFullChainRuleStatus(
   isRunning: boolean,
   rawMessage: string,
 ) {
-  const node = (await db.getFullChainNodeByRuleId(ruleId)) as any;
+  let node = (await db.getFullChainNodeByRuleId(ruleId)) as any;
+  const reportedRule = !node ? await db.getForwardRuleById(ruleId) as any : null;
+  if (!node && Number(reportedRule?.forwardGroupRuleId) > 0) {
+    node = await db.getFullChainNodeByRuleId(Number(reportedRule.forwardGroupRuleId)) as any;
+  }
   if (!node) return false;
   const chain = (await db.getFullChainById(Number(node.chainId))) as any;
   if (!chain || chain.isEnabled === false || ["cancelled", "replaced"].includes(String(chain.status))) return true;
@@ -428,6 +535,11 @@ export async function applyFullChainRuleStatus(
   if (!isRunning) {
     await fail(Number(node.chainId), Number(node.id), "deploy", detail);
     return true;
+  }
+  if (String(node.nodeType || "host") === "forward-chain") {
+    const childRules = await db.getForwardGroupChildRulesForTemplate(Number(node.generatedRuleId));
+    const activeRules = childRules.filter((rule: any) => rule.isEnabled !== false && !rule.pendingDelete);
+    if (!activeRules.length || activeRules.some((rule: any) => !rule.isRunning)) return true;
   }
   await db.updateFullChainNode(Number(node.id), {
     deployStatus: "done",
@@ -493,7 +605,7 @@ export async function cancelFullChain(chainId: number, { preserveLandingService 
   if (!chain) return;
   const nodes = await db.getFullChainNodes(chainId);
   for (const node of nodes) {
-    if (node.firewallStatus === "done" || node.firewallStatus === "checking") {
+    if (String(node.nodeType || "host") !== "forward-chain" && (node.firewallStatus === "done" || node.firewallStatus === "checking")) {
       await db.updateFullChainNode(Number(node.id), {
         firewallStatus: "removing",
       });
@@ -502,8 +614,13 @@ export async function cancelFullChain(chainId: number, { preserveLandingService 
       });
     }
     if (Number(node.generatedRuleId) > 0) {
-      await db.deleteForwardRule(Number(node.generatedRuleId));
-      pushAgentRefresh(Number(node.hostId), "full-chain-cancel", {
+      if (String(node.nodeType || "host") === "forward-chain" && Number(node.forwardGroupId) > 0) {
+        await db.withForwardGroupSyncTransaction(Number(node.forwardGroupId), () => db.deleteForwardRule(Number(node.generatedRuleId)));
+      } else {
+        await db.deleteForwardRule(Number(node.generatedRuleId));
+      }
+      const entry = await nodeEntry(node).catch(() => ({ hostId: Number(node.hostId || 0) }));
+      if (entry.hostId > 0) pushAgentRefresh(entry.hostId, "full-chain-cancel", {
         urgent: true,
       });
     }

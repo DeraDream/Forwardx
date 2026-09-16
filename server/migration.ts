@@ -1158,9 +1158,11 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
 
     case "full_chain_nodes":
       row.chainId = mapRequiredId(maps, "full_chains", source.chainId);
-      row.hostId = mapRequiredId(maps, "hosts", source.hostId);
+      row.hostId = mapOptionalId(maps, "hosts", source.hostId);
+      row.forwardGroupId = mapOptionalId(maps, "forward_groups", source.forwardGroupId);
+      row.nodeType = row.forwardGroupId ? "forward-chain" : "host";
       row.generatedRuleId = mapOptionalId(maps, "forward_rules", source.generatedRuleId);
-      return { row, existingWhere: { chainId: row.chainId, hostId: row.hostId } };
+      return { row, existingWhere: row.forwardGroupId ? { chainId: row.chainId, forwardGroupId: row.forwardGroupId } : { chainId: row.chainId, hostId: row.hostId } };
 
     case "full_chain_traffic_counters":
       row.chainId = mapRequiredId(maps, "full_chains", source.chainId);

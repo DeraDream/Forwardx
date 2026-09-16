@@ -117,11 +117,14 @@ export function buildMetaAgentSelfTestPayload(
   test: { id?: unknown; ruleId?: unknown },
   meta: SelfTestMeta | null,
 ) {
-  if (meta?.kind === "full-chain") return {
-    testId: agentInteger(test?.id), kind: "full-chain", ruleId: 0,
-    forwardType: "full-chain", protocol: "tcp", method: "tcp",
-    sourcePort: 0, targetIp: meta.targetIp, targetPort: agentInteger(meta.targetPort),
-  };
+  if (meta?.kind === "full-chain") {
+    const method = normalizeLinkProbeMethod(meta.method);
+    return {
+      testId: agentInteger(test?.id), kind: "full-chain", ruleId: 0,
+      forwardType: "full-chain", protocol: method, method,
+      sourcePort: 0, targetIp: meta.targetIp, targetPort: agentInteger(meta.targetPort),
+    };
+  }
   const tunnelPayload = buildTunnelAgentSelfTestPayload(test, meta);
   if (tunnelPayload) return tunnelPayload;
 

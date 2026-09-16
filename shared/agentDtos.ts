@@ -132,9 +132,14 @@ export type SelfTestMeta =
       nodeId: number;
       targetIp?: string;
       targetPort?: number;
+      method?: "tcp" | "ping";
       hopLabel?: string;
       routeLabel?: string;
       batchId?: string;
+      parentBatchId?: string;
+      diagnosticOnly?: boolean;
+      probeKey?: number;
+      latencyMode?: "sum" | "remaining-path" | "multi-source-remaining-path";
     };
 
 export function isAgentTrafficStat(value: unknown): value is AgentTrafficStat {

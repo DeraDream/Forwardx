@@ -1908,7 +1908,14 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       if (task.firewallStatus === "checking" || task.firewallStatus === "removing") {
         const nodes = await getFullChainNodes(chainId);
         const index = nodes.findIndex((node: any) => Number(node.id) === nodeId);
-        const previousIp = String(nodes[index - 1]?.ingressIp || nodes[index - 1]?.publicIp || "").trim();
+        const previousNode = nodes[index - 1] as any;
+        let previousIp = String(previousNode?.ingressIp || previousNode?.publicIp || "").trim();
+        if (String(previousNode?.nodeType || "host") === "forward-chain") {
+          const group = await db.getForwardGroupById(Number(previousNode.forwardGroupId)) as any;
+          const member = (group?.members || []).filter((item: any) => item.isEnabled !== false).at(-1);
+          const previousHost = member?.hostId ? await db.getHostById(Number(member.hostId)) as any : null;
+          previousIp = String(previousHost?.entryIp || previousHost?.ipv4 || previousHost?.ip || "").trim();
+        }
         const tag = `fwx-full-chain-${chainId}-${nodeId}`;
         const protocols = task.chainProtocol === "both" ? "tcp udp" : "tcp";
         const bins = previousIp.includes(":") ? "ip6tables" : "iptables";
