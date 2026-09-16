@@ -6,6 +6,7 @@ import {
   buildMetaAgentSelfTestPayload,
   buildRuleAgentSelfTestPayload,
   buildTunnelAgentSelfTestPayload,
+  parseSelfTestMeta,
 } from "./agentRouteUtils";
 import {
   FORWARDX_WIREGUARD_DEFAULT_MTU,
@@ -170,6 +171,26 @@ test("forward-chain final domain probes bypass unrelated runtime waits", () => {
 });
 
 test("normalizes PostgreSQL string numbers for every Agent self-test payload", () => {
+  assert.equal(parseSelfTestMeta(JSON.stringify({ kind: "full-chain", chainId: 7, nodeId: 11, targetIp: "198.51.100.12", targetPort: 32123 }))?.kind, "full-chain", "全链路自测元数据必须能被 Agent 派发路径识别");
+  const fullChainPayload = buildMetaAgentSelfTestPayload({ id: "91", ruleId: "0" }, {
+    kind: "full-chain",
+    chainId: "7",
+    nodeId: "11",
+    targetIp: "198.51.100.12",
+    targetPort: "32123",
+  } as any);
+  assert.deepEqual(fullChainPayload, {
+    testId: 91,
+    kind: "full-chain",
+    ruleId: 0,
+    forwardType: "full-chain",
+    protocol: "tcp",
+    method: "tcp",
+    sourcePort: 0,
+    targetIp: "198.51.100.12",
+    targetPort: 32123,
+  });
+
   const metaPayload = buildMetaAgentSelfTestPayload({ id: "93", ruleId: "19" }, {
     kind: "forward-via-tunnel-entry",
     tunnelId: "8",

@@ -125,6 +125,16 @@ export type SelfTestMeta =
       groupLabel?: string;
       latencyMode?: "sum" | "max" | "multi-source" | "remaining-path" | "multi-source-remaining-path";
       runtimeDependent?: boolean;
+    }
+  | {
+      kind: "full-chain";
+      chainId: number;
+      nodeId: number;
+      targetIp?: string;
+      targetPort?: number;
+      hopLabel?: string;
+      routeLabel?: string;
+      batchId?: string;
     };
 
 export function isAgentTrafficStat(value: unknown): value is AgentTrafficStat {
@@ -199,5 +209,6 @@ export function isSelfTestMeta(value: unknown): value is SelfTestMeta {
   const meta = value as Partial<SelfTestMeta>;
   if (!meta || typeof meta.kind !== "string") return false;
   if (meta.kind === "forward-chain") return Number.isFinite(Number((meta as any).groupId));
+  if (meta.kind === "full-chain") return Number.isFinite(Number((meta as any).chainId)) && Number.isFinite(Number((meta as any).nodeId));
   return Number.isFinite(Number((meta as any).tunnelId));
 }

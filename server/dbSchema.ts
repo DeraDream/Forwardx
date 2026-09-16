@@ -268,7 +268,7 @@ const tables: TableDef[] = [
       c("port", "int", { notNull: true }), c("protocol", "varchar", { length: 16, notNull: true, default: "both" }),
       c("ssProtocol", "varchar", { length: 16, notNull: true, default: "ss" }), c("method", "varchar", { length: 96, notNull: true }), c("password", "text", { notNull: true }),
       c("allowPublicIntermediate", "bool", { notNull: true, default: true }), c("replacesChainId", "int"), c("status", "varchar", { length: 32, notNull: true, default: "draft" }), c("statusMessage", "text"),
-      c("landingServiceId", "int"), c("latestLatencyMs", "int"), c("isEnabled", "bool", { notNull: true, default: true }),
+      c("landingServiceId", "int"), c("latestLatencyMs", "int"), c("latencyBatchId", "varchar", { length: 64 }), c("isEnabled", "bool", { notNull: true, default: true }),
       c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }),
     ],
     indexes: [["userId", "createdAt"], ["landingServiceId"]],

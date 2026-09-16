@@ -26,6 +26,7 @@ import {
   tunnelLatencySampleIsAfterBaseline,
 } from "./tunnelLatencyDetails";
 import { FORWARD_TUNNEL_LATENCY_WAIT_MS } from "./selfTestTiming";
+import { applyFullChainLatencyTestResult } from "./fullChainRuntime";
 
 async function resolveSelfTestTarget(rule: any) {
   return rule?.targetIp;
@@ -193,6 +194,11 @@ agentRouter.post("/api/agent/selftest-result", async (req: Request, res: Respons
         res.json({ success: true, ignored: true });
         return;
       }
+    }
+    if (meta?.kind === "full-chain") {
+      await applyFullChainLatencyTestResult(meta, success, success ? cleanLatency : null, cleanMessage);
+      res.json({ success: true });
+      return;
     }
     if (meta?.kind === "tunnel" && typeof meta.tunnelId === "number") {
       if (success) await db.updateTunnelRunningStatus(meta.tunnelId, true);

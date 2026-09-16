@@ -3,6 +3,7 @@ import { pushAgentRefresh } from "./agentEvents";
 
 const runtimePrefix = "full-chain-";
 const AGENT_STEP_TIMEOUT_MS = 3 * 60 * 1000;
+const LATENCY_TIMEOUT_MS = 60 * 1000;
 const message = (value: unknown, fallback: string) =>
   String(value || fallback)
     .trim()
@@ -10,8 +11,26 @@ const message = (value: unknown, fallback: string) =>
 
 function endpoint(host: any, ingressIp?: string | null) {
   return String(
-    ingressIp || host?.entryIp || host?.ipv4 || host?.ip || "",
+    ingressIp || host?.entryIp || host?.publicIp || host?.ipv4 || host?.ip || "",
   ).trim();
+}
+
+const timestamp = (value: any) => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0
+    ? numeric < 10_000_000_000 ? numeric * 1000 : numeric
+    : Number(new Date(value || 0));
+};
+
+async function finishLatencyCheck(chainId: number) {
+  const nodes = await db.getFullChainNodes(chainId);
+  const hops = nodes.slice(0, -1);
+  if (hops.some((node: any) => node.latencyStatus === "checking")) return;
+  const latestLatencyMs = hops.every((node: any) => node.latencyStatus === "done")
+    ? hops.reduce((sum: number, node: any) => sum + Math.max(0, Number(node.latencyMs) || 0), 0)
+    : null;
+  await db.updateFullChain(chainId, { latestLatencyMs });
+  await db.recordFullChainLatency(chainId, latestLatencyMs, nodes.map((node: any, index: number) => ({ hostId: node.hostId, name: node.hostName, latencyMs: index < hops.length ? node.latencyMs : null, isTimeout: index < hops.length && node.latencyStatus !== "done" })));
 }
 
 async function fail(
@@ -61,6 +80,14 @@ async function beginDeploy(chainId: number) {
   const host = (await db.getHostById(Number(next.hostId))) as any;
   if (!host) return fail(chainId, Number(next.id), "deploy", "主机不存在");
   if (index === nodes.length - 1) {
+    if (Number(chain.landingServiceId) > 0) {
+      const service = await db.getLandingServiceById(Number(chain.landingServiceId), true) as any;
+      if (service && Number(service.hostId) === Number(next.hostId) && service.isEnabled !== false) {
+        await db.updateFullChainNode(Number(next.id), { deployStatus: "done", deployMessage: "复用已有落地 SS" });
+        await finishDeploy(chainId);
+        return;
+      }
+    }
     const landing = await db.getLandingHostByHostId(Number(next.hostId));
     if (!landing)
       return fail(chainId, Number(next.id), "deploy", "末端主机不是落地机");
@@ -237,10 +264,39 @@ export async function startFullChainLatencyCheck(chainId: number) {
   const nodes = await db.getFullChainNodes(chainId);
   const hops = nodes.slice(0, -1);
   if (!hops.length) return false;
-  for (const node of hops) {
+  const batchId = `fc-${chainId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  await db.updateFullChain(chainId, { latencyBatchId: batchId, latestLatencyMs: null });
+  for (const [index, node] of hops.entries()) {
+    const target = nodes[index + 1];
+    const targetIp = endpoint(target, target?.ingressIp);
+    if (!targetIp) {
+      await db.updateFullChainNode(Number(node.id), { latencyStatus: "error", latencyMs: null });
+      continue;
+    }
     await db.updateFullChainNode(Number(node.id), { latencyStatus: "checking", latencyMs: null });
+    await db.createForwardTest({ ruleId: 0, hostId: Number(node.hostId), userId: Number(chain.userId), status: "pending", listenOk: false, targetReachable: false, forwardOk: false, message: JSON.stringify({ kind: "full-chain", chainId, nodeId: Number(node.id), targetIp, targetPort: Number(chain.port), hopLabel: `${index + 1}/${hops.length}`, routeLabel: `${node.hostName || `主机${node.hostId}`} -> ${target.hostName || `主机${target.hostId}`}`, batchId }) } as any);
     pushAgentRefresh(Number(node.hostId), "full-chain-latency", { urgent: true });
   }
+  await finishLatencyCheck(chainId);
+  return true;
+}
+
+export async function applyFullChainLatencyTestResult(meta: any, success: boolean, latencyMs: number | null, detail: string | null) {
+  const chainId = Number(meta?.chainId), nodeId = Number(meta?.nodeId);
+  if (!chainId || !nodeId) return false;
+  const chain = await db.getFullChainById(chainId) as any;
+  if (!chain || !meta?.batchId || String(chain.latencyBatchId || "") !== String(meta.batchId)) return true;
+  const nodes = await db.getFullChainNodes(chainId);
+  const node = nodes.find((item: any) => Number(item.id) === nodeId);
+  if (!node || node.latencyStatus !== "checking") return true;
+  await db.updateFullChainNode(nodeId, { latencyStatus: success && Number(latencyMs) > 0 ? "done" : "error", latencyMs: success ? Math.round(Number(latencyMs)) : null });
+  const fresh = await db.getFullChainNodes(chainId), hops = fresh.slice(0, -1);
+  if (hops.some((item: any) => item.latencyStatus === "checking")) return true;
+  const allDone = hops.every((item: any) => item.latencyStatus === "done");
+  const details = hops.map((item: any) => ({ hostId: item.hostId, name: item.hostName, latencyMs: item.latencyStatus === "done" ? Number(item.latencyMs) : null, isTimeout: item.latencyStatus !== "done", message: item.id === nodeId ? detail : null }));
+  const total = allDone ? hops.reduce((sum: number, item: any) => sum + Math.max(0, Number(item.latencyMs) || 0), 0) : null;
+  await db.updateFullChain(chainId, { latestLatencyMs: total });
+  await db.recordFullChainLatency(chainId, total, details);
   return true;
 }
 
@@ -263,19 +319,6 @@ export async function applyFullChainRuntimeStatus(
   );
   if (!node) return true;
   if (phase === "latency") {
-    const latency = Number(/latency_ms=([0-9.]+)/.exec(rawMessage)?.[1] || 0);
-    await db.updateFullChainNode(nodeId, {
-      latencyStatus: isRunning && latency > 0 ? "done" : "error",
-      latencyMs: latency > 0 ? Math.round(latency) : null,
-    });
-    const fresh = await db.getFullChainNodes(chainId);
-    if (fresh.slice(0, -1).every((item: any) => item.latencyStatus !== "checking")) {
-      const latestLatencyMs = fresh.slice(0, -1).every((item: any) => item.latencyStatus === "done")
-          ? fresh.slice(0, -1).reduce((sum: number, item: any) => sum + Math.max(0, Number(item.latencyMs) || 0), 0)
-          : null;
-      await db.updateFullChain(chainId, { latestLatencyMs });
-      await db.recordFullChainLatency(chainId, latestLatencyMs, fresh.map((item: any, index: number) => ({ hostId: item.hostId, name: item.hostName, latencyMs: index < fresh.length - 1 ? item.latencyMs : null, isTimeout: index < fresh.length - 1 && item.latencyStatus !== "done" })));
-    }
     return true;
   }
   if (phase === "firewall") {
@@ -358,6 +401,8 @@ export async function applyFullChainRuleStatus(
 ) {
   const node = (await db.getFullChainNodeByRuleId(ruleId)) as any;
   if (!node) return false;
+  const chain = (await db.getFullChainById(Number(node.chainId))) as any;
+  if (!chain || chain.isEnabled === false || ["cancelled", "replaced"].includes(String(chain.status))) return true;
   const detail = message(rawMessage, isRunning ? "部署完毕" : "部署失败");
   if (!isRunning) {
     await fail(Number(node.chainId), Number(node.id), "deploy", detail);
@@ -377,8 +422,22 @@ export async function deployFullChain(chainId: number) {
   if (String(chain.status) !== "ready-to-deploy")
     throw new Error("请先完成端口和协议检查");
   if (Number(chain.replacesChainId) > 0) {
-    await cancelFullChain(Number(chain.replacesChainId));
-    await db.updateFullChain(Number(chain.replacesChainId), { status: "replaced", statusMessage: `已由新配置 #${chainId} 替换` });
+    const replacedChainId = Number(chain.replacesChainId);
+    const replaced = (await db.getFullChainById(replacedChainId)) as any;
+    const oldNodes = await db.getFullChainNodes(replacedChainId);
+    const nextNodes = await db.getFullChainNodes(chainId);
+    const reuseLandingService =
+      Number(replaced?.landingServiceId) > 0 &&
+      Number(oldNodes.at(-1)?.hostId) === Number(nextNodes.at(-1)?.hostId) &&
+      Number(replaced?.port) === Number(chain.port) &&
+      String(replaced?.ssProtocol) === String(chain.ssProtocol) &&
+      String(replaced?.method) === String(chain.method) &&
+      String(replaced?.password) === String(chain.password);
+    await cancelFullChain(replacedChainId, { preserveLandingService: reuseLandingService });
+    await db.moveFullChainTraffic(replacedChainId, chainId);
+    await db.deleteFullChain(replacedChainId);
+    if (reuseLandingService) await db.updateLandingService(Number(replaced.landingServiceId), { name: chain.name });
+    await db.updateFullChain(chainId, { replacesChainId: null, landingServiceId: reuseLandingService ? Number(replaced.landingServiceId) : null });
   }
   await beginDeploy(chainId);
 }
@@ -394,6 +453,7 @@ export async function applyFullChainLandingStatus(
   );
   if (!chain) return false;
   const node = chain.nodes[chain.nodes.length - 1];
+  if (node?.deployStatus !== "checking") return true;
   const detail = message(rawMessage, isRunning ? "部署完毕" : "部署失败");
   if (!isRunning) {
     await fail(Number(chain.id), Number(node.id), "deploy", detail);
@@ -407,7 +467,7 @@ export async function applyFullChainLandingStatus(
   return true;
 }
 
-export async function cancelFullChain(chainId: number) {
+export async function cancelFullChain(chainId: number, { preserveLandingService = false } = {}) {
   const chain = (await db.getFullChainById(chainId)) as any;
   if (!chain) return;
   const nodes = await db.getFullChainNodes(chainId);
@@ -427,7 +487,7 @@ export async function cancelFullChain(chainId: number) {
       });
     }
   }
-  if (Number(chain.landingServiceId) > 0) {
+  if (!preserveLandingService && Number(chain.landingServiceId) > 0) {
     const service = (await db.getLandingServiceById(
       Number(chain.landingServiceId),
       true,
@@ -456,21 +516,16 @@ export async function cancelFullChain(chainId: number) {
 const fullChainWatchdog = setInterval(() => {
   void (async () => {
     for (const chain of await db.listFullChains()) {
+      const nodes = (chain as any).nodes || [];
+      const staleLatencyNodes = nodes.slice(0, -1).filter((node: any) => node.latencyStatus === "checking" && Date.now() - timestamp(node.updatedAt) > LATENCY_TIMEOUT_MS);
+      for (const node of staleLatencyNodes) await db.updateFullChainNode(Number(node.id), { latencyStatus: "error", latencyMs: null });
+      if (staleLatencyNodes.length) await finishLatencyCheck(Number((chain as any).id));
       if (
         !["checking-link", "checking-port", "checking-protocol", "deploying"].includes(
           String((chain as any).status),
         )
       )
         continue;
-      const nodes = (chain as any).nodes || [];
-      const timestamp = (value: any) => {
-        const numeric = Number(value);
-        return Number.isFinite(numeric) && numeric > 0
-          ? numeric < 10_000_000_000
-            ? numeric * 1000
-            : numeric
-          : Number(new Date(value || 0));
-      };
       const newest = Math.max(
         timestamp((chain as any).updatedAt),
         ...nodes.map((node: any) => timestamp(node.updatedAt)),

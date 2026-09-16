@@ -56,6 +56,7 @@ import { LatencyStabilityStats } from "@/components/LatencyStabilityStats";
 import { LatencyPeakCutToggle } from "@/components/LatencyPeakCutToggle";
 import { DEFAULT_LATENCY_TIME_RANGE_HOURS, filterLatencySeriesByTimeRange, latencyTimeRangeLabel, LatencyTimeRangeSelect, type LatencyTimeRangeHours } from "@/components/LatencyTimeRangeSelect";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { applyLatencyPeakCut, clipLatencyForChart, getLatencyStabilityStats, getLatencyYAxisMax, getLatencyYAxisTicks } from "@/lib/latencyChart";
 
 type Host = { id: number; name: string; ip: string; isLanding: boolean };
@@ -88,10 +89,9 @@ function StatusBadge({ status, available, checking, unavailable, pending, messag
 }) {
   const kind = status === "available" ? "ok" : status === "checking" ? "busy" : status === "error" ? "error" : "idle";
   const text = kind === "ok" ? available : kind === "busy" ? checking : kind === "error" ? unavailable : pending || "待检查";
-  return (
+  const badge = (
     <span
       key={status}
-      title={kind === "error" ? message : undefined}
       className={`inline-flex animate-in fade-in-0 zoom-in-95 items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium duration-200 motion-reduce:animate-none ${kind === "error" ? "border-destructive/50 bg-destructive/5 text-destructive" : kind === "idle" ? "border-muted-foreground/30 text-muted-foreground" : "border-emerald-500/50 bg-emerald-500/5 text-emerald-600"}`}
     >
       {kind === "busy" ? (
@@ -104,6 +104,8 @@ function StatusBadge({ status, available, checking, unavailable, pending, messag
       {text}
     </span>
   );
+  if (kind !== "error" || !message) return badge;
+  return <TooltipProvider delayDuration={120}><Tooltip><TooltipTrigger asChild>{badge}</TooltipTrigger><TooltipContent side="top" className="relative max-w-72 overflow-visible border-destructive/30 bg-destructive/5 text-destructive"><span className="absolute -bottom-1 left-1/2 h-2 w-2 -translate-x-1/2 rotate-45 border-b border-r border-destructive/30 bg-destructive/5" />{message}</TooltipContent></Tooltip></TooltipProvider>;
 }
 
 function Status({ node, protocol, deploying }: { node: any; protocol?: string; deploying?: boolean }) {
@@ -340,6 +342,7 @@ function CreateDialog({
   const create = trpc.fullChains.create.useMutation();
   const update = trpc.fullChains.update.useMutation();
   const check = trpc.fullChains.check.useMutation();
+  const restart = trpc.fullChains.start.useMutation();
   const checkLatency = trpc.fullChains.checkLatency.useMutation();
   const deploy = trpc.fullChains.deploy.useMutation();
   const [id, setId] = useState<number | undefined>(undefined);
@@ -542,11 +545,12 @@ function CreateDialog({
     if (chainId && !id) setId(chainId);
     return chainId;
   };
-  const run = async (kind: "port" | "latency" | "deploy") => {
+  const run = async (kind: "port" | "latency" | "deploy" | "retry") => {
     try {
       const chainId = kind === "deploy" ? id : await ensureDraft();
       if (!chainId) return;
       if (kind === "port") await check.mutateAsync({ id: chainId });
+      if (kind === "retry") await restart.mutateAsync({ id: Number(editingChain?.id) });
       if (kind === "latency") {
         await checkLatency.mutateAsync({ id: chainId });
         toast.success("全链路延迟检测已下发");
@@ -565,12 +569,13 @@ function CreateDialog({
     if (id && deployStarted.current && active?.status === "running") closeDialog();
   }, [active?.status, id]);
   const configReady = valid && portCheck?.available !== false;
+  const retryFailedDeployment = !!editingChain && !id && currentChain?.status === "error" && !editDirty;
   const primary =
-    editingChain
+    retryFailedDeployment ? "重试部署" : editingChain
       ? !id ? editNeedsRedeploy ? "保存并检查" : "保存" : active?.status === "ready-to-deploy" ? "重新部署" : active?.status === "running" ? "已部署" : active?.statusMessage || "检查链路中"
       : active?.status === "ready-to-deploy" ? "创建链路" : active?.status === "running" ? "已创建" : !active || active.status === "draft" || active.status === "error" ? "检查链路" : active.statusMessage || "检查链路中";
   const primaryAction =
-    active?.status === "ready-to-deploy"
+    retryFailedDeployment ? "retry" : active?.status === "ready-to-deploy"
       ? "deploy"
       : "port";
   return (
@@ -794,9 +799,10 @@ function CreateDialog({
               locked ||
             create.isPending || update.isPending ||
               check.isPending ||
+              restart.isPending ||
               deploy.isPending ||
               !configReady ||
-              (!!editingChain && !id && !editDirty) ||
+              (!!editingChain && !id && !editDirty && !retryFailedDeployment) ||
               (!editingChain && !!active &&
                 !["draft", "error", "ready-to-deploy"].includes(
                   active.status,
@@ -805,7 +811,7 @@ function CreateDialog({
             }
             onClick={() => void run(primaryAction)}
           >
-            {(create.isPending || update.isPending || check.isPending || deploy.isPending) && (
+            {(create.isPending || update.isPending || check.isPending || restart.isPending || deploy.isPending) && (
               <Loader2 className="h-4 w-4 animate-spin" />
             )}
             {primary}

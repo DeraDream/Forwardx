@@ -15,6 +15,7 @@ const RUNTIME_SELF_TEST_KINDS = new Set([
   "forward-via-tunnel",
   "forward-via-tunnel-entry",
   "forward-chain",
+  "full-chain",
 ]);
 
 export function selfTestTimeoutSeconds(meta: { kind?: string; runtimeDependent?: boolean } | null | undefined) {

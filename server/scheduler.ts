@@ -22,7 +22,7 @@ import {
 } from "./selfTestTiming";
 import { billingMonthlyBoundary, billingStartOfCalendarDay } from "@shared/billingTime";
 import { expireStalePendingOrders, recoverStaleProcessingPaymentOrders } from "./payment";
-import { startFullChainLatencyCheck } from "./fullChainRuntime";
+import { applyFullChainLatencyTestResult, startFullChainLatencyCheck } from "./fullChainRuntime";
 
 type TimedOutForwardTest = {
   id: number;
@@ -295,6 +295,10 @@ async function runSelfTestTimeoutSweep() {
       await settleTimedOutTunnelTests(timedOutTests, SELF_TEST_TIMEOUT_SECONDS);
       for (const test of timedOutTests) {
         const meta = parseSelfTestMeta(test.message);
+        if (meta?.kind === "full-chain") {
+          await applyFullChainLatencyTestResult(meta, false, null, `TCP 延迟探测超时：Agent 未在 ${Number(test.timeoutSeconds) || SELF_TEST_TIMEOUT_SECONDS} 秒内上报结果`);
+          continue;
+        }
         if (meta?.kind === "tunnel" || meta?.kind === "tunnel-hop") continue;
         if (!meta || meta.kind === "forward-via-tunnel") {
           await db.insertTcpingStat({
