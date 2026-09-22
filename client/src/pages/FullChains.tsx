@@ -61,6 +61,15 @@ import { applyLatencyPeakCut, clipLatencyForChart, getLatencyStabilityStats, get
 
 type Host = { id: number; name: string; ip: string; isLanding: boolean };
 type Node = { nodeType?: "host"; hostId: number; ingressIp: string } | { nodeType: "forward-chain"; forwardGroupId: number; forwardGroupName?: string };
+const fullChainNodeInput = (nodes: Node[]) => nodes.map((node) => node.nodeType === "forward-chain"
+  ? { nodeType: "forward-chain" as const, forwardGroupId: Number(node.forwardGroupId) }
+  : { nodeType: "host" as const, hostId: Number(node.hostId), ingressIp: String(node.ingressIp || "").trim() || null });
+const fullChainErrorMessage = (error: unknown) => {
+  const message = String((error as any)?.message || "操作失败");
+  return /(?:ZodError|Invalid input|Expected never|invalid_union)/i.test(message)
+    ? "链路节点配置无效，请重新选择转发链后重试。"
+    : message;
+};
 const nodeKey = (node: any) => String(node?.nodeType || "host") === "forward-chain" ? `group-${Number(node.forwardGroupId)}` : `host-${Number(node.hostId)}`;
 const nodeHostId = (node: any) => String(node?.nodeType || "host") === "host" ? Number(node?.hostId || 0) : 0;
 const nodeLatencyDetails = (node: any): any[] => {
@@ -576,7 +585,7 @@ function CreateDialog({
       method: method as any,
       password,
       allowPublicIntermediate: editingChain ? editingChain.allowPublicIntermediate !== false : true,
-      nodes,
+      nodes: fullChainNodeInput(nodes),
     };
     const result = editingChain ? await update.mutateAsync({ ...input, id: Number(editingChain.id) }) : await create.mutateAsync(input);
     if (editingChain && (result as { requiresRedeploy?: boolean }).requiresRedeploy === false) {
@@ -684,8 +693,8 @@ function CreateDialog({
         createdDraft.current = undefined;
       }
       await utils.fullChains.list.invalidate();
-    } catch (error: any) {
-      toast.error(error.message);
+    } catch (error: unknown) {
+      toast.error("全链路操作失败", { description: fullChainErrorMessage(error) });
     }
   };
   useEffect(() => {
