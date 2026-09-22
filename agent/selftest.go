@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -195,6 +196,16 @@ func handleSelfTest(cfg Config, t selfTest) {
 			latency, reachable, resolvedTarget = tcpLatencyResolved(t.TargetIP, t.TargetPort, attemptTimeout)
 		}
 		if reachable {
+			latencies := []int{latency}
+			sampleCount := selfTestTCPSampleCount(t)
+			for attempts := 1; len(latencies) < sampleCount && attempts < sampleCount; attempts++ {
+				time.Sleep(180 * time.Millisecond)
+				sample, ok, _ := tcpLatencyResolved(t.TargetIP, t.TargetPort, selfTestTCPAttemptTimeout)
+				if ok {
+					latencies = append(latencies, sample)
+				}
+			}
+			latency = medianLatency(latencies)
 			break
 		}
 		if attempt+1 >= minimumAttempts && (readinessWindow <= 0 || time.Since(startedAt) >= readinessWindow) {
@@ -228,11 +239,23 @@ func handleSelfTest(cfg Config, t selfTest) {
 
 func selfTestTCPAttempts(t selfTest) int {
 	switch strings.ToLower(strings.TrimSpace(t.Kind)) {
-	case "tunnel", "tunnel-hop", "forward-via-tunnel", "forward-via-tunnel-entry", "forward-chain":
+	case "tunnel", "tunnel-hop", "forward-via-tunnel", "forward-via-tunnel-entry", "forward-chain", "full-chain":
 		return 4
 	default:
 		return 1
 	}
+}
+
+func selfTestTCPSampleCount(t selfTest) int {
+	if strings.EqualFold(strings.TrimSpace(t.Kind), "full-chain") {
+		return 3
+	}
+	return 1
+}
+
+func medianLatency(latencies []int) int {
+	sort.Ints(latencies)
+	return latencies[len(latencies)/2]
 }
 
 func selfTestDependsOnRuntime(t selfTest) bool {
@@ -240,7 +263,7 @@ func selfTestDependsOnRuntime(t selfTest) bool {
 		return true
 	}
 	switch strings.ToLower(strings.TrimSpace(t.Kind)) {
-	case "tunnel", "tunnel-hop", "forward-via-tunnel", "forward-via-tunnel-entry", "forward-chain":
+	case "tunnel", "tunnel-hop", "forward-via-tunnel", "forward-via-tunnel-entry", "forward-chain", "full-chain":
 		return true
 	default:
 		return false

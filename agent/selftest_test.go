@@ -40,7 +40,7 @@ func TestSelfTestInFlightDeduplicatesRetries(t *testing.T) {
 }
 
 func TestTunnelSelfTestsRetryTransientListenerReadiness(t *testing.T) {
-	for _, kind := range []string{"tunnel", "tunnel-hop", "forward-via-tunnel", "forward-via-tunnel-entry", "forward-chain"} {
+	for _, kind := range []string{"tunnel", "tunnel-hop", "forward-via-tunnel", "forward-via-tunnel-entry", "forward-chain", "full-chain"} {
 		if attempts := selfTestTCPAttempts(selfTest{Kind: kind}); attempts != 4 {
 			t.Fatalf("kind %s attempts = %d, want 4", kind, attempts)
 		}
@@ -56,6 +56,7 @@ func TestTunnelAndMultiEntrySelfTestsWaitForRuntime(t *testing.T) {
 		{Kind: "tunnel-hop"},
 		{Kind: "forward-via-tunnel-entry"},
 		{Kind: "forward-chain"},
+		{Kind: "full-chain"},
 		{WireGuardPeerID: "42"},
 	} {
 		if !selfTestDependsOnRuntime(test) {
@@ -82,6 +83,18 @@ func TestTunnelAndMultiEntrySelfTestsWaitForRuntime(t *testing.T) {
 	}
 	if selfTestRuntimeReadinessWindow < wireGuardRuntimeWaitTimeout {
 		t.Fatalf("runtime readiness window=%s does not cover WireGuard startup=%s", selfTestRuntimeReadinessWindow, wireGuardRuntimeWaitTimeout)
+	}
+}
+
+func TestFullChainSelfTestsUseMedianOfThreeSuccessfulSamples(t *testing.T) {
+	if samples := selfTestTCPSampleCount(selfTest{Kind: "full-chain"}); samples != 3 {
+		t.Fatalf("full-chain samples = %d, want 3", samples)
+	}
+	if samples := selfTestTCPSampleCount(selfTest{Kind: "forward-chain"}); samples != 1 {
+		t.Fatalf("forward-chain samples = %d, want 1", samples)
+	}
+	if latency := medianLatency([]int{2, 152, 2}); latency != 2 {
+		t.Fatalf("median latency = %d, want 2", latency)
 	}
 }
 
