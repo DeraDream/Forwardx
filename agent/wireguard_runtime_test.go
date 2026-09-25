@@ -513,6 +513,11 @@ func TestWireGuardIdentityReplacementFailureRestoresPreviousRuntime(t *testing.T
 		t.Fatal(err)
 	}
 	defer occupied.Close()
+	occupiedV6, err := net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6unspecified, Port: occupied.LocalAddr().(*net.UDPAddr).Port})
+	if err != nil {
+		t.Skipf("IPv6 UDP listener unavailable: %v", err)
+	}
+	defer occupiedV6.Close()
 	replacementPrivateKey, replacementPublicKey := testWireGuardKeyPair(t)
 	replacement := oldSpec
 	replacement.PrivateKey = replacementPrivateKey

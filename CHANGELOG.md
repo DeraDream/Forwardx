@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.3.364] - 2026-09-25
+
+### Agent 打包测试修复
+
+- 修复 WireGuard 身份替换回滚测试在仅占用 IPv4 UDP 端口时可回退到 IPv6 而导致的不稳定失败。
+- 面板与 APK Release `2.3.364`，Agent `2.2.208`，ForwardX FXP runtime `2.2.117`，Android APP `2.3.97`。
+
 ## [2.3.363] - 2026-09-25
 
 ### 转发规则新建与引用端口修复
