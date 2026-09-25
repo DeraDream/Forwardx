@@ -10361,16 +10361,15 @@ function RulesContent() {
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="direct">手动指定目标</SelectItem>
-                        <SelectItem
-                          value="saved"
-                          disabled={
-                            availableSavedForwardResults.length === 0 ||
-                            form.routeMode === "chain" ||
-                            form.routeMode === "group"
-                          }
-                        >
-                          使用已完成转发
-                        </SelectItem>
+                        {!selectedForwardGroupIsChain &&
+                          form.routeMode !== "group" && (
+                            <SelectItem
+                              value="saved"
+                              disabled={availableSavedForwardResults.length === 0}
+                            >
+                              使用已完成转发
+                            </SelectItem>
+                          )}
                         <SelectItem
                           value="landing"
                           disabled={availableLandingServices.length === 0}

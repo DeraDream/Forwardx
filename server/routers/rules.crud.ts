@@ -1333,7 +1333,7 @@ export const crudRulesRouter = router({
       const rule = await db.getForwardRuleById(input.id);
       if (!rule) throw new Error("规则不存在");
       if (ctx.user.role !== "admin" && rule.userId !== ctx.user.id) throw new Error("无权操作此规则");
-      if (input.targetRuleId !== undefined && (rule as any).isForwardGroupTemplate
+      if (input.targetRuleId && (rule as any).isForwardGroupTemplate
         && await isChainBackedForwardGroup((rule as any).forwardGroupId)) {
         throw new Error("引用已完成转发仅支持普通端口转发，不能作为转发链的出口");
       }
@@ -1734,10 +1734,10 @@ export const crudRulesRouter = router({
           forwardGroupRuleId: null,
           forwardGroupMemberId: null,
           isForwardGroupTemplate: true,
-          // Port-forward templates can target a saved completed forward or a
-          // landing SS. Chains cannot, so only clear those references there.
+          // Only port-forward templates can target a completed forward.
+          // Landing SS is also a valid final target for a forwarding chain.
           targetRuleId: isPortGroup ? (input.targetRuleId !== undefined ? input.targetRuleId : ((rule as any).targetRuleId ?? null)) : null,
-          targetLandingServiceId: isPortGroup ? (input.targetLandingServiceId !== undefined ? input.targetLandingServiceId : ((rule as any).targetLandingServiceId ?? null)) : null,
+          targetLandingServiceId: input.targetLandingServiceId !== undefined ? input.targetLandingServiceId : ((rule as any).targetLandingServiceId ?? null),
         };
         delete data.id;
         delete data.blockHttp;

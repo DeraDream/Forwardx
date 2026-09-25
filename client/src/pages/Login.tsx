@@ -934,7 +934,7 @@ export default function Login() {
               <span>{telegramWebAppLoginMutation.isPending ? "正在验证 Telegram 登录..." : "正在验证一次性登录码..."}</span>
             </div>
           ) : mode === "login" ? (
-            <form onSubmit={handleLogin} className="space-y-4">
+            <form onSubmit={handleLogin} className="space-y-4" autoComplete="on">
               {mobileAuth.isNative && !hasMobilePanelUrl && (
                 <button
                   type="button"
@@ -948,10 +948,14 @@ export default function Login() {
                 <Label htmlFor="username">用户名或邮箱</Label>
                 <Input
                   id="username"
+                  name="username"
                   type="text"
+                  inputMode="email"
+                  lang="en"
                   placeholder="请输入用户名或邮箱"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
+                  onInput={(e) => setUsername(e.currentTarget.value)}
                   autoComplete="username"
                   autoCapitalize="none"
                   autoCorrect="off"
@@ -965,10 +969,14 @@ export default function Login() {
                 <div className="relative">
                   <Input
                     id="password"
+                    name="password"
                     type={showPassword ? "text" : "password"}
+                    inputMode="text"
+                    lang="en"
                     placeholder="请输入密码"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
+                    onInput={(e) => setPassword(e.currentTarget.value)}
                     autoComplete="current-password"
                     disabled={isPending}
                     className="pr-10"
@@ -1091,7 +1099,7 @@ export default function Login() {
               </div>
             </form>
           ) : (
-            <form onSubmit={handleRegister} className="space-y-4">
+            <form onSubmit={handleRegister} className="space-y-4" autoComplete="on">
               {mobileAuth.isNative && !hasMobilePanelUrl && (
                 <button
                   type="button"
@@ -1105,12 +1113,19 @@ export default function Login() {
                 <Label htmlFor="reg-username">用户名</Label>
                 <Input
                   id="reg-username"
+                  name="username"
                   type="text"
+                  inputMode="email"
+                  lang="en"
                   placeholder="请输入邮箱作为用户名"
                   value={username}
                   onChange={(e) => {
                     setUsername(e.target.value);
                     if (!email || email === username) setEmail(e.target.value);
+                  }}
+                  onInput={(e) => {
+                    setUsername(e.currentTarget.value);
+                    if (!email || email === username) setEmail(e.currentTarget.value);
                   }}
                   autoComplete="username"
                   autoFocus
@@ -1165,10 +1180,14 @@ export default function Login() {
                 <div className="relative">
                   <Input
                     id="reg-password"
+                    name="password"
                     type={showPassword ? "text" : "password"}
+                    inputMode="text"
+                    lang="en"
                     placeholder="至少6个字符"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
+                    onInput={(e) => setPassword(e.currentTarget.value)}
                     autoComplete="new-password"
                     disabled={isPending}
                     className="pr-10"
