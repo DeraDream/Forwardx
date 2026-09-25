@@ -68,6 +68,7 @@ import {
 } from "@/components/ui/table";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import { trpc } from "@/lib/trpc";
+import { copyTextToClipboard } from "@/lib/clipboard";
 import { pollingInterval } from "@/lib/polling";
 import { handoffManualTestResult } from "@/lib/manualTestCache";
 import {
@@ -124,6 +125,7 @@ import {
   Shuffle,
   AlertCircle,
   Copy,
+  Hash,
   Download,
   Upload,
   Search,
@@ -8011,6 +8013,25 @@ function RulesContent() {
     }
   };
 
+  const copyEntryPort = async (rule: any) => {
+    const port = Number(rule?.sourcePort || 0);
+    if (!Number.isInteger(port) || port < 1) return toast.error("入口端口不可用");
+    const copied = await copyTextToClipboard(String(port));
+    toast[copied ? "success" : "error"](copied ? `已复制入口端口: ${port}` : "复制失败，请手动复制");
+  };
+
+  const copyLinkedLandingService = async (rule: any) => {
+    const serviceId = Number(rule?.targetLandingServiceId || 0);
+    if (!serviceId) return;
+    const services = landingServicesQuery.data || await utils.landing.list.fetch();
+    const service = services.find((item: any) => Number(item.id) === serviceId);
+    const endpoint = String(service?.endpoint || service?.host?.exitIp || service?.host?.ip || "").trim();
+    const link = endpoint && service?.password ? `ss://${btoa(unescape(encodeURIComponent(`${service.method}:${service.password}`))).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "")}@${endpoint}:${service.port}#${encodeURIComponent(service.name)}` : "";
+    if (!link) return toast.error("引用的 SS 链接不可用");
+    const copied = await copyTextToClipboard(link);
+    toast[copied ? "success" : "error"](copied ? "SS 链接已复制" : "复制失败，请手动复制");
+  };
+
   const renderResolvedStatusDot = (
     visual: ReturnType<typeof resolveForwardRuleVisualStatus>,
   ) => {
@@ -8155,25 +8176,19 @@ function RulesContent() {
           <div className={labelClass}>入口</div>
           <div className="flex min-w-0 flex-col gap-1">
             {entryAddresses.map((entry) => (
-              <button
-                key={`${entry.label}:${entry.value}`}
-                type="button"
-                onClick={() =>
-                  entry.copyable && copyEntryAddress(rule, entry.value)
-                }
-                disabled={!entry.copyable}
-                className="group flex max-w-full min-w-0 items-start justify-between gap-1.5 rounded bg-muted/35 px-1.5 py-1 text-left transition-colors enabled:hover:bg-muted/70 disabled:cursor-default disabled:text-muted-foreground"
-                title={
-                  entry.copyable
-                    ? `${entryTitle}${entryAddresses.length > 1 ? ` (${entry.label})` : ""}`
-                    : entry.text
-                }
-              >
-                <code className={valueClass}>{entry.text}</code>
-                {entry.copyable && (
-                  <Copy className="mt-0.5 h-3 w-3 flex-shrink-0 text-muted-foreground opacity-60 group-hover:opacity-100" />
-                )}
-              </button>
+              <div key={`${entry.label}:${entry.value}`} className="flex min-w-0 items-start gap-1">
+                <button
+                  type="button"
+                  onClick={() => entry.copyable && copyEntryAddress(rule, entry.value)}
+                  disabled={!entry.copyable}
+                  className="group flex min-w-0 flex-1 items-start justify-between gap-1.5 rounded bg-muted/35 px-1.5 py-1 text-left transition-colors enabled:hover:bg-muted/70 disabled:cursor-default disabled:text-muted-foreground"
+                  title={entry.copyable ? `${entryTitle}${entryAddresses.length > 1 ? ` (${entry.label})` : ""}` : entry.text}
+                >
+                  <code className={valueClass}>{entry.text}</code>
+                  {entry.copyable && <Copy className="mt-0.5 h-3 w-3 flex-shrink-0 text-muted-foreground opacity-60 group-hover:opacity-100" />}
+                </button>
+                {entry.copyable && <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" title={`复制入口端口: ${rule.sourcePort}`} onClick={() => void copyEntryPort(rule)}><Hash className="h-3.5 w-3.5" /></Button>}
+              </div>
             ))}
           </div>
         </div>
@@ -8640,6 +8655,11 @@ function RulesContent() {
         >
           <Stethoscope className="h-3.5 w-3.5" />
         </Button>
+        {(ruleCategory === "local" || ruleCategory === "chain") && Number(rule.targetLandingServiceId) > 0 && (
+          <Button variant="ghost" size="icon" className="h-8 w-8" title="复制所引用的 SS 链接" onClick={() => void copyLinkedLandingService(rule)}>
+            <Copy className="h-3.5 w-3.5" />
+          </Button>
+        )}
         <Button
           variant="ghost"
           size="icon"

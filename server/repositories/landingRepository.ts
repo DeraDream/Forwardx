@@ -17,6 +17,7 @@ export function mapLandingService(row: any, includeSecret = false) {
   const mapped: any = {
     ...row,
     id: Number(row.id), hostId: Number(row.hostId), userId: Number(row.userId), port: Number(row.port),
+    isExternal: Number(row.hostId) < 0,
     isFullChainManaged: bool(row.isFullChainManaged),
     isEnabled: bool(row.isEnabled), latencyTargetPort: Number(row.latencyTargetPort || 443),
     latestLatencyMs: row.latestLatencyMs === null || row.latestLatencyMs === undefined ? null : Number(row.latestLatencyMs),
