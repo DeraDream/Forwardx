@@ -3515,6 +3515,7 @@ function RulesContent() {
       setShowDialog(true);
       return;
     }
+    const requestedRouteMode = preferredRouteMode || (rulePageTab === "all" ? "local" : rulePageTab);
     const firstPortGroup = canUseSavedLocalForward
       ? availablePortForwardGroups[0]
       : null;
@@ -3571,20 +3572,14 @@ function RulesContent() {
       toast.error("暂无可用端口转发，请检查链路配置、授权或计费余额");
       return;
     }
-    const routeMode: RuleRouteMode =
-      hasSavedLocalForward || hasBillingHostLocalForward
-        ? "local"
-        : firstTunnel
-          ? "tunnel"
-          : firstChain
-            ? "chain"
-            : "group";
+    const routeMode: RuleRouteMode = requestedRouteMode === "landing"
+      ? "local"
+      : requestedRouteMode;
     if (
-      hasSavedLocalForward ||
-      hasBillingHostLocalForward ||
-      firstTunnel ||
-      firstChain ||
-      firstGroup
+      (routeMode === "local" && (hasSavedLocalForward || hasBillingHostLocalForward)) ||
+      (routeMode === "tunnel" && !!firstTunnel) ||
+      (routeMode === "chain" && !!firstChain) ||
+      (routeMode === "group" && !!firstGroup)
     ) {
       const localUsesSavedForward =
         routeMode === "local" && hasSavedLocalForward;
@@ -3621,7 +3616,7 @@ function RulesContent() {
                 : null,
       });
     } else {
-      toast.error("暂无可用转发资源，请检查链路配置、授权或计费余额。");
+      toast.error(`暂无可用${ruleTransferScopeLabels[routeMode]}，请检查链路配置、授权或计费余额。`);
       return;
     }
     setCreateDialogTab(routeMode);
@@ -4432,6 +4427,8 @@ function RulesContent() {
     form.protocol,
     form.routeMode,
     form.tunnelId,
+    form.targetLandingServiceId,
+    form.targetRuleId,
     checkPort,
     isForwardGroupRouteMode,
   ]);
@@ -10292,12 +10289,12 @@ function RulesContent() {
                     <Select
                       value={form.protocol}
                       onValueChange={(v) =>
-                        setForm({
-                          ...form,
+                        setForm((prev) => ({
+                          ...prev,
                           protocol: v as any,
                           failoverEnabled:
-                            v === "tcp" ? form.failoverEnabled : false,
-                        })
+                            v === "tcp" ? prev.failoverEnabled : false,
+                        }))
                       }
                     >
                       <SelectTrigger>
@@ -10329,8 +10326,8 @@ function RulesContent() {
                           value === "landing"
                             ? availableLandingServices[0]
                             : null;
-                        setForm({
-                          ...form,
+                        setForm((prev) => ({
+                          ...prev,
                           targetRuleId: result?.id || null,
                           targetLandingServiceId: landing?.id || null,
                           targetIp: result
@@ -10342,18 +10339,18 @@ function RulesContent() {
                                     landing.targetIp ||
                                     "",
                                 )
-                              : form.targetIp,
+                              : prev.targetIp,
                           targetPort: result
                             ? Number(result.sourcePort || 0)
                             : landing
                               ? Number(landing.port || 0)
-                              : form.targetPort,
+                              : prev.targetPort,
                           sourcePort: result
                             ? Number(result.sourcePort || 0)
                             : landing
                               ? Number(landing.port || 0)
-                              : form.sourcePort,
-                        });
+                              : prev.sourcePort,
+                        }));
                       }}
                     >
                       <SelectTrigger>
@@ -10511,13 +10508,13 @@ function RulesContent() {
                           const result = availableSavedForwardResults.find(
                             (item: any) => Number(item.id) === Number(value),
                           );
-                          setForm({
-                            ...form,
+                          setForm((prev) => ({
+                            ...prev,
                             targetRuleId: Number(value),
                             targetIp: String(result?.targetIp || ""),
                             targetPort: Number(result?.sourcePort || 0),
                             sourcePort: Number(result?.sourcePort || 0),
-                          });
+                          }));
                         }}
                       >
                         <SelectTrigger className="[&>span]:flex-1 [&>span]:text-left">
@@ -10554,8 +10551,8 @@ function RulesContent() {
                           const service = availableLandingServices.find(
                             (item: any) => Number(item.id) === Number(value),
                           );
-                          setForm({
-                            ...form,
+                          setForm((prev) => ({
+                            ...prev,
                             targetLandingServiceId: Number(value),
                             targetRuleId: null,
                             targetIp: String(
@@ -10566,7 +10563,7 @@ function RulesContent() {
                             ),
                             targetPort: Number(service?.port || 0),
                             sourcePort: Number(service?.port || 0),
-                          });
+                          }));
                         }}
                       >
                         <SelectTrigger className="[&>span]:flex-1 [&>span]:text-left">
