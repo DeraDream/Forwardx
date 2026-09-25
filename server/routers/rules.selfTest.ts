@@ -49,34 +49,50 @@ export const selfTestRulesRouter = router({
           if (probes.length === 0) throw new Error("引用的转发链没有可测试的有效链路");
           const batchId = createHopTestBatch("saved-forward", Number(rule.id));
           const testHostIds = new Set<number>();
-          const hopCount = probes.length + 1;
-          const chainLatencyMode = probes.some((probe) => probe.method === "tcp")
+          const sourceGroup = (rule as any).forwardGroupId
+            ? await db.getForwardGroupById(Number((rule as any).forwardGroupId)) as any
+            : null;
+          const sourceHostIds = String(sourceGroup?.groupMode || "") === "port"
+            ? await db.getForwardGroupRuleEntryHostIds(Number(sourceGroup.id))
+            : [Number(rule.hostId)];
+          if (sourceHostIds.length === 0 || sourceHostIds.some((hostId) => hostId <= 0)) {
+            throw new Error("当前端口转发没有可测试的入口主机");
+          }
+          const hopCount = probes.length + sourceHostIds.length;
+          const baseLatencyMode = probes.some((probe) => probe.method === "tcp")
             && ["iptables", "nftables"].includes(String(savedChain.forwardType || "").trim().toLowerCase())
             ? Number(savedChain.entryGroupId || 0) > 0
               ? "multi-source-remaining-path"
               : "remaining-path"
             : "sum";
-          const sourceHost = await db.getHostById(Number(rule.hostId));
-          const sourceName = String((sourceHost as any)?.name || `主机${rule.hostId}`).trim();
+          const chainLatencyMode = sourceHostIds.length > 1
+            ? "multi-source-remaining-path"
+            : baseLatencyMode;
           const entryHost = await db.getHostById(Number(probes[0].fromHostId));
           const entryName = String((entryHost as any)?.name || `主机${probes[0].fromHostId}`).trim();
-          const outerTestId = await db.createForwardTest({
-            ruleId: rule.id, hostId: rule.hostId, userId: rule.userId, status: "pending",
-            listenOk: false, targetReachable: false, forwardOk: false,
-            message: JSON.stringify({ kind: "forward-chain", groupId: savedChain.id, ruleId: rule.id,
-              entryIp: rule.targetIp, entrySourcePort: rule.targetPort, targetIp: rule.targetIp, targetPort: rule.targetPort,
-              method: linkProbeMethodForRule(rule), hopLabel: `1/${hopCount} ${sourceName}->${entryName}`,
-              routeLabel: `${sourceName} -> ${entryName}`, batchId, latencyMode: chainLatencyMode, runtimeDependent: true }),
-          });
-          registerHopTest(batchId, Number(outerTestId));
-          testHostIds.add(Number(rule.hostId));
+          let outerTestId = 0;
+          for (const [index, sourceHostId] of sourceHostIds.entries()) {
+            const sourceHost = await db.getHostById(sourceHostId);
+            const sourceName = String((sourceHost as any)?.name || `主机${sourceHostId}`).trim();
+            const testId = await db.createForwardTest({
+              ruleId: rule.id, hostId: sourceHostId, userId: rule.userId, status: "pending",
+              listenOk: false, targetReachable: false, forwardOk: false,
+              message: JSON.stringify({ kind: "forward-chain", groupId: savedChain.id, ruleId: rule.id,
+                entryIp: rule.targetIp, entrySourcePort: rule.targetPort, targetIp: rule.targetIp, targetPort: rule.targetPort,
+                method: linkProbeMethodForRule(rule), hopLabel: `${index + 1}/${hopCount} ${sourceName}->${entryName}`,
+                routeLabel: `${sourceName} -> ${entryName}`, batchId, latencyMode: chainLatencyMode, runtimeDependent: true }),
+            });
+            if (!outerTestId) outerTestId = Number(testId);
+            registerHopTest(batchId, Number(testId));
+            testHostIds.add(sourceHostId);
+          }
           for (const [index, probe] of probes.entries()) {
             const testId = await db.createForwardTest({
               ruleId: rule.id, hostId: probe.fromHostId, userId: rule.userId, status: "pending",
               listenOk: false, targetReachable: false, forwardOk: false,
               message: JSON.stringify({ kind: "forward-chain", groupId: savedChain.id, ruleId: rule.id,
                 entryIp: probe.targetIp, entrySourcePort: probe.targetPort, targetIp: probe.targetIp, targetPort: probe.targetPort,
-                method: probe.method, hopLabel: `${index + 2}/${hopCount} ${probe.hopLabel}`, routeLabel: probe.routeLabel,
+                method: probe.method, hopLabel: `${sourceHostIds.length + index + 1}/${hopCount} ${probe.hopLabel}`, routeLabel: probe.routeLabel,
                 batchId, latencyMode: chainLatencyMode, runtimeDependent: probe.runtimeDependent }),
             });
             registerHopTest(batchId, Number(testId));

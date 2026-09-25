@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildDirectRuleLatencyProbe,
   buildTunnelRuleLatencyProbe,
   canReuseRecentTunnelLatencySample,
   combineTunnelRuleLatencySample,
@@ -31,6 +32,21 @@ test("tunnel rule latency probes are created only for the canonical exit host", 
     method: "tcping",
     probeKey: tunnelRuleLatencyTopologyKey(rule, tunnel),
     topologyKey: tunnelRuleLatencyTopologyKey(rule, tunnel),
+  });
+});
+
+test("direct referenced rules probe from their own entry host", () => {
+  assert.equal(buildDirectRuleLatencyProbe({ hostId: 22, rule }), null);
+  assert.deepEqual(buildDirectRuleLatencyProbe({
+    hostId: 11,
+    rule: { ...rule, hostId: 11, tunnelId: null },
+  }), {
+    ruleId: 71,
+    targetIp: "game.example.com",
+    targetPort: 443,
+    method: "tcping",
+    probeKey: "rule-direct-v1:71:11:game.example.com:443:tcp",
+    topologyKey: "rule-direct-v1:71:11:game.example.com:443:tcp",
   });
 });
 

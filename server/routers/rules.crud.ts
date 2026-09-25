@@ -1217,6 +1217,7 @@ export const crudRulesRouter = router({
           targetIp: normalizeRuleTargetIp(input.targetIp, { tunnelId: forwardType === "gost" && !isForwardChain && (group as any).groupType === "tunnel" ? 1 : null }),
           targetPort: input.targetPort,
           targetRuleId: input.targetRuleId || null,
+          targetLandingServiceId: input.targetLandingServiceId || null,
           isEnabled: input.isEnabled,
           telegramErrorNotifyEnabled: !!input.telegramErrorNotifyEnabled,
           blockHttp: false,

@@ -4084,6 +4084,47 @@ function RulesContent() {
     if (!form.forwardGroupId) return null;
     return forwardGroupById.get(Number(form.forwardGroupId)) || null;
   }, [form.forwardGroupId, forwardGroupById]);
+  const suggestedRuleName = useMemo(() => {
+    if (
+      editingId ||
+      form.routeMode !== "local" ||
+      normalizeForwardGroupModeForRule(selectedForwardGroup) !== "port"
+    )
+      return "";
+    const forwardName = String(selectedForwardGroup?.name || "").trim();
+    if (!forwardName) return "";
+    if (form.targetRuleId) {
+      const target = availableSavedForwardResults.find(
+        (rule: any) => Number(rule.id) === Number(form.targetRuleId),
+      );
+      const chainName = String(
+        forwardGroupById.get(Number(target?.forwardGroupId || 0))?.name || "",
+      ).trim();
+      const targetName = String(target?.name || "").trim();
+      return chainName && targetName
+        ? [forwardName, chainName, targetName].join("-").slice(0, 128)
+        : "";
+    }
+    if (form.targetLandingServiceId) {
+      const service = availableLandingServices.find(
+        (item: any) => Number(item.id) === Number(form.targetLandingServiceId),
+      );
+      const serviceName = String(service?.name || "").trim();
+      return serviceName
+        ? [forwardName, serviceName].join("-").slice(0, 128)
+        : "";
+    }
+    return "";
+  }, [
+    availableLandingServices,
+    availableSavedForwardResults,
+    editingId,
+    form.routeMode,
+    form.targetLandingServiceId,
+    form.targetRuleId,
+    forwardGroupById,
+    selectedForwardGroup,
+  ]);
   const routeModeLocked = false;
   const isForwardGroupRouteMode = isForwardGroupBackedRouteModeValue(
     form.routeMode,
@@ -4956,8 +4997,9 @@ function RulesContent() {
 
   const handleSubmit = async () => {
     const submitForwardType = effectiveRouteForwardType;
+    const ruleName = form.name.trim() || suggestedRuleName;
     if (
-      !form.name ||
+      !ruleName ||
       (!form.targetRuleId && !form.targetIp) ||
       !form.targetPort ||
       (!isForwardGroupRouteMode && !form.hostId)
@@ -5119,7 +5161,7 @@ function RulesContent() {
       updateMutation.mutate({
         id: editingId,
         hostId: isForwardGroupRouteMode ? undefined : form.hostId!,
-        name: form.name,
+        name: ruleName,
         forwardType: submitForwardType,
         protocol: form.protocol,
         gostMode: "direct" as const,
@@ -5139,7 +5181,7 @@ function RulesContent() {
     } else {
       createMutation.mutate({
         hostId: isForwardGroupRouteMode ? undefined : form.hostId!,
-        name: form.name,
+        name: ruleName,
         forwardType: submitForwardType,
         protocol: form.protocol,
         gostMode: "direct" as const,
@@ -10237,8 +10279,9 @@ function RulesContent() {
                   <div className="space-y-2">
                     <Label>规则名称</Label>
                     <Input
-                      placeholder="例如: Web 服务转发"
+                      placeholder={suggestedRuleName || "例如: Web 服务转发"}
                       value={form.name}
+                      className="focus:placeholder:text-transparent"
                       onChange={(e) =>
                         setForm({ ...form, name: e.target.value })
                       }
@@ -10317,7 +10360,7 @@ function RulesContent() {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="direct">直接地址</SelectItem>
+                        <SelectItem value="direct">手动指定目标</SelectItem>
                         <SelectItem
                           value="saved"
                           disabled={
@@ -10326,13 +10369,13 @@ function RulesContent() {
                             form.routeMode === "group"
                           }
                         >
-                          引用已完成转发
+                          使用已完成转发
                         </SelectItem>
                         <SelectItem
                           value="landing"
                           disabled={availableLandingServices.length === 0}
                         >
-                          引用落地 SS 服务
+                          使用落地服务
                         </SelectItem>
                       </SelectContent>
                     </Select>
@@ -10504,7 +10547,7 @@ function RulesContent() {
                       </p>
                     </div>
                   ) : form.targetLandingServiceId ? (
-                    <div className="space-y-2 sm:col-span-2">
+                    <div className="space-y-2">
                       <Label>落地服务（地址与端口由服务自动解析）</Label>
                       <Select
                         value={String(form.targetLandingServiceId)}
@@ -10748,7 +10791,7 @@ function RulesContent() {
                   onClick={handleSubmit}
                   disabled={
                     isPending ||
-                    !form.name ||
+                    !(form.name.trim() || suggestedRuleName) ||
                     (!isForwardGroupRouteMode && !form.hostId) ||
                     !form.targetIp ||
                     !form.targetPort ||

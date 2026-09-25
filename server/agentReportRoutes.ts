@@ -33,6 +33,7 @@ import { isRuleLatencyReportMethodCompatible } from "../shared/latencyProbe";
 import { completeSupportBundleHost } from "./supportBundle";
 import {
   combineTunnelRuleLatencySample,
+  directRuleLatencyTopologyKey,
   validateTunnelRuleLatencyReport,
 } from "./ruleLatency";
 import { clearRuleLatencyQueryCaches } from "./ruleLatencyQueryCache";
@@ -1347,6 +1348,7 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
         if (report.sourcePort && Number(report.sourcePort) !== Number(rule.sourcePort || 0)) return null;
         if (report.targetPort && Number(report.targetPort) !== Number(rule.targetPort || 0)) return null;
         if (!isRuleLatencyReportMethodCompatible(rule.protocol, report.method)) return null;
+        if (report.topologyKey && report.topologyKey !== directRuleLatencyTopologyKey(rule, host.id)) return null;
         const isTimeout = !!report.isTimeout || baseLatency === null;
         const latencyMs = isTimeout ? null : baseLatency;
         return {

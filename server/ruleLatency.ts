@@ -126,6 +126,40 @@ export function buildTunnelRuleLatencyProbe(input: {
   };
 }
 
+export function buildDirectRuleLatencyProbe(input: {
+  hostId: unknown;
+  rule: any;
+  targetIp?: unknown;
+}) {
+  const hostId = validId(input.hostId);
+  const ruleId = validId(input.rule?.id);
+  const ruleHostId = validId(input.rule?.hostId);
+  const targetIp = String(input.targetIp ?? input.rule?.targetIp ?? "").trim();
+  const targetPort = validPort(input.rule?.targetPort);
+  if (!hostId || !ruleId || hostId !== ruleHostId || !targetIp || !targetPort)
+    return null;
+  const topologyKey = directRuleLatencyTopologyKey(input.rule, hostId, targetIp);
+  return {
+    ruleId,
+    targetIp,
+    targetPort,
+    method: ruleLatencyProbeMethodForRule(input.rule),
+    probeKey: topologyKey,
+    topologyKey,
+  };
+}
+
+export function directRuleLatencyTopologyKey(rule: any, hostId: unknown, targetIp: unknown = rule?.targetIp) {
+  return [
+    "rule-direct-v1",
+    validId(rule?.id),
+    validId(hostId),
+    normalizedTarget(targetIp),
+    validPort(rule?.targetPort),
+    normalizeForwardRuleProtocol(rule?.protocol),
+  ].join(":");
+}
+
 export function validateTunnelRuleLatencyReport(input: {
   hostId: unknown;
   rule: any;

@@ -19,6 +19,7 @@ import { boolValue, countAll, inList, quoteIdentifier } from "../dbCompat";
 import { pageResult, pageWindowForTotal, type PageRequest } from "../../shared/pagination";
 import {
   createForwardRule,
+  getForwardRules,
   getForwardGroupChildRules,
   getForwardGroupChildRulesForMember,
   getForwardGroupChildRulesForTemplate,
@@ -2404,6 +2405,48 @@ async function refreshForwardChainRuntime(groupId: number, reason: string) {
   }
 }
 
+// Saved-forward rules keep a concrete entry endpoint for the Agent. Refresh
+// that endpoint whenever the referenced chain is rebuilt (member/address/port
+// changes all route through this sync).
+async function refreshSavedForwardReferences(chainGroupId: number) {
+  const group = await getForwardGroupById(chainGroupId) as any;
+  if (!group || groupModeOf(group) !== "chain") return;
+  const templates = await getForwardGroupTemplateRules(chainGroupId) as any[];
+  const targetsById = new Map(templates.map((rule) => [Number(rule.id || 0), rule]));
+  const targetIds = new Set(Array.from(targetsById.keys()).filter((id) => id > 0));
+  if (targetIds.size === 0) return;
+
+  const entryGroupId = Number(group.entryGroupId || 0);
+  const entries = entryGroupId > 0
+    ? ((await getForwardGroupById(entryGroupId)) as any)?.members || []
+    : sortedMembers(group).slice(0, 1);
+  const enabledEntries = entries.filter((member: any) => (
+    member?.isEnabled === true || member?.isEnabled === 1 || member?.isEnabled === "1"
+  ) && Number(member?.hostId || 0) > 0);
+  if (enabledEntries.length !== 1) return;
+  const entryHost = await getHostById(Number(enabledEntries[0].hostId));
+  const targetIp = String(entryHost?.entryIp || entryHost?.ipv4 || entryHost?.ip || "").trim();
+  if (!targetIp) return;
+
+  const references = (await getForwardRules() as any[]).filter((rule) =>
+    targetIds.has(Number(rule.targetRuleId || 0)) && !rule.pendingDelete,
+  );
+  const sourceGroupIds = new Set<number>();
+  for (const rule of references) {
+    const targetRule = targetsById.get(Number(rule.targetRuleId));
+    const targetPort = Number(targetRule?.sourcePort || 0);
+    if (targetPort < 1 || targetPort > 65535) continue;
+    if (String(rule.targetIp || "").trim() === targetIp && Number(rule.targetPort || 0) === targetPort) continue;
+    await updateForwardRule(Number(rule.id), { targetIp, targetPort, isRunning: false } as any);
+    const sourceGroupId = Number(rule.forwardGroupId || 0);
+    if (sourceGroupId > 0) sourceGroupIds.add(sourceGroupId);
+    else await refreshRuleEndpoints(rule, "saved-forward-target-updated");
+  }
+  for (const sourceGroupId of sourceGroupIds) {
+    await syncForwardGroupRules(sourceGroupId, { preserveRuntime: false });
+  }
+}
+
 async function dependentChainGroupIds(entryGroupId: number) {
   const db = await getDb();
   if (!db) return [] as number[];
@@ -3241,6 +3284,7 @@ async function syncForwardGroupRulesWithLockHeld(groupId: number, options: SyncF
     await syncForwardGroupRulesUnlocked(groupId, { ...options, deferRefresh: true });
     // Dispatch only after commit so Agents always observe the complete topology.
     await afterDatabaseCommit(() => refreshForwardChainRuntime(groupId, "forward-chain-synced"));
+    await afterDatabaseCommit(() => refreshSavedForwardReferences(groupId));
   });
 }
 

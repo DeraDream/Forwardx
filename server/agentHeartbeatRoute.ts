@@ -101,7 +101,7 @@ import {
 } from "./configAudit";
 import { approveMimicInterfaceRemovals } from "./mimicRemovalGuard";
 import { mimicRuntimeLifecycles } from "./mimicRuntimeLifecycle";
-import { buildTunnelRuleLatencyProbe } from "./ruleLatency";
+import { buildDirectRuleLatencyProbe, buildTunnelRuleLatencyProbe } from "./ruleLatency";
 import { selectTunnelDialAddress, selectTunnelHopDialAddress } from "./tunnelAddressSelection";
 import { DnsRuntimeGenerationTracker } from "./dnsRuntimeGeneration";
 import { selectResolvedTargetIp } from "./dnsTargetResolution";
@@ -6002,7 +6002,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       });
     }
     const forwardGroupProbes = Array.from(forwardGroupProbeMap.values());
-    const ruleLatencyProbes = (agentAllRules as any[])
+    const ruleLatencyProbes: any[] = (agentAllRules as any[])
       .filter((rule: any) => {
         if (!rule || rule.pendingDelete || !rule.isEnabled || !rule.isRunning) return false;
         const tunnelId = Number(rule.tunnelId || 0);
@@ -6027,6 +6027,50 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       })
       .filter(Boolean)
       .sort((left: any, right: any) => Number(left.ruleId) - Number(right.ruleId));
+    const templateIds = Array.from(
+      new Set(
+        (agentAllRules as any[])
+          .map((rule: any) => Number(rule.forwardGroupRuleId || 0))
+          .filter((id: number) => id > 0),
+      ),
+    );
+    const templateById = new Map(
+      (templateIds.length ? await db.getForwardRulesByIds(templateIds) : [])
+        .map((rule: any) => [Number(rule.id), rule]),
+    );
+    for (const rule of agentAllRules as any[]) {
+      if (
+        !rule ||
+        rule.pendingDelete ||
+        !rule.isEnabled ||
+        !rule.isRunning ||
+        Number(rule.tunnelId || 0) > 0 ||
+        !isRuleProtocolEnabled(forwardProtocolSettings, rule)
+      )
+        continue;
+      const template = Number(rule.forwardGroupRuleId || 0)
+        ? templateById.get(Number(rule.forwardGroupRuleId))
+        : rule;
+      if (
+        !template ||
+        (!Number(template.targetRuleId || 0) &&
+          !Number(template.targetLandingServiceId || 0))
+      )
+        continue;
+      const probe = buildDirectRuleLatencyProbe({
+        hostId: host.id,
+        rule,
+        targetIp: processTarget(rule),
+      });
+      if (probe)
+        ruleLatencyProbes.push({
+          ...probe,
+          forwardGroupHealth: forwardGroupHealthByRuleId.get(Number(rule.id)),
+        });
+    }
+    ruleLatencyProbes.sort(
+      (left: any, right: any) => Number(left.ruleId) - Number(right.ruleId),
+    );
     const hostProbeServices = await db.getHostProbeTasksForHost(host.id);
     if (landingHostEnabled) {
       for (const service of await db.getLandingServicesForHost(Number(host.id), false)) {
