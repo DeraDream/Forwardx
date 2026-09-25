@@ -690,7 +690,6 @@ function CreateDialog({
       if (kind === "deploy") {
         deployStarted.current = true;
         await deploy.mutateAsync({ id: chainId });
-        createdDraft.current = undefined;
       }
       await utils.fullChains.list.invalidate();
     } catch (error: unknown) {
@@ -698,7 +697,10 @@ function CreateDialog({
     }
   };
   useEffect(() => {
-    if (id && deployStarted.current && active?.status === "running") closeDialog();
+    if (id && deployStarted.current && active?.status === "running") {
+      createdDraft.current = undefined;
+      closeDialog();
+    }
   }, [active?.status, id]);
   const configReady = valid && portCheck?.available !== false;
   const retryFailedDeployment = !!editingChain && !id && currentChain?.status === "error" && !editDirty;

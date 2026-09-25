@@ -112,6 +112,7 @@ import { observePresenceCapableHostActivity, registerPresenceCapableHost } from 
 import { recordAuthenticatedAgentActivity } from "./agentActivity";
 import { takeLandingPortChecks } from "./landingPortChecks";
 import { getFullChainRuntimeTasks, getFullChainNodes } from "./repositories/fullChainRepository";
+import { applyFullChainRuleStatus } from "./fullChainRuntime";
 
 // DNS 解析缓存：ruleId → 主目标上次解析到的 IPv4 地址。
 // 备用出站策略里的域名由 Agent 的 TCP 拨号和健康检查动态解析。
@@ -4709,6 +4710,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         await db.finalizeForwardRuleDelete(id);
       } else {
         await db.updateRuleRunningStatus(id, false);
+        await applyFullChainRuleStatus(id, false, "Agent 已停止规则");
       }
       rule.isRunning = false;
     };
@@ -6430,6 +6432,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       if (recoverableRules.length > 0) {
         await mapWithConcurrency(recoverableRules, 16, async (rule: any) => {
           await db.updateRuleRunningStatus(Number(rule.id), true);
+          await applyFullChainRuleStatus(Number(rule.id), true, "Agent 从本地监听恢复规则状态");
           rule.isRunning = true;
         });
         appendPanelLog(

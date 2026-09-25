@@ -84,11 +84,15 @@ test("panel can create only a unique chain ending at a marked landing host", () 
       for (const node of replacement.nodes) await (await import(url("server/fullChainRuntime.ts"))).applyFullChainRuntimeStatus(node.hostId, "full-chain-protocol-" + updated.id + "-" + node.id, true, "协议可用");
       await caller.deploy({ id: updated.id });
       const deployed = (await caller.list()).find((item) => item.id === updated.id);
-      assert.equal((await caller.list()).some((item) => item.id === created.id), false, "替换部署成功后旧全链路必须删除");
-      assert.equal(deployed.traffic.bytesInTotal, 12, "替换部署必须保留旧全链路流量");
+      assert.ok((await caller.list()).some((item) => item.id === created.id), "新链路未运行前必须保留旧全链路以便回滚");
+      assert.equal(deployed.traffic.bytesInTotal, 0, "新链路运行前不得迁移旧全链路流量");
       assert.equal((await runtime.queryRaw('SELECT "pendingDelete" FROM "forward_rules" WHERE "id" = ?', [oldRuleId]))[0].pendingDelete, 1, "旧节点的转发端口必须下发释放");
       assert.equal(deployed.landingServiceId, landingServiceId, "未变更的落地 SS 必须复用");
       assert.equal((await db.getLandingServiceById(landingServiceId, true)).isEnabled, true, "未变更的落地 SS 不得清理");
+      await caller.cancel({ id: updated.id });
+      const restored = (await caller.list()).find((item) => item.id === created.id);
+      assert.ok(restored.isEnabled, "取消替换部署必须重新启用旧全链路");
+      assert.equal(restored.status, "checking-link", "取消替换部署必须重新检查旧全链路");
 
     } finally { await runtime.closeDatabase(); }
   `;

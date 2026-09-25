@@ -123,10 +123,17 @@ async function beginDeploy(chainId: number) {
         isEnabled: true, telegramErrorNotifyEnabled: false,
         blockHttp: false, blockSocks: false, blockTls: false,
       } as any);
-      const ruleId = await db.withForwardGroupSyncTransaction(Number(group.id), createTemplate);
+      // The group sync wakes its Agents after commit. Store the template ID in
+      // this same transaction, otherwise a fast status report cannot be tied
+      // back to this full-chain node and deployment remains stuck waiting.
+      const ruleId = await db.withForwardGroupSyncTransaction(Number(group.id), async () => {
+        const id = await createTemplate();
+        await db.updateFullChainNode(Number(next.id), { generatedRuleId: id });
+        return id;
+      });
       const childRules = await db.getForwardGroupChildRulesForTemplate(ruleId);
       if (!childRules.length) throw new Error("转发链没有生成可部署的子规则");
-      await db.updateFullChainNode(Number(next.id), { generatedRuleId: ruleId, deployMessage: `等待转发链 ${childRules.length} 条规则运行` });
+      await db.updateFullChainNode(Number(next.id), { deployMessage: `等待转发链 ${childRules.length} 条规则运行` });
       return;
     } catch (error) {
       return fail(chainId, Number(next.id), "deploy", message(error, "转发链部署失败"));
@@ -208,6 +215,7 @@ async function finishDeploy(chainId: number) {
       status: "running",
       statusMessage: "全链路可用",
     });
+    await completeReplacement(chainId);
     return;
   }
   for (const [index, node] of nodes.entries()) {
@@ -233,7 +241,24 @@ async function finishDeploy(chainId: number) {
   });
 }
 
-export async function startFullChain(chainId: number) {
+async function completeReplacement(chainId: number) {
+  const chain = await db.getFullChainById(chainId) as any;
+  const replacedChainId = Number(chain?.replacesChainId || 0);
+  if (!replacedChainId) return;
+  await db.moveFullChainTraffic(replacedChainId, chainId);
+  await db.deleteFullChain(replacedChainId);
+  await db.updateFullChain(chainId, { replacesChainId: null });
+}
+
+async function restoreReplacedChain(chain: any) {
+  const replacedChainId = Number(chain?.replacesChainId || 0);
+  if (!replacedChainId) return;
+  const replaced = await db.getFullChainById(replacedChainId) as any;
+  if (!replaced || replaced.isEnabled || String(replaced.status) !== "cancelled") return;
+  await startFullChain(replacedChainId, { preserveLandingService: true });
+}
+
+export async function startFullChain(chainId: number, { preserveLandingService = false } = {}) {
   const chain = (await db.getFullChainById(chainId)) as any;
   if (!chain) throw new Error("全链路不存在");
   const nodes = await db.getFullChainNodes(chainId);
@@ -277,7 +302,7 @@ export async function startFullChain(chainId: number) {
   await db.updateFullChain(chainId, {
     status: "checking-link",
     statusMessage: "正在检查链路端口和 UDP",
-    landingServiceId: null,
+    ...(preserveLandingService ? {} : { landingServiceId: null }),
     isEnabled: true,
   });
   for (const node of nodes) if (String(node.nodeType || "host") !== "forward-chain")
@@ -489,6 +514,7 @@ export async function applyFullChainRuntimeStatus(
         status: "running",
         statusMessage: "全链路可用",
       });
+      await completeReplacement(chainId);
     }
     return true;
   }
@@ -584,10 +610,8 @@ export async function deployFullChain(chainId: number) {
       String(replaced?.method) === String(chain.method) &&
       String(replaced?.password) === String(chain.password);
     await cancelFullChain(replacedChainId, { preserveLandingService: reuseLandingService });
-    await db.moveFullChainTraffic(replacedChainId, chainId);
-    await db.deleteFullChain(replacedChainId);
     if (reuseLandingService) await db.updateLandingService(Number(replaced.landingServiceId), { name: chain.name });
-    await db.updateFullChain(chainId, { replacesChainId: null, landingServiceId: reuseLandingService ? Number(replaced.landingServiceId) : null });
+    await db.updateFullChain(chainId, { landingServiceId: reuseLandingService ? Number(replaced.landingServiceId) : null });
   }
   await beginDeploy(chainId);
 }
@@ -617,7 +641,7 @@ export async function applyFullChainLandingStatus(
   return true;
 }
 
-export async function cancelFullChain(chainId: number, { preserveLandingService = false } = {}) {
+export async function cancelFullChain(chainId: number, { preserveLandingService = false, restoreReplacement = true } = {}) {
   const chain = (await db.getFullChainById(chainId)) as any;
   if (!chain) return;
   const nodes = await db.getFullChainNodes(chainId);
@@ -663,6 +687,7 @@ export async function cancelFullChain(chainId: number, { preserveLandingService 
     statusMessage: "已请求清理已部署端口",
     isEnabled: false,
   });
+  if (restoreReplacement) await restoreReplacedChain(chain);
 }
 
 // A lost Agent must not leave a half-built public listener behind.  The
