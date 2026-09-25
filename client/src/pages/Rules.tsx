@@ -10521,7 +10521,7 @@ function RulesContent() {
                           });
                         }}
                       >
-                        <SelectTrigger>
+                        <SelectTrigger className="[&>span]:flex-1 [&>span]:text-left">
                           <SelectValue placeholder="请选择链上已完成转发" />
                         </SelectTrigger>
                         <SelectContent>
@@ -10570,7 +10570,7 @@ function RulesContent() {
                           });
                         }}
                       >
-                        <SelectTrigger>
+                        <SelectTrigger className="[&>span]:flex-1 [&>span]:text-left">
                           <SelectValue placeholder="请选择落地服务" />
                         </SelectTrigger>
                         <SelectContent>
