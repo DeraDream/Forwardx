@@ -9225,11 +9225,14 @@ function RulesContent() {
             <Tabs
               value={createDialogTab}
               onValueChange={(value) => {
-                if (value === "landing") return;
+                if (value === "landing") {
+                  setCreateDialogTab("landing");
+                  handleRulePageTabChange("landing");
+                  return;
+                }
                 setCreateDialogTab(value as RuleRouteMode);
                 setRouteMode(value as RuleRouteMode);
-                setRulePageTab(value as RuleCategory);
-                storeString(rulePageTabStorageKey, value);
+                handleRulePageTabChange(value);
               }}
             >
               <SlidingTabsList
@@ -9994,9 +9997,14 @@ function RulesContent() {
               <Tabs
                 value={createDialogTab}
                 onValueChange={(value) => {
-                  if (value === "landing") return;
+                  if (value === "landing") {
+                    setCreateDialogTab("landing");
+                    handleRulePageTabChange("landing");
+                    return;
+                  }
                   setCreateDialogTab(value as RuleRouteMode);
                   setRouteMode(value as RuleRouteMode);
+                  handleRulePageTabChange(value);
                 }}
               >
                 <SlidingTabsList
@@ -10019,10 +10027,12 @@ function RulesContent() {
                   onValueChange={(value) => {
                     if (value === "landing") {
                       setCreateDialogTab("landing");
+                      handleRulePageTabChange("landing");
                       return;
                     }
                     setCreateDialogTab(value as RuleRouteMode);
                     setRouteMode(value as RuleRouteMode);
+                    handleRulePageTabChange(value);
                   }}
                   className="space-y-3"
                 >
