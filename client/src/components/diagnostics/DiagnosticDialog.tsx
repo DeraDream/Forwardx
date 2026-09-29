@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { pollingInterval } from "@/lib/polling";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -162,6 +163,9 @@ export function DiagnosticDialog({
       setTestIds((data?.testIds || []).map(Number).filter((id) => id > 0));
       setStartedAt(Date.now());
       void utils.diagnostics.plan.invalidate();
+    },
+    onError: (error) => {
+      toast.error("诊断启动失败", { description: error.message || "请检查 Agent 状态后重试" });
     },
   });
 
