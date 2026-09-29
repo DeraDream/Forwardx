@@ -3,6 +3,7 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import AnimatedStatValue from "@/components/AnimatedStatValue";
 import { LatencyRating } from "@/components/LatencyRating";
 import { LinkQualityDialog, type LinkQualityTarget } from "@/components/observability/LinkQualityDialog";
+import { DiagnosticDialog, type DiagnosticTarget } from "@/components/diagnostics/DiagnosticDialog";
 import { LatencyPeakCutToggle } from "@/components/LatencyPeakCutToggle";
 import { LatencyStabilityStats } from "@/components/LatencyStabilityStats";
 import {
@@ -82,6 +83,7 @@ import {
   Plus,
   Route,
   Search,
+  ScanSearch,
   ShieldCheck,
   Stethoscope,
   Trash2,
@@ -2228,6 +2230,7 @@ function TunnelsContent() {
   const [latencyTunnel, setLatencyTunnel] = useState<{ id: number; name: string } | null>(null);
   const [testTunnel, setTestTunnel] = useState<{ id: number; name: string } | null>(null);
   const [qualityTunnel, setQualityTunnel] = useState<LinkQualityTarget | null>(null);
+  const [diagnosticTunnel, setDiagnosticTunnel] = useState<DiagnosticTarget | null>(null);
   const [viewMode, setViewMode] = useState<TunnelViewMode>(() => getStoredTunnelViewMode());
   const [chainViewMode, setChainViewMode] = useState<TunnelViewMode>(() => getStoredChainViewMode());
   const [activeSection, setActiveSection] = useUrlTab<TunnelSection>({
@@ -4067,6 +4070,21 @@ function TunnelsContent() {
                           >
                             <Gauge className="h-3.5 w-3.5" />
                           </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            title="一键诊断"
+                            onClick={() =>
+                              setDiagnosticTunnel({
+                                scope: "tunnel",
+                                id: Number(tunnel.id),
+                                name: String(tunnel.name || `隧道 #${tunnel.id}`),
+                              })
+                            }
+                          >
+                            <ScanSearch className="h-3.5 w-3.5" />
+                          </Button>
                           <Button variant="ghost" size="icon" className="h-8 w-8" title="测试延迟" onClick={() => setTestTunnel({ id: tunnel.id, name: tunnel.name })}>
                             <Stethoscope className="h-3.5 w-3.5" />
                           </Button>
@@ -4178,6 +4196,21 @@ function TunnelsContent() {
                             }
                           >
                             <Gauge className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            title="一键诊断"
+                            onClick={() =>
+                              setDiagnosticTunnel({
+                                scope: "tunnel",
+                                id: Number(tunnel.id),
+                                name: String(tunnel.name || `隧道 #${tunnel.id}`),
+                              })
+                            }
+                          >
+                            <ScanSearch className="h-3.5 w-3.5" />
                           </Button>
                           <Button variant="ghost" size="icon" className="h-8 w-8" title="测试延迟" onClick={() => setTestTunnel({ id: tunnel.id, name: tunnel.name })}>
                             <Stethoscope className="h-3.5 w-3.5" />
@@ -4310,6 +4343,21 @@ function TunnelsContent() {
                                 }
                               >
                                 <Gauge className="h-3.5 w-3.5" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8"
+                                title="一键诊断"
+                                onClick={() =>
+                                  setDiagnosticTunnel({
+                                    scope: "tunnel",
+                                    id: Number(tunnel.id),
+                                    name: String(tunnel.name || `隧道 #${tunnel.id}`),
+                                  })
+                                }
+                              >
+                                <ScanSearch className="h-3.5 w-3.5" />
                               </Button>
                               <Button
                                 variant="ghost"
@@ -4485,6 +4533,11 @@ function TunnelsContent() {
         target={qualityTunnel}
         open={!!qualityTunnel}
         onOpenChange={(open) => !open && setQualityTunnel(null)}
+      />
+      <DiagnosticDialog
+        target={diagnosticTunnel}
+        open={!!diagnosticTunnel}
+        onOpenChange={(open) => !open && setDiagnosticTunnel(null)}
       />
       {testTunnel && (
         <TunnelSelfTestDialog
