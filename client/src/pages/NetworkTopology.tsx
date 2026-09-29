@@ -173,12 +173,19 @@ function buildPhysicalPaths(
   const groupById = new Map<number, any>(groups.map((group: any) => [Number(group.id), group]));
   const landingById = new Map<number, any>(landings.map((landing: any) => [Number(landing.id), landing]));
   const ruleById = new Map<number, any>(rules.map((rule: any) => [Number(rule.id), rule]));
+  const hostByAddress = new Map<string, any>();
+  for (const host of hosts) {
+    for (const value of [host?.entryIp, host?.ipv4, host?.ip, host?.publicIp, host?.exitIp]) {
+      const address = String(value || "").trim().toLowerCase();
+      if (address && !hostByAddress.has(address)) hostByAddress.set(address, host);
+    }
+  }
   const query = search.trim().toLowerCase();
 
-  const makeRelay = (pathId: string, hostId: number, index: number): PhysicalNode => {
+  const makeRelay = (_pathId: string, hostId: number, _index: number): PhysicalNode => {
     const host = hostById.get(hostId);
     return {
-      id: pathId + ":relay:" + index + ":" + hostId,
+      id: "host:" + hostId,
       kind: "relay",
       label: String(host?.name || "主机 #" + hostId),
       subtitle: hostAddress(host),
@@ -187,24 +194,50 @@ function buildPhysicalPaths(
     };
   };
 
-  const makeLandingForRule = (pathId: string, rule: any): PhysicalNode => {
+  const makeLandingForRule = (_pathId: string, rule: any): PhysicalNode => {
     const landing = Number(rule?.targetLandingServiceId || 0) > 0
       ? landingById.get(Number(rule.targetLandingServiceId))
       : null;
     if (landing) {
+      const landingHostId = Number(landing?.hostId || landing?.host?.id || 0);
+      const landingHost = landingHostId > 0 ? hostById.get(landingHostId) : null;
+      if (landingHostId > 0) {
+        return {
+          id: "host:" + landingHostId,
+          kind: "landing",
+          label: String(landingHost?.name || landing.name || "落地主机 #" + landingHostId),
+          subtitle: hostAddress(landingHost) || String(landing.endpoint || ""),
+          detail: landing.port ? "落地 SS · " + String(landing.port) : "落地 SS",
+          online: landingHost?.isOnline !== false,
+        };
+      }
       return {
-        id: pathId + ":landing:ss:" + Number(landing.id),
+        id: "landing:" + Number(landing.id),
         kind: "landing",
         label: String(landing.name || "落地 SS #" + landing.id),
-        subtitle: String(landing.endpoint || landing.host?.exitIp || landing.host?.ip || landing.targetIp || ""),
-        detail: landing.port ? "SS · " + String(landing.port) : "落地 SS",
-        online: landing?.host?.isOnline !== false,
+        subtitle: String(landing.endpoint || landing.targetIp || ""),
+        detail: landing.port ? "外部 SS · " + String(landing.port) : "外部 SS",
+        online: null,
       };
     }
-    const targetIp = String(rule?.targetIp || "未知目标");
+
+    const targetIp = String(rule?.targetIp || "未知目标").trim();
     const targetPort = Number(rule?.targetPort || 0);
+    const matchedHost = hostByAddress.get(targetIp.toLowerCase());
+    if (matchedHost && Number(matchedHost.id || 0) > 0) {
+      const hostId = Number(matchedHost.id);
+      return {
+        id: "host:" + hostId,
+        kind: "landing",
+        label: String(matchedHost.name || "主机 #" + hostId),
+        subtitle: hostAddress(matchedHost),
+        detail: targetPort > 0 ? "最终目标 · " + String(targetPort) : "最终目标",
+        online: matchedHost?.isOnline !== false,
+      };
+    }
+
     return {
-      id: pathId + ":landing:target:" + targetIp + ":" + targetPort,
+      id: "target:" + targetIp + ":" + targetPort,
       kind: "landing",
       label: targetIp,
       subtitle: targetPort > 0 ? String(targetPort) : "",
@@ -287,7 +320,7 @@ function buildPhysicalPaths(
 
       const relayHostIds = tail.hostIds;
       const relays = relayHostIds.map((hostId, index) => makeRelay(pathId, hostId, index));
-      const landing = { ...tail.landing, id: pathId + ":landing" };
+      const landing = tail.landing;
 
       const haystack = [
         entry.label,
@@ -349,7 +382,7 @@ function buildPhysicalPaths(
 
       const relays = middleHostIds.map((hostId, index) => makeRelay(pathId, hostId, index));
       const landing: PhysicalNode = {
-        id: pathId + ":landing",
+        id: "host:" + landingHostId,
         kind: "landing",
         label: String(landingHost?.name || "落地主机 #" + landingHostId),
         subtitle: hostAddress(landingHost),
@@ -381,34 +414,146 @@ function buildPhysicalPaths(
 }
 
 function buildGraph(paths: PhysicalPath[]) {
-  const maxRelays = Math.max(0, ...paths.map((path) => path.relays.length));
-  const landingColumn = maxRelays + 1;
-  const nodes: PositionedNode[] = [];
-  const edges: TopologyEdge[] = [];
-  const columns = new Map<number, PositionedNode[]>();
+  const nodeMap = new Map<string, PhysicalNode>();
+  const edgeMap = new Map<string, TopologyEdge>();
+  const desiredDepth = new Map<string, number>();
+  const entryIds = new Set<string>();
 
-  const addNode = (node: PhysicalNode, column: number) => {
-    const positioned: PositionedNode = { ...node, column, row: 0 };
-    const list = columns.get(column) || [];
-    positioned.row = list.length;
-    list.push(positioned);
-    columns.set(column, list);
-    nodes.push(positioned);
+  const mergeNode = (node: PhysicalNode) => {
+    const existing = nodeMap.get(node.id);
+    if (!existing) {
+      nodeMap.set(node.id, node);
+      return;
+    }
+
+    // 同一台物理机可能既是某条路径的中转，又是另一条路径的落地。
+    // 节点只保留一份，角色优先展示“中转”，状态与可用详情择优合并。
+    const kind: PhysicalNodeKind =
+      existing.kind === "entry" || node.kind === "entry"
+        ? "entry"
+        : existing.kind === "relay" || node.kind === "relay"
+          ? "relay"
+          : "landing";
+    nodeMap.set(node.id, {
+      ...existing,
+      ...node,
+      kind,
+      label: existing.label || node.label,
+      subtitle: existing.subtitle || node.subtitle,
+      detail:
+        existing.detail && node.detail && existing.detail !== node.detail
+          ? existing.detail + " / " + node.detail
+          : existing.detail || node.detail,
+      online:
+        existing.online === false || node.online === false
+          ? false
+          : existing.online ?? node.online,
+      qualityTarget: existing.qualityTarget || node.qualityTarget,
+    });
+  };
+
+  const addEdge = (from: string, to: string) => {
+    if (!from || !to || from === to) return;
+    const id = from + "=>" + to;
+    if (!edgeMap.has(id)) edgeMap.set(id, { id, from, to });
   };
 
   for (const path of paths) {
-    addNode(path.entry, 0);
-    path.relays.forEach((relay, index) => addNode(relay, index + 1));
-    addNode(path.landing, landingColumn);
+    mergeNode(path.entry);
+    entryIds.add(path.entry.id);
+    desiredDepth.set(path.entry.id, 0);
+
+    path.relays.forEach((relay, index) => {
+      mergeNode(relay);
+      desiredDepth.set(relay.id, Math.max(desiredDepth.get(relay.id) || 0, index + 1));
+    });
+
+    mergeNode(path.landing);
+    desiredDepth.set(
+      path.landing.id,
+      Math.max(desiredDepth.get(path.landing.id) || 0, path.relays.length + 1),
+    );
 
     const ordered = [path.entry, ...path.relays, path.landing];
-    for (let i = 0; i < ordered.length - 1; i += 1) {
-      edges.push({
-        id: path.id + ":edge:" + i,
-        from: ordered[i].id,
-        to: ordered[i + 1].id,
-      });
+    for (let index = 0; index < ordered.length - 1; index += 1) {
+      addEdge(ordered[index].id, ordered[index + 1].id);
     }
+  }
+
+  const rawNodes = Array.from(nodeMap.values());
+  const edges = Array.from(edgeMap.values());
+
+  // 基于拓扑依赖计算层级。共享机器只有一个节点，多条入口线可以汇聚，
+  // 同一节点也可以继续向多个下游分叉。
+  const depth = new Map<string, number>();
+  for (const node of rawNodes) {
+    depth.set(node.id, entryIds.has(node.id) ? 0 : Math.max(1, desiredDepth.get(node.id) || 1));
+  }
+
+  for (let pass = 0; pass < Math.max(1, rawNodes.length); pass += 1) {
+    let changed = false;
+    for (const edge of edges) {
+      if (entryIds.has(edge.to)) continue;
+      const next = Math.min(10, (depth.get(edge.from) || 0) + 1);
+      if (next > (depth.get(edge.to) || 0)) {
+        depth.set(edge.to, next);
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+
+  const nonLandingDepths = rawNodes
+    .filter((node) => node.kind !== "landing")
+    .map((node) => depth.get(node.id) || 0);
+  const maxRelayDepth = Math.max(0, ...nonLandingDepths);
+  const landingColumn = Math.max(1, maxRelayDepth + 1);
+
+  for (const node of rawNodes) {
+    if (node.kind === "landing" && !entryIds.has(node.id)) {
+      depth.set(node.id, Math.max(depth.get(node.id) || 1, landingColumn));
+    }
+  }
+
+  const columns = new Map<number, PositionedNode[]>();
+  const positionedNodes: PositionedNode[] = rawNodes.map((node) => {
+    const column = entryIds.has(node.id) ? 0 : depth.get(node.id) || 1;
+    const positioned: PositionedNode = { ...node, column, row: 0 };
+    const list = columns.get(column) || [];
+    list.push(positioned);
+    columns.set(column, list);
+    return positioned;
+  });
+
+  // 用相邻节点的平均位置做简单排序，减少共享节点汇聚后的交叉线。
+  const incoming = new Map<string, string[]>();
+  const outgoing = new Map<string, string[]>();
+  for (const edge of edges) {
+    incoming.set(edge.to, [...(incoming.get(edge.to) || []), edge.from]);
+    outgoing.set(edge.from, [...(outgoing.get(edge.from) || []), edge.to]);
+  }
+
+  const rowHint = new Map<string, number>();
+  const sortedColumns = Array.from(columns.keys()).sort((a, b) => a - b);
+  for (const column of sortedColumns) {
+    const list = columns.get(column) || [];
+    list.sort((a, b) => {
+      if (column === 0) return a.label.localeCompare(b.label, "zh-CN");
+      const aParents = incoming.get(a.id) || [];
+      const bParents = incoming.get(b.id) || [];
+      const aHint = aParents.length
+        ? aParents.reduce((sum, id) => sum + (rowHint.get(id) || 0), 0) / aParents.length
+        : Number.POSITIVE_INFINITY;
+      const bHint = bParents.length
+        ? bParents.reduce((sum, id) => sum + (rowHint.get(id) || 0), 0) / bParents.length
+        : Number.POSITIVE_INFINITY;
+      if (aHint !== bHint) return aHint - bHint;
+      return a.label.localeCompare(b.label, "zh-CN");
+    });
+    list.forEach((node, row) => {
+      node.row = row;
+      rowHint.set(node.id, row);
+    });
   }
 
   const xGap = 238;
@@ -418,28 +563,36 @@ function buildGraph(paths: PhysicalPath[]) {
   const nodeWidth = 188;
   const nodeHeight = 58;
   const positions = new Map<string, { x: number; y: number; width: number; height: number }>();
-  let maxRows = 1;
+
+  const maxRows = Math.max(1, ...Array.from(columns.values()).map((list) => list.length));
+  const maxSpan = nodeHeight + Math.max(0, maxRows - 1) * yGap;
+  const graphHeight = Math.max(440, yOffset + maxSpan + 34);
+  const contentCenterY = yOffset + maxSpan / 2;
 
   for (const [column, list] of columns) {
-    maxRows = Math.max(maxRows, list.length);
+    const columnSpan = nodeHeight + Math.max(0, list.length - 1) * yGap;
+    const startY = contentCenterY - columnSpan / 2;
     list.forEach((node, row) => {
       positions.set(node.id, {
         x: xOffset + column * xGap,
-        y: yOffset + row * yGap,
+        y: startY + row * yGap,
         width: nodeWidth,
         height: nodeHeight,
       });
     });
   }
 
+  const maxColumn = Math.max(landingColumn, ...Array.from(columns.keys()));
   return {
-    nodes,
+    nodes: positionedNodes,
     edges,
     positions,
-    maxRelays,
-    landingColumn,
-    width: Math.max(820, xOffset * 2 + landingColumn * xGap + nodeWidth),
-    height: Math.max(440, yOffset + maxRows * yGap + 24),
+    maxRelays: Math.max(0, maxColumn - 1),
+    landingColumn: maxColumn,
+    uniqueRelayCount: rawNodes.filter((node) => node.kind === "relay").length,
+    uniqueLandingCount: rawNodes.filter((node) => node.kind === "landing").length,
+    width: Math.max(820, xOffset * 2 + maxColumn * xGap + nodeWidth),
+    height: graphHeight,
   };
 }
 
@@ -529,8 +682,8 @@ function NetworkTopologyContent() {
     ]);
   };
 
-  const relayCount = paths.reduce((sum, path) => sum + path.relays.length, 0);
-  const landingCount = paths.length;
+  const relayCount = graph.uniqueRelayCount;
+  const landingCount = graph.uniqueLandingCount;
 
   return (
     <div className="space-y-5">
@@ -538,7 +691,7 @@ function NetworkTopologyContent() {
         <div>
           <h1 className="text-xl font-bold tracking-tight sm:text-2xl">网络拓扑</h1>
           <p className="mt-1 text-xs text-muted-foreground sm:text-sm">
-            只展示真实转发方向：入口 → 中转节点（0~N）→ 落地 / 最终目标。
+            只展示真实转发方向：入口 → 中转节点（0~N）→ 落地 / 最终目标；同一物理机器全局只显示一次。
           </p>
         </div>
         <Button variant="outline" size="sm" className="gap-1.5" onClick={() => void handleRefresh()} disabled={isLoading}>
