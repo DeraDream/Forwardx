@@ -219,7 +219,7 @@ function buildPhysicalPaths(
   ): Array<{ hostIds: number[]; landing: PhysicalNode }> => {
     const ruleId = Number(rule?.id || 0);
     if (ruleId > 0 && visited.has(ruleId)) {
-      return directRuleVariants(rule, groupById, tunnelById).map((hostIds, index) => ({
+      return directRuleVariants(rule, groupById, tunnelById).map((hostIds: number[], index: number) => ({
         hostIds,
         landing: makeLandingForRule("cycle:" + ruleId + ":" + index, rule),
       }));
@@ -232,7 +232,7 @@ function buildPhysicalPaths(
     const referenced = targetRuleId > 0 ? ruleById.get(targetRuleId) : null;
 
     if (!referenced) {
-      return currentVariants.map((hostIds, index) => ({
+      return currentVariants.map((hostIds: number[], index: number) => ({
         hostIds,
         landing: makeLandingForRule("rule:" + ruleId + ":" + index, rule),
       }));
