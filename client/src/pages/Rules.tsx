@@ -8241,18 +8241,30 @@ function RulesContent() {
           <div className={labelClass}>入口</div>
           <div className="flex min-w-0 flex-col gap-1">
             {entryAddresses.map((entry) => (
-              <div key={`${entry.label}:${entry.value}`} className="flex min-w-0 items-start gap-1">
+              <div
+                key={`${entry.label}:${entry.value}`}
+                className="flex min-w-0 items-stretch overflow-hidden rounded bg-muted/35 transition-colors"
+              >
                 <button
                   type="button"
                   onClick={() => entry.copyable && copyEntryAddress(rule, entry.value)}
                   disabled={!entry.copyable}
-                  className="group flex min-w-0 flex-1 items-start justify-between gap-1.5 rounded bg-muted/35 px-1.5 py-1 text-left transition-colors enabled:hover:bg-muted/70 disabled:cursor-default disabled:text-muted-foreground"
+                  className="group flex min-w-0 flex-1 items-start justify-between gap-1.5 px-1.5 py-1 text-left transition-colors enabled:hover:bg-muted/70 disabled:cursor-default disabled:text-muted-foreground"
                   title={entry.copyable ? `${entryTitle}${entryAddresses.length > 1 ? ` (${entry.label})` : ""}` : entry.text}
                 >
                   <code className={valueClass}>{entry.text}</code>
                   {entry.copyable && <Copy className="mt-0.5 h-3 w-3 flex-shrink-0 text-muted-foreground opacity-60 group-hover:opacity-100" />}
                 </button>
-                {entry.copyable && <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" title={`复制入口端口: ${rule.sourcePort}`} onClick={() => void copyEntryPort(rule)}><Hash className="h-3.5 w-3.5" /></Button>}
+                {entry.copyable && (
+                  <button
+                    type="button"
+                    className="group/port flex w-7 shrink-0 items-center justify-center border-l border-border/40 text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
+                    title={`复制入口端口: ${rule.sourcePort}`}
+                    onClick={() => void copyEntryPort(rule)}
+                  >
+                    <ClipboardCopy className="h-3.5 w-3.5 opacity-70 transition-opacity group-hover/port:opacity-100" />
+                  </button>
+                )}
               </div>
             ))}
           </div>
