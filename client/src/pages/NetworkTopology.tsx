@@ -485,6 +485,20 @@ function buildGraph(paths: PhysicalPath[]) {
       .map((node) => node.id),
   );
 
+  // 直达落地：目标只由入口直接连接，完全没有经过中转。
+  // 这类落地单独排到落地列下方，避免长连线横穿中转节点。
+  const directOnlySinkIds = new Set(
+    Array.from(sinkIds).filter((sinkId) => {
+      const parents = incoming.get(sinkId) || [];
+      return parents.length > 0 && parents.every((parentId) => rootIds.has(parentId));
+    }),
+  );
+  const directEdgeIds = new Set(
+    edges
+      .filter((edge) => rootIds.has(edge.from) && directOnlySinkIds.has(edge.to))
+      .map((edge) => edge.id),
+  );
+
   // 角色由整张真实物理图决定：
   // 没有上游的是入口，有上下游的是中转，没有下游的是落地/最终目标。
   const classifiedNodes = rawNodes.map((node): PhysicalNode => ({
@@ -536,6 +550,11 @@ function buildGraph(paths: PhysicalPath[]) {
     const list = columns.get(column) || [];
     list.sort((a, b) => {
       if (column === 0) return a.label.localeCompare(b.label, "zh-CN");
+      if (column === landingColumn) {
+        const aDirect = directOnlySinkIds.has(a.id) ? 1 : 0;
+        const bDirect = directOnlySinkIds.has(b.id) ? 1 : 0;
+        if (aDirect !== bDirect) return aDirect - bDirect;
+      }
       const aParents = incoming.get(a.id) || [];
       const bParents = incoming.get(b.id) || [];
       const aHint = aParents.length
@@ -590,12 +609,25 @@ function buildGraph(paths: PhysicalPath[]) {
   // 每一列围绕同一条水平中心线排布：
   // 单入口会居中；同层有多个入口/中转/落地时，则在该列上下展开。
   for (const [column, list] of columns) {
-    const columnSpan = nodeHeight + Math.max(0, list.length - 1) * yGap;
+    const directCount = column === landingColumn
+      ? list.filter((node) => directOnlySinkIds.has(node.id)).length
+      : 0;
+    const normalCount = list.length - directCount;
+    const directGap = directCount > 0 && normalCount > 0 ? 34 : 0;
+    const columnSpan =
+      nodeHeight
+      + Math.max(0, list.length - 1) * yGap
+      + directGap;
     const startY = contentCenterY - columnSpan / 2;
+
+    let directOffsetApplied = false;
     list.forEach((node, row) => {
+      const isDirect = directOnlySinkIds.has(node.id);
+      if (isDirect && !directOffsetApplied && normalCount > 0) directOffsetApplied = true;
+      const extraY = directOffsetApplied ? directGap : 0;
       positions.set(node.id, {
         x: xOffset + column * xGap,
-        y: startY + row * yGap,
+        y: startY + row * yGap + extraY,
         width: nodeWidth,
         height: nodeHeight,
       });
@@ -612,6 +644,7 @@ function buildGraph(paths: PhysicalPath[]) {
     uniqueEntryCount: rootIds.size,
     uniqueRelayCount: classifiedNodes.filter((node) => node.kind === "relay").length,
     uniqueLandingCount: classifiedNodes.filter((node) => node.kind === "landing").length,
+    directEdgeIds,
     width: Math.max(820, xOffset * 2 + maxColumn * xGap + nodeWidth),
     height: graphHeight,
   };
@@ -798,10 +831,19 @@ function NetworkTopologyContent() {
                       const x2 = to.x;
                       const y2 = to.y + to.height / 2;
                       const control = Math.max(42, (x2 - x1) * 0.42);
+                      const isDirect = graph.directEdgeIds.has(edge.id);
+                      const directPath = isDirect
+                        ? [
+                            "M", x1, y1,
+                            "C", x1 + 34, y1, x1 + 48, y2, x1 + 92, y2,
+                            "L", x2 - 46, y2,
+                            "C", x2 - 24, y2, x2 - 18, y2, x2, y2,
+                          ].join(" ")
+                        : "M " + x1 + " " + y1 + " C " + (x1 + control) + " " + y1 + ", " + (x2 - control) + " " + y2 + ", " + x2 + " " + y2;
                       return (
                         <path
                           key={edge.id}
-                          d={"M " + x1 + " " + y1 + " C " + (x1 + control) + " " + y1 + ", " + (x2 - control) + " " + y2 + ", " + x2 + " " + y2}
+                          d={directPath}
                           fill="none"
                           stroke="currentColor"
                           strokeWidth="1.5"
