@@ -4,6 +4,7 @@ import AutoAnimateContainer from "@/components/AutoAnimateContainer";
 import DashboardLayout from "@/components/DashboardLayout";
 import { LatencyRating } from "@/components/LatencyRating";
 import { LinkQualityDialog, type LinkQualityTarget } from "@/components/observability/LinkQualityDialog";
+import { DiagnosticDialog, type DiagnosticTarget } from "@/components/diagnostics/DiagnosticDialog";
 import {
   LinkTestProbeView,
   parseLinkTestMessage,
@@ -114,6 +115,7 @@ import {
   ArrowRight,
   Zap,
   Shield,
+  ScanSearch,
   Filter,
   Activity,
   ArrowDownToLine,
@@ -3316,6 +3318,7 @@ function RulesContent() {
     name: string;
   } | null>(null);
   const [qualityRule, setQualityRule] = useState<LinkQualityTarget | null>(null);
+  const [diagnosticRule, setDiagnosticRule] = useState<DiagnosticTarget | null>(null);
 
   useEffect(() => {
     prefetchReactGlobe();
@@ -8750,6 +8753,21 @@ function RulesContent() {
           variant="ghost"
           size="icon"
           className="h-8 w-8"
+          onClick={() =>
+            setDiagnosticRule({
+              scope: "rule",
+              id: Number(rule.id),
+              name: String(rule.name || `规则 #${rule.id}`),
+            })
+          }
+          title="一键诊断"
+        >
+          <ScanSearch className="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8"
           onClick={() => setSelfTestRule({ id: rule.id, name: rule.name })}
           title="转发链路自测"
         >
@@ -10063,6 +10081,12 @@ function RulesContent() {
         target={qualityRule}
         open={!!qualityRule}
         onOpenChange={(open) => !open && setQualityRule(null)}
+      />
+
+      <DiagnosticDialog
+        target={diagnosticRule}
+        open={!!diagnosticRule}
+        onOpenChange={(open) => !open && setDiagnosticRule(null)}
       />
 
       {selfTestRule && (
