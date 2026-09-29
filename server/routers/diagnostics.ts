@@ -2,6 +2,9 @@ import { z } from "zod";
 import { protectedProcedure, router } from "../_core/trpc";
 import * as db from "../db";
 import { pushAgentSelfTest } from "../agentEvents";
+import { isAgentVersionAtLeast } from "../agentRouteUtils";
+
+const DIAGNOSTIC_AGENT_VERSION = "2.2.209";
 
 type DiagnosticStatus = "pass" | "warn" | "fail" | "skip";
 type DiagnosticCheck = {
@@ -150,15 +153,22 @@ function agentChecks(nodes: DiagnosticNode[]) {
   }
   return nodes
     .filter((node) => node.hostId)
-    .map((node) =>
-      check(
+    .map((node) => {
+      const versionReady = isAgentVersionAtLeast(node.agentVersion, DIAGNOSTIC_AGENT_VERSION);
+      const status: DiagnosticStatus = !node.online || !versionReady ? "fail" : "pass";
+      const message = !node.online
+        ? "离线"
+        : !versionReady
+          ? `Agent 版本过低，需要 ${DIAGNOSTIC_AGENT_VERSION}+`
+          : "在线，可执行无侵入诊断";
+      return check(
         `agent-${node.hostId}`,
         `Agent · ${node.name}`,
-        node.online ? "pass" : "fail",
-        node.online ? "在线" : "离线",
-        node.agentVersion ? `Agent ${node.agentVersion}` : null,
-      ),
-    );
+        status,
+        message,
+        node.agentVersion ? `Agent ${node.agentVersion}` : "未上报 Agent 版本",
+      );
+    });
 }
 
 async function ensureAccess(scope: string, id: number, user: any) {
@@ -446,6 +456,14 @@ export const diagnosticsRouter = router({
       const resource = await ensureAccess(input.scope, input.id, ctx.user);
       const segments = await diagnosticSegments(input.scope, resource);
       if (segments.length === 0) throw new Error("当前资源没有可执行的实时诊断链路");
+      const sourceHostIds = Array.from(new Set(segments.map((segment) => Number(segment.fromHostId)).filter((id) => id > 0)));
+      for (const hostId of sourceHostIds) {
+        const host = await db.getHostById(hostId) as any;
+        if (!host?.isOnline) throw new Error(`${host?.name || "主机 #" + hostId} Agent 离线，无法执行实时诊断`);
+        if (!isAgentVersionAtLeast(host?.agentVersion, DIAGNOSTIC_AGENT_VERSION)) {
+          throw new Error(`${host?.name || "主机 #" + hostId} 需要升级 Agent 到 ${DIAGNOSTIC_AGENT_VERSION} 或更高版本后才能执行无侵入诊断`);
+        }
+      }
       const diagnosticId = `diag-${input.scope}-${input.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const testIds: number[] = [];
       const hostIds = new Set<number>();
