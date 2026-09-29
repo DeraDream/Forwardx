@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { protectedProcedure, router } from "../_core/trpc";
 import * as db from "../db";
+import { pushAgentSelfTest } from "../agentEvents";
 
 type DiagnosticStatus = "pass" | "warn" | "fail" | "skip";
 type DiagnosticCheck = {
@@ -189,7 +190,332 @@ async function ensureAccess(scope: string, id: number, user: any) {
   return resource;
 }
 
+
+type DiagnosticSegment = {
+  fromHostId: number;
+  targetIp: string;
+  targetPort: number;
+  method: "tcp" | "ping";
+  routeLabel: string;
+};
+
+async function hostTarget(hostId: number) {
+  const host = await db.getHostById(hostId) as any;
+  return { host, address: hostAddress(host) };
+}
+
+async function tunnelSegments(tunnel: any, finalTarget?: { ip: string; port: number } | null): Promise<DiagnosticSegment[]> {
+  const segments: DiagnosticSegment[] = [];
+  const hops = await db.getTunnelHops(Number(tunnel?.id || 0)).catch(() => []) as any[];
+  if (hops.length >= 2) {
+    for (let index = 0; index < hops.length - 1; index += 1) {
+      const current = hops[index];
+      const next = hops[index + 1];
+      const fromHostId = Number(current?.hostId || 0);
+      const { host: currentHost } = await hostTarget(fromHostId);
+      const { host: nextHost, address } = await hostTarget(Number(next?.hostId || 0));
+      const targetIp = String(next?.connectHost || address || "").trim();
+      const targetPort = Number(next?.listenPort || 0);
+      if (fromHostId > 0 && targetIp && targetPort > 0) {
+        segments.push({
+          fromHostId,
+          targetIp,
+          targetPort,
+          method: "tcp",
+          routeLabel: `${currentHost?.name || "主机" + fromHostId} -> ${nextHost?.name || targetIp}`,
+        });
+      }
+    }
+  } else {
+    const entryHostId = Number(tunnel?.entryHostId || 0);
+    const exitHostId = Number(tunnel?.exitHostId || 0);
+    const { host: entryHost } = await hostTarget(entryHostId);
+    const { host: exitHost, address } = await hostTarget(exitHostId);
+    const targetIp = String(tunnel?.connectHost || address || "").trim();
+    const targetPort = Number(tunnel?.listenPort || 0);
+    if (entryHostId > 0 && targetIp && targetPort > 0) {
+      segments.push({
+        fromHostId: entryHostId,
+        targetIp,
+        targetPort,
+        method: "tcp",
+        routeLabel: `${entryHost?.name || "主机" + entryHostId} -> ${exitHost?.name || targetIp}`,
+      });
+    }
+  }
+
+  if (finalTarget?.ip && finalTarget.port > 0) {
+    const exitHostId = Number((hops.at(-1) as any)?.hostId || tunnel?.exitHostId || 0);
+    const { host: exitHost } = await hostTarget(exitHostId);
+    if (exitHostId > 0) {
+      segments.push({
+        fromHostId: exitHostId,
+        targetIp: finalTarget.ip,
+        targetPort: finalTarget.port,
+        method: "tcp",
+        routeLabel: `${exitHost?.name || "出口"} -> ${finalTarget.ip}:${finalTarget.port}`,
+      });
+    }
+  }
+  return segments;
+}
+
+async function diagnosticSegments(scope: "rule" | "tunnel" | "chain" | "full-chain", resource: any): Promise<DiagnosticSegment[]> {
+  if (scope === "chain") {
+    const probes = await db.getForwardGroupChainProbes(Number(resource.id), { includeFinalTarget: false });
+    return probes.map((probe: any) => ({
+      fromHostId: Number(probe.fromHostId),
+      targetIp: String(probe.targetIp || ""),
+      targetPort: Number(probe.targetPort || 0),
+      method: probe.method === "ping" ? "ping" : "tcp",
+      routeLabel: String(probe.routeLabel || probe.hopLabel || "链路"),
+    })).filter((item: DiagnosticSegment) => item.fromHostId > 0 && item.targetIp && (item.method === "ping" || item.targetPort > 0));
+  }
+
+  if (scope === "tunnel") {
+    return tunnelSegments(resource);
+  }
+
+  if (scope === "rule") {
+    const rule = resource as any;
+    const targetRuleId = Number(rule.targetRuleId || 0);
+    if (targetRuleId > 0) {
+      const referenced = await db.getForwardRuleById(targetRuleId) as any;
+      const savedGroup = referenced?.forwardGroupId
+        ? await db.getForwardGroupById(Number(referenced.forwardGroupId)) as any
+        : null;
+      if (referenced && String(savedGroup?.groupMode || "") === "chain") {
+        const segments: DiagnosticSegment[] = [];
+        let sourceHostIds: number[] = [];
+        if (Number(rule.forwardGroupId || 0) > 0) {
+          const sourceGroup = await db.getForwardGroupById(Number(rule.forwardGroupId)) as any;
+          sourceHostIds = String(sourceGroup?.groupMode || "") === "port"
+            ? await db.getForwardGroupRuleEntryHostIds(Number(sourceGroup.id))
+            : await groupHostIds(sourceGroup);
+        } else if (Number(rule.hostId || 0) > 0) {
+          sourceHostIds = [Number(rule.hostId)];
+        }
+        const entryHostId = await db.getForwardGroupDefaultHostId(Number(savedGroup.id));
+        const entryHost = await db.getHostById(entryHostId) as any;
+        for (const sourceHostId of sourceHostIds) {
+          const sourceHost = await db.getHostById(sourceHostId) as any;
+          if (String(rule.targetIp || "") && Number(rule.targetPort || 0) > 0) {
+            segments.push({
+              fromHostId: sourceHostId,
+              targetIp: String(rule.targetIp),
+              targetPort: Number(rule.targetPort),
+              method: "tcp",
+              routeLabel: `${sourceHost?.name || "入口"} -> ${entryHost?.name || "引用转发链"}`,
+            });
+          }
+        }
+        const probes = await db.getForwardGroupChainProbes(Number(savedGroup.id), { includeFinalTarget: true, templateRule: referenced });
+        for (const probe of probes as any[]) {
+          segments.push({
+            fromHostId: Number(probe.fromHostId),
+            targetIp: String(probe.targetIp || ""),
+            targetPort: Number(probe.targetPort || 0),
+            method: probe.method === "ping" ? "ping" : "tcp",
+            routeLabel: String(probe.routeLabel || probe.hopLabel || "链路"),
+          });
+        }
+        return segments.filter((item) => item.fromHostId > 0 && item.targetIp && (item.method === "ping" || item.targetPort > 0));
+      }
+    }
+
+    if (Number(rule.tunnelId || 0) > 0) {
+      const tunnel = await db.getTunnelById(Number(rule.tunnelId)) as any;
+      if (tunnel) {
+        return tunnelSegments(tunnel, {
+          ip: String(rule.targetIp || ""),
+          port: Number(rule.targetPort || 0),
+        });
+      }
+    }
+
+    if (Number(rule.forwardGroupId || 0) > 0) {
+      const group = await db.getForwardGroupById(Number(rule.forwardGroupId)) as any;
+      if (String(group?.groupMode || "") === "chain") {
+        const probes = await db.getForwardGroupChainProbes(Number(group.id), { includeFinalTarget: true, templateRule: rule });
+        return probes.map((probe: any) => ({
+          fromHostId: Number(probe.fromHostId),
+          targetIp: String(probe.targetIp || ""),
+          targetPort: Number(probe.targetPort || 0),
+          method: probe.method === "ping" ? "ping" : "tcp",
+          routeLabel: String(probe.routeLabel || probe.hopLabel || "链路"),
+        })).filter((item: DiagnosticSegment) => item.fromHostId > 0 && item.targetIp && (item.method === "ping" || item.targetPort > 0));
+      }
+
+      const entryHostIds = String(group?.groupMode || "") === "port"
+        ? await db.getForwardGroupRuleEntryHostIds(Number(group.id))
+        : await groupHostIds(group);
+      return Promise.all(entryHostIds.map(async (fromHostId) => {
+        const sourceHost = await db.getHostById(fromHostId) as any;
+        return {
+          fromHostId,
+          targetIp: String(rule.targetIp || ""),
+          targetPort: Number(rule.targetPort || 0),
+          method: "tcp" as const,
+          routeLabel: `${sourceHost?.name || "入口"} -> ${String(rule.targetIp || "目标")}:${Number(rule.targetPort || 0)}`,
+        };
+      }));
+    }
+
+    const fromHostId = Number(rule.hostId || 0);
+    const sourceHost = await db.getHostById(fromHostId) as any;
+    return fromHostId > 0 && String(rule.targetIp || "") && Number(rule.targetPort || 0) > 0
+      ? [{
+          fromHostId,
+          targetIp: String(rule.targetIp),
+          targetPort: Number(rule.targetPort),
+          method: "tcp",
+          routeLabel: `${sourceHost?.name || "入口"} -> ${rule.targetIp}:${rule.targetPort}`,
+        }]
+      : [];
+  }
+
+  const chain = resource as any;
+  const nodes = await db.getFullChainNodes(Number(chain.id)) as any[];
+  const segments: DiagnosticSegment[] = [];
+  let previousExitHostId = 0;
+  for (let index = 0; index < nodes.length; index += 1) {
+    const node = nodes[index];
+    if (String(node?.nodeType || "host") === "forward-chain" && Number(node?.forwardGroupId || 0) > 0) {
+      const group = await db.getForwardGroupById(Number(node.forwardGroupId)) as any;
+      const templateRule = Number(node.generatedRuleId || 0) > 0
+        ? await db.getForwardRuleById(Number(node.generatedRuleId)) as any
+        : null;
+      const entryHostId = await db.getForwardGroupDefaultHostId(Number(group.id));
+      const entryHost = await db.getHostById(entryHostId) as any;
+      if (previousExitHostId > 0 && entryHostId > 0) {
+        const sourceHost = await db.getHostById(previousExitHostId) as any;
+        const targetIp = hostAddress(entryHost);
+        if (targetIp && Number(chain.port || 0) > 0) {
+          segments.push({
+            fromHostId: previousExitHostId,
+            targetIp,
+            targetPort: Number(chain.port),
+            method: "tcp",
+            routeLabel: `${sourceHost?.name || "上一跳"} -> ${entryHost?.name || "转发链入口"}`,
+          });
+        }
+      }
+      const probes = await db.getForwardGroupChainProbes(Number(group.id), { includeFinalTarget: !!templateRule, templateRule });
+      for (const probe of probes as any[]) {
+        segments.push({
+          fromHostId: Number(probe.fromHostId),
+          targetIp: String(probe.targetIp || ""),
+          targetPort: Number(probe.targetPort || 0),
+          method: probe.method === "ping" ? "ping" : "tcp",
+          routeLabel: String(probe.routeLabel || probe.hopLabel || "转发链"),
+        });
+      }
+      const memberIds = await groupHostIds(group);
+      previousExitHostId = Number(memberIds.at(-1) || entryHostId || 0);
+      continue;
+    }
+
+    const hostId = Number(node?.hostId || 0);
+    if (hostId <= 0) continue;
+    if (previousExitHostId > 0) {
+      const sourceHost = await db.getHostById(previousExitHostId) as any;
+      const targetHost = await db.getHostById(hostId) as any;
+      const targetIp = String(node?.ingressIp || hostAddress(targetHost)).trim();
+      if (targetIp && Number(chain.port || 0) > 0) {
+        segments.push({
+          fromHostId: previousExitHostId,
+          targetIp,
+          targetPort: Number(chain.port),
+          method: "tcp",
+          routeLabel: `${sourceHost?.name || "上一跳"} -> ${targetHost?.name || targetIp}`,
+        });
+      }
+    }
+    previousExitHostId = hostId;
+  }
+  return segments;
+}
+
 export const diagnosticsRouter = router({
+  start: protectedProcedure
+    .input(z.object({
+      scope: z.enum(["rule", "tunnel", "chain", "full-chain"]),
+      id: z.number().int().positive(),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      const resource = await ensureAccess(input.scope, input.id, ctx.user);
+      const segments = await diagnosticSegments(input.scope, resource);
+      if (segments.length === 0) throw new Error("当前资源没有可执行的实时诊断链路");
+      const diagnosticId = `diag-${input.scope}-${input.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const testIds: number[] = [];
+      const hostIds = new Set<number>();
+      for (const [index, segment] of segments.entries()) {
+        const id = await db.createForwardTest({
+          ruleId: 0,
+          hostId: segment.fromHostId,
+          userId: Number(ctx.user.id),
+          status: "pending",
+          listenOk: false,
+          targetReachable: false,
+          forwardOk: false,
+          message: JSON.stringify({
+            kind: "diagnostic-hop",
+            diagnosticId,
+            targetIp: segment.targetIp,
+            targetPort: segment.targetPort,
+            method: segment.method,
+            hopLabel: `${index + 1}/${segments.length}`,
+            routeLabel: segment.routeLabel,
+          }),
+        } as any);
+        testIds.push(Number(id));
+        hostIds.add(segment.fromHostId);
+      }
+      for (const hostId of hostIds) {
+        pushAgentSelfTest(hostId, diagnosticId);
+      }
+      return {
+        diagnosticId,
+        testIds,
+        queued: testIds.length,
+        segments: segments.map((segment, index) => ({
+          index,
+          routeLabel: segment.routeLabel,
+          fromHostId: segment.fromHostId,
+          targetIp: segment.targetIp,
+          targetPort: segment.targetPort,
+          method: segment.method,
+        })),
+      };
+    }),
+
+  status: protectedProcedure
+    .input(z.object({
+      testIds: z.array(z.number().int().positive()).min(1).max(64),
+    }))
+    .query(async ({ input, ctx }) => {
+      const rows = [];
+      for (const id of input.testIds) {
+        const row = await db.getForwardTestById(id) as any;
+        if (!row) continue;
+        if (String(ctx.user.role) !== "admin" && Number(row.userId) !== Number(ctx.user.id)) continue;
+        let meta: any = null;
+        try { meta = JSON.parse(String(row.message || "")); } catch {}
+        rows.push({
+          id: Number(row.id),
+          status: String(row.status || "pending"),
+          latencyMs: row.latencyMs == null ? null : Number(row.latencyMs),
+          success: String(row.status) === "success",
+          targetReachable: !!row.targetReachable,
+          message: String(row.message || ""),
+          routeLabel: typeof meta?.routeLabel === "string" ? meta.routeLabel : "",
+          hopLabel: typeof meta?.hopLabel === "string" ? meta.hopLabel : "",
+          updatedAt: row.updatedAt,
+        });
+      }
+      return rows;
+    }),
+
   plan: protectedProcedure
     .input(z.object({
       scope: z.enum(["rule", "tunnel", "chain", "full-chain"]),
