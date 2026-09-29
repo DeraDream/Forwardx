@@ -3,6 +3,7 @@ import AnimatedStatValue from "@/components/AnimatedStatValue";
 import AutoAnimateContainer from "@/components/AutoAnimateContainer";
 import DashboardLayout from "@/components/DashboardLayout";
 import { LatencyRating } from "@/components/LatencyRating";
+import { LinkQualityDialog, type LinkQualityTarget } from "@/components/observability/LinkQualityDialog";
 import {
   LinkTestProbeView,
   parseLinkTestMessage,
@@ -137,6 +138,7 @@ import {
   Rows3,
   GitBranch,
   Globe,
+  Gauge,
   RotateCcw,
   Server,
 } from "lucide-react";
@@ -3313,6 +3315,7 @@ function RulesContent() {
     id: number;
     name: string;
   } | null>(null);
+  const [qualityRule, setQualityRule] = useState<LinkQualityTarget | null>(null);
 
   useEffect(() => {
     prefetchReactGlobe();
@@ -8731,6 +8734,22 @@ function RulesContent() {
           variant="ghost"
           size="icon"
           className="h-8 w-8"
+          onClick={() =>
+            setQualityRule({
+              scope: "rule",
+              id: Number(rule.id),
+              name: String(rule.name || `规则 #${rule.id}`),
+              subtitle: "基于规则历史探测数据计算",
+            })
+          }
+          title="查看链路质量"
+        >
+          <Gauge className="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8"
           onClick={() => setSelfTestRule({ id: rule.id, name: rule.name })}
           title="转发链路自测"
         >
@@ -10039,6 +10058,12 @@ function RulesContent() {
           }}
         />
       )}
+
+      <LinkQualityDialog
+        target={qualityRule}
+        open={!!qualityRule}
+        onOpenChange={(open) => !open && setQualityRule(null)}
+      />
 
       {selfTestRule && (
         <SelfTestDialog
