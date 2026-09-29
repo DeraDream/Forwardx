@@ -2,6 +2,7 @@ import DashboardLayout from "@/components/DashboardLayout";
 import AnimatedStatValue from "@/components/AnimatedStatValue";
 import { LatencyRating } from "@/components/LatencyRating";
 import { LinkQualityDialog, type LinkQualityTarget } from "@/components/observability/LinkQualityDialog";
+import { DiagnosticDialog, type DiagnosticTarget } from "@/components/diagnostics/DiagnosticDialog";
 import { LatencyPeakCutToggle } from "@/components/LatencyPeakCutToggle";
 import { LatencyStabilityStats } from "@/components/LatencyStabilityStats";
 import {
@@ -68,6 +69,7 @@ import {
   Plus,
   RefreshCw,
   Route,
+  ScanSearch,
   Stethoscope,
   Trash2,
   XCircle,
@@ -901,6 +903,7 @@ export function ForwardGroupsContent({
   const [latencyGroup, setLatencyGroup] = useState<{ id: number; name: string } | null>(null);
   const [testGroup, setTestGroup] = useState<{ id: number; name: string } | null>(null);
   const [qualityGroup, setQualityGroup] = useState<LinkQualityTarget | null>(null);
+  const [diagnosticGroup, setDiagnosticGroup] = useState<DiagnosticTarget | null>(null);
   const [deleteGroup, setDeleteGroup] = useState<any | null>(null);
   const [advancedSettingsOpen, setAdvancedSettingsOpen] = useState(false);
   const lastCreateRequestKeyRef = useRef(createRequestKey ?? 0);
@@ -1761,6 +1764,21 @@ export function ForwardGroupsContent({
         }
       >
         <Gauge className="h-3.5 w-3.5" />
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-8 w-8"
+        title="一键诊断"
+        onClick={() =>
+          setDiagnosticGroup({
+            scope: "chain",
+            id: Number(group.id),
+            name: String(group.name || `转发链 #${group.id}`),
+          })
+        }
+      >
+        <ScanSearch className="h-3.5 w-3.5" />
       </Button>
       <Button
         variant="ghost"
@@ -2788,6 +2806,11 @@ export function ForwardGroupsContent({
         target={qualityGroup}
         open={!!qualityGroup}
         onOpenChange={(open) => !open && setQualityGroup(null)}
+      />
+      <DiagnosticDialog
+        target={diagnosticGroup}
+        open={!!diagnosticGroup}
+        onOpenChange={(open) => !open && setDiagnosticGroup(null)}
       />
       {testGroup && (
         <ForwardGroupSelfTestDialog
