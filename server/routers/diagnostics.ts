@@ -277,9 +277,9 @@ async function diagnosticSegments(scope: "rule" | "tunnel" | "chain" | "full-cha
       fromHostId: Number(probe.fromHostId),
       targetIp: String(probe.targetIp || ""),
       targetPort: Number(probe.targetPort || 0),
-      method: probe.method === "ping" ? "ping" : "tcp",
+      method: (probe.method === "ping" ? "ping" : "tcp") as "ping" | "tcp",
       routeLabel: String(probe.routeLabel || probe.hopLabel || "链路"),
-    })).filter((item: DiagnosticSegment) => item.fromHostId > 0 && item.targetIp && (item.method === "ping" || item.targetPort > 0));
+    })).filter((item: DiagnosticSegment) => item.fromHostId > 0 && !!item.targetIp && (item.method === "ping" || item.targetPort > 0));
   }
 
   if (scope === "tunnel") {
@@ -325,7 +325,7 @@ async function diagnosticSegments(scope: "rule" | "tunnel" | "chain" | "full-cha
             fromHostId: Number(probe.fromHostId),
             targetIp: String(probe.targetIp || ""),
             targetPort: Number(probe.targetPort || 0),
-            method: probe.method === "ping" ? "ping" : "tcp",
+            method: (probe.method === "ping" ? "ping" : "tcp") as "ping" | "tcp",
             routeLabel: String(probe.routeLabel || probe.hopLabel || "链路"),
           });
         }
@@ -351,9 +351,9 @@ async function diagnosticSegments(scope: "rule" | "tunnel" | "chain" | "full-cha
           fromHostId: Number(probe.fromHostId),
           targetIp: String(probe.targetIp || ""),
           targetPort: Number(probe.targetPort || 0),
-          method: probe.method === "ping" ? "ping" : "tcp",
+          method: (probe.method === "ping" ? "ping" : "tcp") as "ping" | "tcp",
           routeLabel: String(probe.routeLabel || probe.hopLabel || "链路"),
-        })).filter((item: DiagnosticSegment) => item.fromHostId > 0 && item.targetIp && (item.method === "ping" || item.targetPort > 0));
+        })).filter((item: DiagnosticSegment) => item.fromHostId > 0 && !!item.targetIp && (item.method === "ping" || item.targetPort > 0));
       }
 
       const entryHostIds = String(group?.groupMode || "") === "port"
@@ -416,7 +416,7 @@ async function diagnosticSegments(scope: "rule" | "tunnel" | "chain" | "full-cha
           fromHostId: Number(probe.fromHostId),
           targetIp: String(probe.targetIp || ""),
           targetPort: Number(probe.targetPort || 0),
-          method: probe.method === "ping" ? "ping" : "tcp",
+          method: (probe.method === "ping" ? "ping" : "tcp") as "ping" | "tcp",
           routeLabel: String(probe.routeLabel || probe.hopLabel || "转发链"),
         });
       }
