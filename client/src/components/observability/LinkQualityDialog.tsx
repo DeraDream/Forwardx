@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Activity, AlertTriangle, CheckCircle2, Clock3, Gauge, RefreshCw, TimerReset, Waves } from "lucide-react";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip as RechartsTooltip, XAxis, YAxis } from "recharts";
 import { trpc } from "@/lib/trpc";
-import { calculateLinkQuality, filterLinkQualitySamples, linkQualityStatusLabel, type LinkQualitySample } from "@/lib/linkQuality";
+import { calculateLinkQuality, filterLinkQualitySamples, linkQualitySampleTime, linkQualityStatusLabel, type LinkQualitySample } from "@/lib/linkQuality";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -106,7 +106,7 @@ export function LinkQualityDialog({ target, open, onOpenChange }: { target: Link
 
   const chartData = useMemo(
     () => rangedSeries.map((sample) => {
-      const at = new Date(sample.recordedAt || 0);
+      const at = new Date(linkQualitySampleTime(sample.recordedAt));
       const timeout = sample.isTimeout === true || Number(sample.isTimeout) === 1;
       const pad = (n: number) => String(n).padStart(2, "0");
       return {
