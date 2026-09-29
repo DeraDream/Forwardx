@@ -182,15 +182,21 @@ function buildPhysicalPaths(
   }
   const query = search.trim().toLowerCase();
 
-  const makeRelay = (_pathId: string, hostId: number, _index: number): PhysicalNode => {
+  const makeHostNode = (
+    hostId: number,
+    kind: PhysicalNodeKind,
+    detail: string,
+    qualityTarget?: LinkQualityTarget | null,
+  ): PhysicalNode => {
     const host = hostById.get(hostId);
     return {
       id: "host:" + hostId,
-      kind: "relay",
+      kind,
       label: String(host?.name || "主机 #" + hostId),
       subtitle: hostAddress(host),
-      detail: "中转节点",
+      detail,
       online: host?.isOnline !== false,
+      qualityTarget: qualityTarget || null,
     };
   };
 
@@ -297,32 +303,28 @@ function buildPhysicalPaths(
     const tails = resolveRuleTail(rule, new Set());
     tails.forEach((tail, variantIndex) => {
       const pathId = "rule:" + Number(rule.id) + ":" + variantIndex;
-      const firstHost = tail.hostIds.length > 0 ? hostById.get(tail.hostIds[0]) : null;
-      const entrySubtitleParts = [
-        firstHost?.name ? String(firstHost.name) : "",
-        Number(rule?.sourcePort || 0) > 0 ? ":" + Number(rule.sourcePort) : "",
-      ].filter(Boolean);
+      const physicalHostIds = uniqNumbers(tail.hostIds);
+      const entryHostId = Number(physicalHostIds[0] || 0);
+      if (entryHostId <= 0) return;
 
-      const entry: PhysicalNode = {
-        id: pathId + ":entry",
-        kind: "entry",
-        label: String(rule?.name || "规则 #" + rule.id),
-        subtitle: entrySubtitleParts.join(" "),
-        detail: categoryLabel(currentCategory),
-        online: firstHost ? firstHost.isOnline !== false : null,
-        qualityTarget: {
+      const entry = makeHostNode(
+        entryHostId,
+        "entry",
+        categoryLabel(currentCategory) + "入口",
+        {
           scope: "rule",
           id: Number(rule.id),
           name: String(rule?.name || "规则 #" + rule.id),
-          subtitle: "该入口规则的历史链路质量",
+          subtitle: "该规则的历史链路质量",
         },
-      };
+      );
 
-      const relayHostIds = tail.hostIds;
-      const relays = relayHostIds.map((hostId, index) => makeRelay(pathId, hostId, index));
+      const relayHostIds = physicalHostIds.slice(1);
+      const relays = relayHostIds.map((hostId) => makeHostNode(hostId, "relay", "中转节点"));
       const landing = tail.landing;
 
       const haystack = [
+        rule?.name,
         entry.label,
         entry.subtitle,
         ...relays.flatMap((node) => [node.label, node.subtitle]),
@@ -360,27 +362,24 @@ function buildPhysicalPaths(
       const hostIds = uniqNumbers(expandedHostIds);
       if (hostIds.length === 0) continue;
       const pathId = "fullchain:" + Number(chain.id);
-      const entryHost = hostById.get(hostIds[0]);
       const landingHostId = hostIds[hostIds.length - 1];
       const landingHost = hostById.get(landingHostId);
       const middleHostIds = hostIds.slice(1, -1);
 
-      const entry: PhysicalNode = {
-        id: pathId + ":entry",
-        kind: "entry",
-        label: String(entryHost?.name || chain?.name || "全链路 #" + chain.id),
-        subtitle: String(chain?.name || "全链路") + (Number(chain?.port || 0) > 0 ? " · :" + Number(chain.port) : ""),
-        detail: "全链路入口",
-        online: entryHost?.isOnline !== false,
-        qualityTarget: {
+      const entry = makeHostNode(
+        Number(hostIds[0]),
+        "entry",
+        "全链路入口",
+        {
           scope: "full-chain",
           id: Number(chain.id),
           name: String(chain?.name || "全链路 #" + chain.id),
           subtitle: "该全链路的历史探测质量",
         },
-      };
+      );
+      if (chain?.name) entry.detail = "全链路入口 · " + String(chain.name);
 
-      const relays = middleHostIds.map((hostId, index) => makeRelay(pathId, hostId, index));
+      const relays = middleHostIds.map((hostId) => makeHostNode(hostId, "relay", "中转节点"));
       const landing: PhysicalNode = {
         id: "host:" + landingHostId,
         kind: "landing",
@@ -587,6 +586,7 @@ function buildGraph(paths: PhysicalPath[]) {
     positions,
     maxRelays: Math.max(0, maxColumn - 1),
     landingColumn: maxColumn,
+    uniqueEntryCount: entryIds.size,
     uniqueRelayCount: rawNodes.filter((node) => node.kind === "relay").length,
     uniqueLandingCount: rawNodes.filter((node) => node.kind === "landing").length,
     width: Math.max(820, xOffset * 2 + maxColumn * xGap + nodeWidth),
@@ -689,7 +689,7 @@ function NetworkTopologyContent() {
         <div>
           <h1 className="text-xl font-bold tracking-tight sm:text-2xl">网络拓扑</h1>
           <p className="mt-1 text-xs text-muted-foreground sm:text-sm">
-            只展示真实转发方向：入口 → 中转节点（0~N）→ 落地 / 最终目标；同一物理机器全局只显示一次。
+            入口、中转、落地均按实际资源角色生成：入口来自端口转发/转发链/隧道的真实入口主机，不再使用规则名称代替入口。
           </p>
         </div>
         <Button variant="outline" size="sm" className="gap-1.5" onClick={() => void handleRefresh()} disabled={isLoading}>
@@ -700,7 +700,7 @@ function NetworkTopologyContent() {
 
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         <Card className="border-border/40 bg-card/60"><CardContent className="p-3"><div className="text-xs text-muted-foreground">链路路径</div><div className="mt-1 text-xl font-semibold">{paths.length}</div></CardContent></Card>
-        <Card className="border-border/40 bg-card/60"><CardContent className="p-3"><div className="text-xs text-muted-foreground">入口</div><div className="mt-1 text-xl font-semibold">{paths.length}</div></CardContent></Card>
+        <Card className="border-border/40 bg-card/60"><CardContent className="p-3"><div className="text-xs text-muted-foreground">入口</div><div className="mt-1 text-xl font-semibold">{graph.uniqueEntryCount}</div></CardContent></Card>
         <Card className="border-border/40 bg-card/60"><CardContent className="p-3"><div className="text-xs text-muted-foreground">中转节点</div><div className="mt-1 text-xl font-semibold">{relayCount}</div></CardContent></Card>
         <Card className="border-border/40 bg-card/60"><CardContent className="p-3"><div className="text-xs text-muted-foreground">落地 / 目标</div><div className="mt-1 text-xl font-semibold">{landingCount}</div></CardContent></Card>
       </div>
