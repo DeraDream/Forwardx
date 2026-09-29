@@ -6,6 +6,7 @@ import { announcementsRouter } from "./routers/announcements";
 import { authRouter } from "./routers/auth";
 import { billingRouter } from "./routers/billing";
 import { dashboardRouter } from "./routers/dashboard";
+import { diagnosticsRouter } from "./routers/diagnostics";
 import { forwardGroupsRouter } from "./routers/forwardGroups";
 import { hostsRouter } from "./routers/hosts";
 import { lookingGlassRouter } from "./routers/lookingGlass";
@@ -29,6 +30,7 @@ export const appRouter = router({
   plugins: pluginsRouter,
   auth: authRouter,
   dashboard: dashboardRouter,
+  diagnostics: diagnosticsRouter,
   users: usersRouter,
   hosts: hostsRouter,
   lookingGlass: lookingGlassRouter,
