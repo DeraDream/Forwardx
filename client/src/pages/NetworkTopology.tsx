@@ -527,10 +527,8 @@ function buildGraph(paths: PhysicalPath[]) {
 
   // 用相邻节点的平均位置做简单排序，减少共享节点汇聚后的交叉线。
   const incoming = new Map<string, string[]>();
-  const outgoing = new Map<string, string[]>();
   for (const edge of edges) {
     incoming.set(edge.to, [...(incoming.get(edge.to) || []), edge.from]);
-    outgoing.set(edge.from, [...(outgoing.get(edge.from) || []), edge.to]);
   }
 
   const rowHint = new Map<string, number>();
