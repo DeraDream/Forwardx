@@ -1,6 +1,7 @@
 import DashboardLayout from "@/components/DashboardLayout";
 import AnimatedStatValue from "@/components/AnimatedStatValue";
 import { LatencyRating } from "@/components/LatencyRating";
+import { LinkQualityDialog, type LinkQualityTarget } from "@/components/observability/LinkQualityDialog";
 import { LatencyPeakCutToggle } from "@/components/LatencyPeakCutToggle";
 import { LatencyStabilityStats } from "@/components/LatencyStabilityStats";
 import {
@@ -58,6 +59,7 @@ import {
   CheckCircle2,
   ChevronRight,
   GripVertical,
+  Gauge,
   Layers3,
   LayoutGrid,
   List,
@@ -898,6 +900,7 @@ export function ForwardGroupsContent({
   const [internalViewMode, setInternalViewMode] = useState<ForwardGroupViewMode>(() => getStoredForwardGroupViewMode());
   const [latencyGroup, setLatencyGroup] = useState<{ id: number; name: string } | null>(null);
   const [testGroup, setTestGroup] = useState<{ id: number; name: string } | null>(null);
+  const [qualityGroup, setQualityGroup] = useState<LinkQualityTarget | null>(null);
   const [deleteGroup, setDeleteGroup] = useState<any | null>(null);
   const [advancedSettingsOpen, setAdvancedSettingsOpen] = useState(false);
   const lastCreateRequestKeyRef = useRef(createRequestKey ?? 0);
@@ -1742,6 +1745,22 @@ export function ForwardGroupsContent({
         onClick={() => setLatencyGroup({ id: Number(group.id), name: group.name })}
       >
         <Activity className="h-3.5 w-3.5" />
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-8 w-8"
+        title="查看链路质量"
+        onClick={() =>
+          setQualityGroup({
+            scope: "chain",
+            id: Number(group.id),
+            name: String(group.name || `转发链 #${group.id}`),
+            subtitle: "基于转发链历史探测数据计算",
+          })
+        }
+      >
+        <Gauge className="h-3.5 w-3.5" />
       </Button>
       <Button
         variant="ghost"
@@ -2765,6 +2784,11 @@ export function ForwardGroupsContent({
           onOpenChange={(open) => !open && setLatencyGroup(null)}
         />
       )}
+      <LinkQualityDialog
+        target={qualityGroup}
+        open={!!qualityGroup}
+        onOpenChange={(open) => !open && setQualityGroup(null)}
+      />
       {testGroup && (
         <ForwardGroupSelfTestDialog
           groupId={testGroup.id}
