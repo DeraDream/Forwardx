@@ -3,8 +3,12 @@ name: Release Panel
 on:
   workflow_dispatch:
   push:
+    branches:
+      - main
     tags:
       - "v*.*.*"
+    paths:
+      - ".github/release-trigger"
 
 permissions:
   contents: write
