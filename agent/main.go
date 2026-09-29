@@ -4742,6 +4742,8 @@ func runAgentEventStream(cfg Config) error {
 						}
 						go selfUpgrade(cfg, &up)
 					}
+				} else if msg.Type == "agent-selftest" {
+					go pullSelfTestsOnce(cfg)
 				} else if msg.Type == "agent-refresh" {
 					var refresh agentRefreshEvent
 					if err := json.Unmarshal(msg.Data, &refresh); err != nil {
