@@ -250,7 +250,7 @@ func handleSelfTest(cfg Config, t selfTest) {
 
 func selfTestTCPAttempts(t selfTest) int {
 	switch strings.ToLower(strings.TrimSpace(t.Kind)) {
-	case "tunnel", "tunnel-hop", "forward-via-tunnel", "forward-via-tunnel-entry", "forward-chain", "full-chain":
+	case "diagnostic-hop", "tunnel", "tunnel-hop", "forward-via-tunnel", "forward-via-tunnel-entry", "forward-chain", "full-chain":
 		return 4
 	default:
 		return 1
