@@ -23,7 +23,7 @@ import { pollingInterval } from "@/lib/polling";
 import { getTunnelHopIds } from "@/lib/tunnelDisplay";
 import { cn } from "@/lib/utils";
 
-type TopologyCategory = "all" | "local" | "tunnel" | "chain" | "group";
+type TopologyCategory = "all" | "local" | "tunnel" | "chain" | "group" | "fullchain";
 type TopologyNodeKind = "rule" | "resource" | "host" | "landing" | "target";
 
 type TopologyNode = {
@@ -48,6 +48,7 @@ const categoryOptions: Array<{ value: TopologyCategory; label: string }> = [
   { value: "tunnel", label: "隧道" },
   { value: "chain", label: "转发链" },
   { value: "group", label: "转发组" },
+  { value: "fullchain", label: "全链路" },
 ];
 
 function normalizeGroupMode(group: any) {
@@ -55,7 +56,7 @@ function normalizeGroupMode(group: any) {
   return mode === "port" || mode === "chain" || mode === "entry" || mode === "exit" ? mode : "failover";
 }
 
-function ruleCategory(rule: any, groupById: Map<number, any>): Exclude<TopologyCategory, "all"> {
+function ruleCategory(rule: any, groupById: Map<number, any>): Exclude<TopologyCategory, "all" | "fullchain"> {
   const group = Number(rule?.forwardGroupId || 0) > 0 ? groupById.get(Number(rule.forwardGroupId)) : null;
   const mode = normalizeGroupMode(group);
   if (mode === "port") return "local";
@@ -108,6 +109,7 @@ function buildTopology(
   tunnels: any[],
   groups: any[],
   landings: any[],
+  fullChains: any[],
   category: TopologyCategory,
   search: string,
 ) {
@@ -119,6 +121,7 @@ function buildTopology(
 
   const filteredRules = rules.filter((rule: any) => {
     const currentCategory = ruleCategory(rule, groupById);
+    if (category === "fullchain") return false;
     if (category !== "all" && currentCategory !== category) return false;
     if (!query) return true;
     const group = groupById.get(Number(rule.forwardGroupId || 0));
@@ -284,7 +287,94 @@ function buildTopology(
     }
   }
 
-  return { nodes: Array.from(nodes.values()), edges: Array.from(edges.values()), ruleCount: filteredRules.length };
+  const filteredFullChains = (fullChains || []).filter((fullChain: any) => {
+    if (category !== "all" && category !== "fullchain") return false;
+    if (!query) return true;
+    const haystack = [
+      fullChain?.name,
+      fullChain?.port,
+      ...(Array.isArray(fullChain?.nodes)
+        ? fullChain.nodes.flatMap((node: any) => [node?.hostName, node?.forwardGroupName, node?.publicIp, node?.ingressIp])
+        : []),
+    ].join(" ").toLowerCase();
+    return haystack.includes(query);
+  });
+
+  for (const fullChain of filteredFullChains) {
+    const fullChainId = "fullchain:" + Number(fullChain.id);
+    upsertNode(nodes, {
+      id: fullChainId,
+      kind: "resource",
+      label: String(fullChain.name || "全链路 #" + fullChain.id),
+      subtitle: "全链路",
+      detail: String(fullChain.protocol || "both").toUpperCase(),
+      qualityTarget: {
+        scope: "full-chain",
+        id: Number(fullChain.id),
+        name: String(fullChain.name || "全链路 #" + fullChain.id),
+        subtitle: "基于全链路历史探测数据计算",
+      },
+    });
+
+    let previous = fullChainId;
+    for (const node of Array.isArray(fullChain.nodes) ? fullChain.nodes : []) {
+      if (String(node?.nodeType || "host") === "forward-chain" && Number(node?.forwardGroupId || 0) > 0) {
+        const group = groupById.get(Number(node.forwardGroupId));
+        const groupId = "group:" + Number(node.forwardGroupId);
+        upsertNode(nodes, {
+          id: groupId,
+          kind: "resource",
+          label: String(node.forwardGroupName || group?.name || "转发链 #" + node.forwardGroupId),
+          subtitle: "转发链",
+          detail: String(group?.forwardType || ""),
+          qualityTarget: {
+            scope: "chain",
+            id: Number(node.forwardGroupId),
+            name: String(node.forwardGroupName || group?.name || "转发链 #" + node.forwardGroupId),
+            subtitle: "转发链历史逐跳聚合质量",
+          },
+        });
+        addEdge(previous, groupId);
+        previous = groupId;
+        for (const hostId of addGroupHosts(group)) {
+          const hostNode = addHost(hostId);
+          if (hostNode) {
+            addEdge(previous, hostNode);
+            previous = hostNode;
+          }
+        }
+      } else {
+        const hostId = Number(node?.hostId || 0);
+        const hostNode = addHost(hostId);
+        if (hostNode) {
+          addEdge(previous, hostNode);
+          previous = hostNode;
+        }
+      }
+    }
+
+    const landing = Number(fullChain?.landingServiceId || 0) > 0
+      ? landingById.get(Number(fullChain.landingServiceId))
+      : null;
+    if (landing) {
+      const landingId = "landing:" + Number(landing.id);
+      upsertNode(nodes, {
+        id: landingId,
+        kind: "landing",
+        label: String(landing.name || "落地 SS #" + landing.id),
+        subtitle: String(landing.endpoint || landing.host?.exitIp || landing.host?.ip || landing.targetIp || ""),
+        detail: landing.port ? String(landing.port) : "",
+      });
+      addEdge(previous, landingId);
+    }
+  }
+
+  return {
+    nodes: Array.from(nodes.values()),
+    edges: Array.from(edges.values()),
+    ruleCount: filteredRules.length,
+    fullChainCount: filteredFullChains.length,
+  };
 }
 
 function layoutTopology(nodes: TopologyNode[], edges: TopologyEdge[]) {
@@ -374,6 +464,11 @@ function NetworkTopologyContent() {
     staleTime: 20_000,
     refetchOnWindowFocus: false,
   });
+  const fullChainsQuery = trpc.fullChains.list.useQuery(undefined, {
+    refetchInterval: pollingInterval("slow"),
+    staleTime: 20_000,
+    refetchOnWindowFocus: false,
+  });
 
   const topology = useMemo(
     () => buildTopology(
@@ -382,15 +477,16 @@ function NetworkTopologyContent() {
       (tunnelsQuery.data || []) as any[],
       (groupsQuery.data || []) as any[],
       (landingQuery.data || []) as any[],
+      (fullChainsQuery.data || []) as any[],
       category,
       search,
     ),
-    [rulesQuery.data, hostsQuery.data, tunnelsQuery.data, groupsQuery.data, landingQuery.data, category, search],
+    [rulesQuery.data, hostsQuery.data, tunnelsQuery.data, groupsQuery.data, landingQuery.data, fullChainsQuery.data, category, search],
   );
   const layout = useMemo(() => layoutTopology(topology.nodes, topology.edges), [topology]);
   const nodeById = useMemo(() => new Map(topology.nodes.map((node) => [node.id, node])), [topology.nodes]);
   const selectedNode = selectedNodeId ? nodeById.get(selectedNodeId) || null : null;
-  const isLoading = rulesQuery.isLoading || hostsQuery.isLoading || tunnelsQuery.isLoading || groupsQuery.isLoading || landingQuery.isLoading;
+  const isLoading = rulesQuery.isLoading || hostsQuery.isLoading || tunnelsQuery.isLoading || groupsQuery.isLoading || landingQuery.isLoading || fullChainsQuery.isLoading;
 
   const handleRefresh = async () => {
     await Promise.all([
@@ -399,6 +495,7 @@ function NetworkTopologyContent() {
       tunnelsQuery.refetch(),
       groupsQuery.refetch(),
       landingQuery.refetch(),
+      fullChainsQuery.refetch(),
     ]);
   };
 
@@ -422,7 +519,7 @@ function NetworkTopologyContent() {
       </div>
 
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <Card className="border-border/40 bg-card/60"><CardContent className="p-3"><div className="text-xs text-muted-foreground">规则</div><div className="mt-1 text-xl font-semibold">{topology.ruleCount}</div></CardContent></Card>
+        <Card className="border-border/40 bg-card/60"><CardContent className="p-3"><div className="text-xs text-muted-foreground">规则 / 全链路</div><div className="mt-1 text-xl font-semibold">{topology.ruleCount} / {topology.fullChainCount}</div></CardContent></Card>
         <Card className="border-border/40 bg-card/60"><CardContent className="p-3"><div className="text-xs text-muted-foreground">链路资源</div><div className="mt-1 text-xl font-semibold">{resourceCount}</div></CardContent></Card>
         <Card className="border-border/40 bg-card/60"><CardContent className="p-3"><div className="text-xs text-muted-foreground">节点</div><div className="mt-1 text-xl font-semibold">{hostCount}</div></CardContent></Card>
         <Card className="border-border/40 bg-card/60"><CardContent className="p-3"><div className="text-xs text-muted-foreground">出口目标</div><div className="mt-1 text-xl font-semibold">{targetCount}</div></CardContent></Card>
