@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { pollingInterval } from "@/lib/polling";
 
-export type LinkQualityScope = "rule" | "tunnel" | "chain";
+export type LinkQualityScope = "rule" | "tunnel" | "chain" | "full-chain";
 
 export type LinkQualityTarget = {
   scope: LinkQualityScope;
@@ -87,8 +87,19 @@ export function LinkQualityDialog({ target, open, onOpenChange }: { target: Link
     { groupId: Number(target?.id || 0), hours: 168 },
     { enabled: enabled && target?.scope === "chain", refetchInterval: pollingInterval("slow", enabled), refetchOnWindowFocus: false },
   );
+  const fullChainQuery = trpc.fullChains.latencySeries.useQuery(
+    { id: Number(target?.id || 0), hours: 168 },
+    { enabled: enabled && target?.scope === "full-chain", refetchInterval: pollingInterval("slow", enabled), refetchOnWindowFocus: false },
+  );
 
-  const activeQuery = target?.scope === "tunnel" ? tunnelQuery : target?.scope === "chain" ? chainQuery : ruleQuery;
+  const activeQuery =
+    target?.scope === "tunnel"
+      ? tunnelQuery
+      : target?.scope === "chain"
+        ? chainQuery
+        : target?.scope === "full-chain"
+          ? fullChainQuery
+          : ruleQuery;
   const rawSeries = (activeQuery.data || []) as LinkQualitySample[];
   const rangedSeries = useMemo(() => filterLinkQualitySamples(rawSeries, rangeHours), [rawSeries, rangeHours]);
   const stats = useMemo(() => calculateLinkQuality(rangedSeries), [rangedSeries]);
