@@ -102,6 +102,7 @@ const mainMenuItems: SidebarNavItem[] = [
   { icon: Server, label: "主机管理", path: "/hosts" },
   { icon: Route, label: "链路管理", path: "/tunnels" },
   { icon: ArrowRightLeft, label: "转发规则", path: "/rules" },
+  { icon: Network, label: "网络拓扑", path: "/network-topology" },
   { icon: Link2, label: "全链路", path: "/full-chains" },
 ];
 const profileMenuItem: SidebarNavItem = { icon: UserRound, label: "个人资料", path: "/profile", menuKey: "profile" };
