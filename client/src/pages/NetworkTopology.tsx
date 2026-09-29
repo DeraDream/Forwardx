@@ -416,7 +416,6 @@ function buildGraph(paths: PhysicalPath[]) {
   const nodeMap = new Map<string, PhysicalNode>();
   const edgeMap = new Map<string, TopologyEdge>();
   const desiredDepth = new Map<string, number>();
-  const entryIds = new Set<string>();
 
   const mergeNode = (node: PhysicalNode) => {
     const existing = nodeMap.get(node.id);
@@ -424,25 +423,12 @@ function buildGraph(paths: PhysicalPath[]) {
       nodeMap.set(node.id, node);
       return;
     }
-
-    // 同一台物理机可能既是某条路径的中转，又是另一条路径的落地。
-    // 节点只保留一份，角色优先展示“中转”，状态与可用详情择优合并。
-    const kind: PhysicalNodeKind =
-      existing.kind === "entry" || node.kind === "entry"
-        ? "entry"
-        : existing.kind === "relay" || node.kind === "relay"
-          ? "relay"
-          : "landing";
     nodeMap.set(node.id, {
       ...existing,
       ...node,
-      kind,
       label: existing.label || node.label,
       subtitle: existing.subtitle || node.subtitle,
-      detail:
-        existing.detail && node.detail && existing.detail !== node.detail
-          ? existing.detail + " / " + node.detail
-          : existing.detail || node.detail,
+      detail: existing.detail || node.detail,
       online:
         existing.online === false || node.online === false
           ? false
@@ -459,8 +445,7 @@ function buildGraph(paths: PhysicalPath[]) {
 
   for (const path of paths) {
     mergeNode(path.entry);
-    entryIds.add(path.entry.id);
-    desiredDepth.set(path.entry.id, 0);
+    desiredDepth.set(path.entry.id, Math.min(desiredDepth.get(path.entry.id) ?? 0, 0));
 
     path.relays.forEach((relay, index) => {
       mergeNode(relay);
@@ -482,41 +467,61 @@ function buildGraph(paths: PhysicalPath[]) {
   const rawNodes = Array.from(nodeMap.values());
   const edges = Array.from(edgeMap.values());
 
-  // 基于拓扑依赖计算层级。共享机器只有一个节点，多条入口线可以汇聚，
-  // 同一节点也可以继续向多个下游分叉。
-  const depth = new Map<string, number>();
-  for (const node of rawNodes) {
-    depth.set(node.id, entryIds.has(node.id) ? 0 : Math.max(1, desiredDepth.get(node.id) || 1));
+  const incoming = new Map<string, string[]>();
+  const outgoing = new Map<string, string[]>();
+  for (const edge of edges) {
+    incoming.set(edge.to, [...(incoming.get(edge.to) || []), edge.from]);
+    outgoing.set(edge.from, [...(outgoing.get(edge.from) || []), edge.to]);
   }
 
-  for (let pass = 0; pass < Math.max(1, rawNodes.length); pass += 1) {
+  const rootIds = new Set(
+    rawNodes
+      .filter((node) => (incoming.get(node.id) || []).length === 0)
+      .map((node) => node.id),
+  );
+  const sinkIds = new Set(
+    rawNodes
+      .filter((node) => (outgoing.get(node.id) || []).length === 0)
+      .map((node) => node.id),
+  );
+
+  // 角色由整张真实物理图决定：
+  // 没有上游的是入口，有上下游的是中转，没有下游的是落地/最终目标。
+  const classifiedNodes = rawNodes.map((node): PhysicalNode => ({
+    ...node,
+    kind: rootIds.has(node.id) ? "entry" : sinkIds.has(node.id) ? "landing" : "relay",
+  }));
+
+  const depth = new Map<string, number>();
+  for (const node of classifiedNodes) {
+    depth.set(node.id, rootIds.has(node.id) ? 0 : Math.max(1, desiredDepth.get(node.id) || 1));
+  }
+
+  // 最长依赖路径决定中间层级，确保边始终从左向右。
+  for (let pass = 0; pass < Math.max(1, classifiedNodes.length); pass += 1) {
     let changed = false;
     for (const edge of edges) {
-      if (entryIds.has(edge.to)) continue;
-      const next = Math.min(10, (depth.get(edge.from) || 0) + 1);
-      if (next > (depth.get(edge.to) || 0)) {
-        depth.set(edge.to, next);
+      const nextDepth = Math.min(10, (depth.get(edge.from) || 0) + 1);
+      if (nextDepth > (depth.get(edge.to) || 0)) {
+        depth.set(edge.to, nextDepth);
         changed = true;
       }
     }
     if (!changed) break;
   }
 
-  const nonLandingDepths = rawNodes
-    .filter((node) => node.kind !== "landing")
+  const nonSinkDepths = classifiedNodes
+    .filter((node) => !sinkIds.has(node.id))
     .map((node) => depth.get(node.id) || 0);
-  const maxRelayDepth = Math.max(0, ...nonLandingDepths);
-  const landingColumn = Math.max(1, maxRelayDepth + 1);
-
-  for (const node of rawNodes) {
-    if (node.kind === "landing" && !entryIds.has(node.id)) {
-      depth.set(node.id, Math.max(depth.get(node.id) || 1, landingColumn));
-    }
+  const maxMiddleDepth = Math.max(0, ...nonSinkDepths);
+  const landingColumn = Math.max(1, maxMiddleDepth + 1);
+  for (const node of classifiedNodes) {
+    if (sinkIds.has(node.id) && !rootIds.has(node.id)) depth.set(node.id, landingColumn);
   }
 
   const columns = new Map<number, PositionedNode[]>();
-  const positionedNodes: PositionedNode[] = rawNodes.map((node) => {
-    const column = entryIds.has(node.id) ? 0 : depth.get(node.id) || 1;
+  const positionedNodes: PositionedNode[] = classifiedNodes.map((node) => {
+    const column = rootIds.has(node.id) ? 0 : depth.get(node.id) || 1;
     const positioned: PositionedNode = { ...node, column, row: 0 };
     const list = columns.get(column) || [];
     list.push(positioned);
@@ -524,12 +529,7 @@ function buildGraph(paths: PhysicalPath[]) {
     return positioned;
   });
 
-  // 用相邻节点的平均位置做简单排序，减少共享节点汇聚后的交叉线。
-  const incoming = new Map<string, string[]>();
-  for (const edge of edges) {
-    incoming.set(edge.to, [...(incoming.get(edge.to) || []), edge.from]);
-  }
-
+  // 先根据上游重心排序，再做反向一遍参考下游重心，减少交叉线。
   const rowHint = new Map<string, number>();
   const sortedColumns = Array.from(columns.keys()).sort((a, b) => a - b);
   for (const column of sortedColumns) {
@@ -553,6 +553,27 @@ function buildGraph(paths: PhysicalPath[]) {
     });
   }
 
+  for (const column of [...sortedColumns].reverse()) {
+    if (column === 0 || column === landingColumn) continue;
+    const list = columns.get(column) || [];
+    list.sort((a, b) => {
+      const aChildren = outgoing.get(a.id) || [];
+      const bChildren = outgoing.get(b.id) || [];
+      const aHint = aChildren.length
+        ? aChildren.reduce((sum, id) => sum + (rowHint.get(id) || 0), 0) / aChildren.length
+        : Number.POSITIVE_INFINITY;
+      const bHint = bChildren.length
+        ? bChildren.reduce((sum, id) => sum + (rowHint.get(id) || 0), 0) / bChildren.length
+        : Number.POSITIVE_INFINITY;
+      if (aHint !== bHint) return aHint - bHint;
+      return a.label.localeCompare(b.label, "zh-CN");
+    });
+    list.forEach((node, row) => {
+      node.row = row;
+      rowHint.set(node.id, row);
+    });
+  }
+
   const xGap = 238;
   const yGap = 82;
   const xOffset = 32;
@@ -566,6 +587,8 @@ function buildGraph(paths: PhysicalPath[]) {
   const graphHeight = Math.max(440, yOffset + maxSpan + 34);
   const contentCenterY = yOffset + maxSpan / 2;
 
+  // 每一列围绕同一条水平中心线排布：
+  // 单入口会居中；同层有多个入口/中转/落地时，则在该列上下展开。
   for (const [column, list] of columns) {
     const columnSpan = nodeHeight + Math.max(0, list.length - 1) * yGap;
     const startY = contentCenterY - columnSpan / 2;
@@ -586,9 +609,9 @@ function buildGraph(paths: PhysicalPath[]) {
     positions,
     maxRelays: Math.max(0, maxColumn - 1),
     landingColumn: maxColumn,
-    uniqueEntryCount: entryIds.size,
-    uniqueRelayCount: rawNodes.filter((node) => node.kind === "relay").length,
-    uniqueLandingCount: rawNodes.filter((node) => node.kind === "landing").length,
+    uniqueEntryCount: rootIds.size,
+    uniqueRelayCount: classifiedNodes.filter((node) => node.kind === "relay").length,
+    uniqueLandingCount: classifiedNodes.filter((node) => node.kind === "landing").length,
     width: Math.max(820, xOffset * 2 + maxColumn * xGap + nodeWidth),
     height: graphHeight,
   };
