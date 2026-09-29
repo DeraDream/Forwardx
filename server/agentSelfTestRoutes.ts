@@ -195,6 +195,30 @@ agentRouter.post("/api/agent/selftest-result", async (req: Request, res: Respons
         return;
       }
     }
+    if (meta?.kind === "diagnostic-hop") {
+      await db.updateForwardTestResult(testId, {
+        status: success ? "success" : "failed",
+        listenOk: true,
+        targetReachable: success,
+        forwardOk: success,
+        latencyMs: success ? cleanLatency : null,
+        message: JSON.stringify({
+          kind: "diagnostic-hop",
+          diagnosticId: (meta as any).diagnosticId,
+          routeLabel: (meta as any).routeLabel || null,
+          hopLabel: (meta as any).hopLabel || null,
+          targetIp: (meta as any).targetIp || null,
+          targetPort: (meta as any).targetPort || null,
+          method: (meta as any).method || "tcp",
+          success,
+          latencyMs: success ? cleanLatency : null,
+          detail: cleanMessage,
+          resolvedTargetIp: cleanResolvedTargetIp || null,
+        }),
+      });
+      res.json({ success: true });
+      return;
+    }
     if (meta?.kind === "full-chain") {
       await applyFullChainLatencyTestResult(meta, success, success ? cleanLatency : null, cleanMessage);
       res.json({ success: true });
