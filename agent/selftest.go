@@ -31,6 +31,17 @@ var selfTestWorkersOnce sync.Once
 var selfTestInFlightMu sync.Mutex
 var selfTestInFlight = map[int]bool{}
 
+func pullSelfTestsOnce(cfg Config) {
+	var resp selfTestResp
+	if err := post(cfg, "/api/agent/selftest-pull", map[string]any{}, &resp); err != nil {
+		logAgentCommError("selftest-pull", err)
+		return
+	}
+	for _, t := range resp.SelfTests {
+		enqueueSelfTest(cfg, t)
+	}
+}
+
 func selfTestPoller(cfg Config) {
 	activeUntil := time.Time{}
 	for {
