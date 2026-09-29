@@ -24,7 +24,7 @@ export type LinkQualityStats = {
   status: "no-data" | "healthy" | "unstable" | "degraded";
 };
 
-function sampleTime(value: LinkQualitySample["recordedAt"]) {
+export function linkQualitySampleTime(value: LinkQualitySample["recordedAt"]) {
   if (value == null || value === "") return 0;
   if (value instanceof Date) return value.getTime();
   if (typeof value === "number") return value < 1_000_000_000_000 ? value * 1000 : value;
@@ -58,12 +58,12 @@ function round1(value: number | null) {
 export function filterLinkQualitySamples(samples: LinkQualitySample[] | undefined, hours: number, now = Date.now()) {
   const since = now - Math.max(0, hours) * 60 * 60 * 1000;
   return (samples || [])
-    .filter((sample) => sampleTime(sample.recordedAt) >= since)
-    .sort((a, b) => sampleTime(a.recordedAt) - sampleTime(b.recordedAt));
+    .filter((sample) => linkQualitySampleTime(sample.recordedAt) >= since)
+    .sort((a, b) => linkQualitySampleTime(a.recordedAt) - linkQualitySampleTime(b.recordedAt));
 }
 
 export function calculateLinkQuality(samples: LinkQualitySample[] | undefined): LinkQualityStats {
-  const ordered = [...(samples || [])].sort((a, b) => sampleTime(a.recordedAt) - sampleTime(b.recordedAt));
+  const ordered = [...(samples || [])].sort((a, b) => linkQualitySampleTime(a.recordedAt) - linkQualitySampleTime(b.recordedAt));
   if (ordered.length === 0) {
     return {
       total: 0, success: 0, timeout: 0, availability: null, timeoutRate: null,
@@ -83,7 +83,7 @@ export function calculateLinkQuality(samples: LinkQualitySample[] | undefined): 
     const isTimeout = sample.isTimeout === true || Number(sample.isTimeout) === 1 || latency == null;
     if (isTimeout) {
       timeout += 1;
-      lastFailureAt = sampleTime(sample.recordedAt) || lastFailureAt;
+      lastFailureAt = linkQualitySampleTime(sample.recordedAt) || lastFailureAt;
     } else {
       successfulLatencies.push(latency);
     }
@@ -139,7 +139,7 @@ export function calculateLinkQuality(samples: LinkQualitySample[] | undefined): 
     min: successfulLatencies.length ? round1(Math.min(...successfulLatencies)) : null,
     max: successfulLatencies.length ? round1(Math.max(...successfulLatencies)) : null,
     jitter: round1(jitter),
-    lastRecordedAt: sampleTime(latest.recordedAt) || null,
+    lastRecordedAt: linkQualitySampleTime(latest.recordedAt) || null,
     lastFailureAt,
     consecutiveFailures,
     status,
