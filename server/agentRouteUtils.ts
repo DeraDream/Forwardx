@@ -117,6 +117,20 @@ export function buildMetaAgentSelfTestPayload(
   test: { id?: unknown; ruleId?: unknown },
   meta: SelfTestMeta | null,
 ) {
+  if (meta?.kind === "diagnostic-hop") {
+    const method = normalizeLinkProbeMethod(meta.method);
+    return {
+      testId: agentInteger(test?.id),
+      kind: "diagnostic-hop",
+      ruleId: 0,
+      forwardType: "diagnostic",
+      protocol: method,
+      method,
+      sourcePort: 0,
+      targetIp: meta.targetIp,
+      targetPort: agentInteger(meta.targetPort),
+    };
+  }
   if (meta?.kind === "full-chain") {
     const method = normalizeLinkProbeMethod(meta.method);
     return {
