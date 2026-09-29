@@ -24,6 +24,7 @@ import HostMonitorPage from "@/pages/HostMonitor";
 import HostsPage from "@/pages/Hosts";
 import LoginPage from "@/pages/Login";
 import LookingGlassPage from "@/pages/LookingGlass";
+import NetworkTopologyPage from "@/pages/NetworkTopology";
 import PaymentsPage from "@/pages/Payments";
 import PlansPage from "@/pages/Plans";
 import PluginsPage from "@/pages/Plugins";
@@ -99,6 +100,7 @@ function Router() {
       <Route path="/profile">{routeComponent(ProfilePage)}</Route>
       <Route path="/hosts">{() => <AdminRoute component={HostsPage} />}</Route>
       <Route path="/rules">{routeComponent(RulesPage)}</Route>
+      <Route path="/network-topology">{() => <AdminRoute component={NetworkTopologyPage} />}</Route>
       <Route path="/looking-glass" component={LookingGlassRoute} />
       <Route path="/forward-groups">{() => <AdminRoute component={ForwardGroupsPage} />}</Route>
       <Route path="/full-chains">{() => <AdminRoute component={FullChainsPage} />}</Route>
