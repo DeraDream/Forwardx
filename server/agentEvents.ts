@@ -331,6 +331,15 @@ export function pushAgentRefresh(hostId: number, reason: string, options: AgentR
   });
 }
 
+export function pushAgentSelfTest(hostId: number, diagnosticId: string) {
+  const id = Number(hostId);
+  if (!Number.isFinite(id) || id <= 0) return false;
+  return sendAgentEvent(id, "agent-selftest", {
+    diagnosticId,
+    requestedAt: new Date().toISOString(),
+  });
+}
+
 export function pushAgentUpgrade(hostId: number, targetVersion: string | null, panelUrl: string, releaseVersion?: string | null) {
   invalidateAgentStableHeartbeatPlan(hostId);
   return sendAgentEvent(hostId, "agent-upgrade", {
