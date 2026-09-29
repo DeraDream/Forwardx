@@ -8143,6 +8143,71 @@ function RulesContent() {
     };
   };
 
+  const getRuleExitTargetMeta = (rule: any) => {
+    const category = getRuleCategory(rule, forwardGroupById);
+
+    if (category === "chain") {
+      return Number(rule?.targetLandingServiceId || 0) > 0
+        ? {
+            kind: "landing" as const,
+            label: "引用落地SS",
+            icon: Server,
+          }
+        : {
+            kind: "direct" as const,
+            label: "直连",
+            icon: ArrowRight,
+          };
+    }
+
+    if (category === "local") {
+      if (Number(rule?.targetRuleId || 0) > 0) {
+        return {
+          kind: "chain" as const,
+          label: "引用转发链",
+          icon: GitBranch,
+        };
+      }
+      if (Number(rule?.targetLandingServiceId || 0) > 0) {
+        return {
+          kind: "landing" as const,
+          label: "引用落地SS",
+          icon: Server,
+        };
+      }
+      return {
+        kind: "direct" as const,
+        label: "直连",
+        icon: ArrowRight,
+      };
+    }
+
+    return null;
+  };
+
+  const renderExitTargetBadge = (rule: any) => {
+    const meta = getRuleExitTargetMeta(rule);
+    if (!meta) return null;
+    const Icon = meta.icon;
+    const toneClass =
+      meta.kind === "direct"
+        ? "border-border/70 bg-muted/25 text-muted-foreground"
+        : meta.kind === "landing"
+          ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-600"
+          : "border-amber-500/30 bg-amber-500/5 text-amber-600";
+
+    return (
+      <Badge
+        variant="outline"
+        className={`h-5 w-fit shrink-0 rounded-full px-1.5 text-[10px] font-medium whitespace-nowrap ${toneClass}`}
+        title={`出口类型：${meta.label}`}
+      >
+        <Icon className="mr-1 h-3 w-3" />
+        {meta.label}
+      </Badge>
+    );
+  };
+
   const renderTransfer = (rule: any, compact = false) => {
     const {
       entryAddresses,
@@ -8198,7 +8263,10 @@ function RulesContent() {
           </span>
         </div>
         <div className={panelClass}>
-          <div className={labelClass}>出口</div>
+          <div className={`${labelClass} justify-between`}>
+            <span>出口</span>
+            {renderExitTargetBadge(rule)}
+          </div>
           <div className="flex min-w-0 items-start gap-1.5">
             <code
               className={`${valueClass} flex-1 rounded bg-muted/35 px-1.5 py-1`}
@@ -8252,6 +8320,7 @@ function RulesContent() {
       getRuleTransferDisplay(rule);
     return (
       <div className="flex min-w-0 items-center gap-1.5 font-mono text-[11px] leading-5">
+        {renderExitTargetBadge(rule)}
         <code
           className="min-w-0 truncate rounded border border-border/40 bg-muted/30 px-1.5 py-0.5"
           title={targetAddress}
