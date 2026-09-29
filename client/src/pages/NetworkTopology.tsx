@@ -2,7 +2,6 @@ import { useMemo, useState } from "react";
 import {
   Activity,
   ArrowRight,
-  GitBranch,
   Layers3,
   Network,
   RefreshCw,
@@ -24,16 +23,30 @@ import { getTunnelHopIds } from "@/lib/tunnelDisplay";
 import { cn } from "@/lib/utils";
 
 type TopologyCategory = "all" | "local" | "tunnel" | "chain" | "group" | "fullchain";
-type TopologyNodeKind = "rule" | "resource" | "host" | "landing" | "target";
+type PhysicalNodeKind = "entry" | "relay" | "landing";
 
-type TopologyNode = {
+type PhysicalNode = {
   id: string;
-  kind: TopologyNodeKind;
+  kind: PhysicalNodeKind;
   label: string;
   subtitle?: string;
   detail?: string;
   online?: boolean | null;
   qualityTarget?: LinkQualityTarget | null;
+};
+
+type PhysicalPath = {
+  id: string;
+  name: string;
+  category: Exclude<TopologyCategory, "all">;
+  entry: PhysicalNode;
+  relays: PhysicalNode[];
+  landing: PhysicalNode;
+};
+
+type PositionedNode = PhysicalNode & {
+  column: number;
+  row: number;
 };
 
 type TopologyEdge = {
@@ -66,44 +79,86 @@ function ruleCategory(rule: any, groupById: Map<number, any>): Exclude<TopologyC
   return "local";
 }
 
-function nodeIcon(kind: TopologyNodeKind, className = "h-4 w-4") {
-  if (kind === "host") return <Server className={className} />;
-  if (kind === "landing") return <Route className={className} />;
-  if (kind === "resource") return <GitBranch className={className} />;
-  if (kind === "target") return <ArrowRight className={className} />;
-  return <Waypoints className={className} />;
+function categoryLabel(category: Exclude<TopologyCategory, "all">) {
+  return categoryOptions.find((item) => item.value === category)?.label || category;
 }
 
-function nodeTone(node: TopologyNode) {
-  if (node.kind === "host") {
-    return node.online === false
-      ? "border-destructive/40 bg-destructive/5"
-      : "border-emerald-500/30 bg-emerald-500/5";
+function hostAddress(host: any) {
+  return String(host?.entryIp || host?.ipv4 || host?.ip || "").trim();
+}
+
+function enabledMember(member: any) {
+  return member?.isEnabled !== false && Number(member?.isEnabled ?? 1) !== 0;
+}
+
+function uniqNumbers(values: number[]) {
+  const result: number[] = [];
+  for (const value of values) {
+    if (value > 0 && !result.includes(value)) result.push(value);
   }
-  if (node.kind === "landing") return "border-chart-4/30 bg-chart-4/5";
-  if (node.kind === "resource") return "border-primary/30 bg-primary/5";
-  if (node.kind === "target") return "border-amber-500/30 bg-amber-500/5";
-  return "border-border/55 bg-card/90";
+  return result;
 }
 
-function upsertNode(map: Map<string, TopologyNode>, node: TopologyNode) {
-  const existing = map.get(node.id);
-  if (!existing) {
-    map.set(node.id, node);
-    return;
+function expandMemberHostIds(member: any, tunnelById: Map<number, any>) {
+  if (!enabledMember(member)) return [] as number[];
+  if (String(member?.memberType || "host") === "tunnel") {
+    const tunnel = tunnelById.get(Number(member?.tunnelId || 0));
+    return uniqNumbers(getTunnelHopIds(tunnel));
   }
-  map.set(node.id, {
-    ...existing,
-    ...node,
-    qualityTarget: existing.qualityTarget || node.qualityTarget,
-  });
+  const hostId = Number(member?.hostId || 0);
+  return hostId > 0 ? [hostId] : [];
 }
 
-function edgeKey(from: string, to: string) {
-  return from + "=>" + to;
+function groupPhysicalVariants(group: any, groupById: Map<number, any>, tunnelById: Map<number, any>) {
+  if (!group) return [] as number[][];
+  const mode = normalizeGroupMode(group);
+  const members = (Array.isArray(group?.members) ? group.members : [])
+    .filter(enabledMember)
+    .sort((a: any, b: any) => Number(a?.priority || 0) - Number(b?.priority || 0));
+
+  if (mode === "chain") {
+    const orderedChain = members.flatMap((member: any) => expandMemberHostIds(member, tunnelById));
+    const entryGroup = Number(group?.entryGroupId || 0) > 0
+      ? groupById.get(Number(group.entryGroupId))
+      : null;
+    const entryMembers = (Array.isArray(entryGroup?.members) ? entryGroup.members : [])
+      .filter(enabledMember)
+      .sort((a: any, b: any) => Number(a?.priority || 0) - Number(b?.priority || 0));
+
+    if (entryMembers.length > 0) {
+      return entryMembers
+        .map((member: any) => [...expandMemberHostIds(member, tunnelById), ...orderedChain])
+        .map(uniqNumbers)
+        .filter((ids: number[]) => ids.length > 0);
+    }
+
+    return orderedChain.length > 0 ? [uniqNumbers(orderedChain)] : [];
+  }
+
+  // 端口转发、转发组、入口组、出口组的成员是并列候选，不应画成串联链路。
+  return members
+    .map((member: any) => uniqNumbers(expandMemberHostIds(member, tunnelById)))
+    .filter((ids: number[]) => ids.length > 0);
 }
 
-function buildTopology(
+function directRuleVariants(rule: any, groupById: Map<number, any>, tunnelById: Map<number, any>) {
+  const group = Number(rule?.forwardGroupId || 0) > 0 ? groupById.get(Number(rule.forwardGroupId)) : null;
+  if (group) {
+    const variants = groupPhysicalVariants(group, groupById, tunnelById);
+    if (variants.length > 0) return variants;
+  }
+
+  const tunnel = Number(rule?.tunnelId || 0) > 0 ? tunnelById.get(Number(rule.tunnelId)) : null;
+  if (tunnel) {
+    const ids = uniqNumbers(getTunnelHopIds(tunnel));
+    if (ids.length > 0) return [ids];
+  }
+
+  const hostId = Number(rule?.hostId || 0);
+  return hostId > 0 ? [[hostId]] : [[]];
+}
+
+function buildPhysicalPaths(
   rules: any[],
   hosts: any[],
   tunnels: any[],
@@ -117,320 +172,293 @@ function buildTopology(
   const tunnelById = new Map<number, any>(tunnels.map((tunnel: any) => [Number(tunnel.id), tunnel]));
   const groupById = new Map<number, any>(groups.map((group: any) => [Number(group.id), group]));
   const landingById = new Map<number, any>(landings.map((landing: any) => [Number(landing.id), landing]));
+  const ruleById = new Map<number, any>(rules.map((rule: any) => [Number(rule.id), rule]));
   const query = search.trim().toLowerCase();
 
-  const filteredRules = rules.filter((rule: any) => {
-    const currentCategory = ruleCategory(rule, groupById);
-    if (category === "fullchain") return false;
-    if (category !== "all" && currentCategory !== category) return false;
-    if (!query) return true;
-    const group = groupById.get(Number(rule.forwardGroupId || 0));
-    const tunnel = tunnelById.get(Number(rule.tunnelId || 0));
-    const haystack = [
-      rule.name,
-      rule.targetIp,
-      rule.targetPort,
-      rule.sourcePort,
-      group?.name,
-      tunnel?.name,
-    ].join(" ").toLowerCase();
-    return haystack.includes(query);
-  });
-
-  const nodes = new Map<string, TopologyNode>();
-  const edges = new Map<string, TopologyEdge>();
-
-  const addEdge = (from: string, to: string) => {
-    if (!from || !to || from === to) return;
-    const id = edgeKey(from, to);
-    if (!edges.has(id)) edges.set(id, { id, from, to });
-  };
-
-  const addHost = (hostId: number) => {
-    if (!hostId) return "";
+  const makeRelay = (pathId: string, hostId: number, index: number): PhysicalNode => {
     const host = hostById.get(hostId);
-    const id = "host:" + hostId;
-    upsertNode(nodes, {
-      id,
-      kind: "host",
+    return {
+      id: pathId + ":relay:" + index + ":" + hostId,
+      kind: "relay",
       label: String(host?.name || "主机 #" + hostId),
-      subtitle: String(host?.entryIp || host?.ipv4 || host?.ip || ""),
-      detail: host?.isOnline === false ? "离线" : "在线",
+      subtitle: hostAddress(host),
+      detail: "中转节点",
       online: host?.isOnline !== false,
-    });
-    return id;
+    };
   };
 
-  const addGroupHosts = (group: any) => {
-    const entryMembers = Array.isArray(group?.entryGroup?.members) ? group.entryGroup.members : [];
-    const members = [...entryMembers, ...(Array.isArray(group?.members) ? group.members : [])]
-      .filter((member: any) => member?.isEnabled !== false);
-    const ids: number[] = [];
-    for (const member of members) {
-      if (String(member?.memberType || "host") === "tunnel" && Number(member?.tunnelId || 0) > 0) {
-        const nestedTunnel = tunnelById.get(Number(member.tunnelId));
-        for (const hostId of getTunnelHopIds(nestedTunnel)) {
-          if (hostId > 0 && !ids.includes(hostId)) ids.push(hostId);
-        }
-      } else {
-        const hostId = Number(member?.hostId || 0);
-        if (hostId > 0 && !ids.includes(hostId)) ids.push(hostId);
-      }
-    }
-    return ids;
-  };
-
-  for (const rule of filteredRules) {
-    const categoryValue = ruleCategory(rule, groupById);
-    const ruleId = "rule:" + Number(rule.id);
-    upsertNode(nodes, {
-      id: ruleId,
-      kind: "rule",
-      label: String(rule.name || "规则 #" + rule.id),
-      subtitle: String(rule.sourcePort || "-") + " → " + String(rule.targetPort || "-"),
-      detail: categoryOptions.find((item) => item.value === categoryValue)?.label || categoryValue,
-      qualityTarget: {
-        scope: "rule",
-        id: Number(rule.id),
-        name: String(rule.name || "规则 #" + rule.id),
-        subtitle: "规则历史探测质量",
-      },
-    });
-
-    let previous = ruleId;
-    const group = Number(rule.forwardGroupId || 0) > 0 ? groupById.get(Number(rule.forwardGroupId)) : null;
-    const tunnel = Number(rule.tunnelId || 0) > 0 ? tunnelById.get(Number(rule.tunnelId)) : null;
-
-    if (group) {
-      const groupId = "group:" + Number(group.id);
-      const mode = normalizeGroupMode(group);
-      upsertNode(nodes, {
-        id: groupId,
-        kind: "resource",
-        label: String(group.name || "资源 #" + group.id),
-        subtitle: mode === "chain" ? "转发链" : mode === "port" ? "端口转发" : "转发组",
-        detail: String(group.forwardType || ""),
-        qualityTarget: mode === "chain" ? {
-          scope: "chain",
-          id: Number(group.id),
-          name: String(group.name || "转发链 #" + group.id),
-          subtitle: "转发链历史逐跳聚合质量",
-        } : null,
-      });
-      addEdge(previous, groupId);
-      previous = groupId;
-
-      const hostIds = addGroupHosts(group);
-      for (const hostId of hostIds) {
-        const next = addHost(hostId);
-        if (next) {
-          addEdge(previous, next);
-          previous = next;
-        }
-      }
-    } else if (tunnel) {
-      const tunnelId = "tunnel:" + Number(tunnel.id);
-      upsertNode(nodes, {
-        id: tunnelId,
-        kind: "resource",
-        label: String(tunnel.name || "隧道 #" + tunnel.id),
-        subtitle: "隧道",
-        detail: String(tunnel.mode || ""),
-        qualityTarget: {
-          scope: "tunnel",
-          id: Number(tunnel.id),
-          name: String(tunnel.name || "隧道 #" + tunnel.id),
-          subtitle: "隧道入口到出口历史质量",
-        },
-      });
-      addEdge(previous, tunnelId);
-      previous = tunnelId;
-      for (const hostId of getTunnelHopIds(tunnel)) {
-        const next = addHost(hostId);
-        if (next) {
-          addEdge(previous, next);
-          previous = next;
-        }
-      }
-    } else {
-      const next = addHost(Number(rule.hostId || 0));
-      if (next) {
-        addEdge(previous, next);
-        previous = next;
-      }
-    }
-
-    const landing = Number(rule.targetLandingServiceId || 0) > 0
+  const makeLandingForRule = (pathId: string, rule: any): PhysicalNode => {
+    const landing = Number(rule?.targetLandingServiceId || 0) > 0
       ? landingById.get(Number(rule.targetLandingServiceId))
       : null;
     if (landing) {
-      const landingId = "landing:" + Number(landing.id);
-      upsertNode(nodes, {
-        id: landingId,
+      return {
+        id: pathId + ":landing:ss:" + Number(landing.id),
         kind: "landing",
         label: String(landing.name || "落地 SS #" + landing.id),
         subtitle: String(landing.endpoint || landing.host?.exitIp || landing.host?.ip || landing.targetIp || ""),
-        detail: landing.port ? String(landing.port) : "",
-      });
-      addEdge(previous, landingId);
-    } else {
-      const targetText = String(rule.targetIp || "未知目标") + ":" + String(rule.targetPort || "-");
-      const targetId = "target:" + targetText;
-      upsertNode(nodes, {
-        id: targetId,
-        kind: "target",
-        label: String(rule.targetIp || "未知目标"),
-        subtitle: String(rule.targetPort || "-"),
-        detail: "最终目标",
-      });
-      addEdge(previous, targetId);
+        detail: landing.port ? "SS · " + String(landing.port) : "落地 SS",
+        online: landing?.host?.isOnline !== false,
+      };
     }
-  }
+    const targetIp = String(rule?.targetIp || "未知目标");
+    const targetPort = Number(rule?.targetPort || 0);
+    return {
+      id: pathId + ":landing:target:" + targetIp + ":" + targetPort,
+      kind: "landing",
+      label: targetIp,
+      subtitle: targetPort > 0 ? String(targetPort) : "",
+      detail: "最终目标",
+      online: null,
+    };
+  };
 
-  const filteredFullChains = (fullChains || []).filter((fullChain: any) => {
-    if (category !== "all" && category !== "fullchain") return false;
-    if (!query) return true;
-    const haystack = [
-      fullChain?.name,
-      fullChain?.port,
-      ...(Array.isArray(fullChain?.nodes)
-        ? fullChain.nodes.flatMap((node: any) => [node?.hostName, node?.forwardGroupName, node?.publicIp, node?.ingressIp])
-        : []),
-    ].join(" ").toLowerCase();
-    return haystack.includes(query);
-  });
+  const resolveRuleTail = (
+    rule: any,
+    visited: Set<number>,
+  ): Array<{ hostIds: number[]; landing: PhysicalNode }> => {
+    const ruleId = Number(rule?.id || 0);
+    if (ruleId > 0 && visited.has(ruleId)) {
+      return directRuleVariants(rule, groupById, tunnelById).map((hostIds, index) => ({
+        hostIds,
+        landing: makeLandingForRule("cycle:" + ruleId + ":" + index, rule),
+      }));
+    }
 
-  for (const fullChain of filteredFullChains) {
-    const fullChainId = "fullchain:" + Number(fullChain.id);
-    upsertNode(nodes, {
-      id: fullChainId,
-      kind: "resource",
-      label: String(fullChain.name || "全链路 #" + fullChain.id),
-      subtitle: "全链路",
-      detail: String(fullChain.protocol || "both").toUpperCase(),
-      qualityTarget: {
-        scope: "full-chain",
-        id: Number(fullChain.id),
-        name: String(fullChain.name || "全链路 #" + fullChain.id),
-        subtitle: "基于全链路历史探测数据计算",
-      },
-    });
+    const nextVisited = new Set(visited);
+    if (ruleId > 0) nextVisited.add(ruleId);
+    const currentVariants = directRuleVariants(rule, groupById, tunnelById);
+    const targetRuleId = Number(rule?.targetRuleId || 0);
+    const referenced = targetRuleId > 0 ? ruleById.get(targetRuleId) : null;
 
-    let previous = fullChainId;
-    for (const node of Array.isArray(fullChain.nodes) ? fullChain.nodes : []) {
-      if (String(node?.nodeType || "host") === "forward-chain" && Number(node?.forwardGroupId || 0) > 0) {
-        const group = groupById.get(Number(node.forwardGroupId));
-        const groupId = "group:" + Number(node.forwardGroupId);
-        upsertNode(nodes, {
-          id: groupId,
-          kind: "resource",
-          label: String(node.forwardGroupName || group?.name || "转发链 #" + node.forwardGroupId),
-          subtitle: "转发链",
-          detail: String(group?.forwardType || ""),
-          qualityTarget: {
-            scope: "chain",
-            id: Number(node.forwardGroupId),
-            name: String(node.forwardGroupName || group?.name || "转发链 #" + node.forwardGroupId),
-            subtitle: "转发链历史逐跳聚合质量",
-          },
+    if (!referenced) {
+      return currentVariants.map((hostIds, index) => ({
+        hostIds,
+        landing: makeLandingForRule("rule:" + ruleId + ":" + index, rule),
+      }));
+    }
+
+    const nested = resolveRuleTail(referenced, nextVisited);
+    const result: Array<{ hostIds: number[]; landing: PhysicalNode }> = [];
+    for (const current of currentVariants) {
+      for (const tail of nested) {
+        result.push({
+          hostIds: uniqNumbers([...current, ...tail.hostIds]),
+          landing: tail.landing,
         });
-        addEdge(previous, groupId);
-        previous = groupId;
-        for (const hostId of addGroupHosts(group)) {
-          const hostNode = addHost(hostId);
-          if (hostNode) {
-            addEdge(previous, hostNode);
-            previous = hostNode;
-          }
-        }
-      } else {
-        const hostId = Number(node?.hostId || 0);
-        const hostNode = addHost(hostId);
-        if (hostNode) {
-          addEdge(previous, hostNode);
-          previous = hostNode;
-        }
       }
     }
+    return result;
+  };
 
-    const landing = Number(fullChain?.landingServiceId || 0) > 0
-      ? landingById.get(Number(fullChain.landingServiceId))
-      : null;
-    if (landing) {
-      const landingId = "landing:" + Number(landing.id);
-      upsertNode(nodes, {
-        id: landingId,
-        kind: "landing",
-        label: String(landing.name || "落地 SS #" + landing.id),
-        subtitle: String(landing.endpoint || landing.host?.exitIp || landing.host?.ip || landing.targetIp || ""),
-        detail: landing.port ? String(landing.port) : "",
+  const paths: PhysicalPath[] = [];
+
+  for (const rule of rules) {
+    // 运行时子规则由模板生成，拓扑只展示用户可见的主规则，避免重复画同一条物理路径。
+    if (rule?.pendingDelete) continue;
+    if (Number(rule?.forwardGroupRuleId || 0) > 0) continue;
+
+    const currentCategory = ruleCategory(rule, groupById);
+    if (category !== "all" && category !== currentCategory) continue;
+
+    const tails = resolveRuleTail(rule, new Set());
+    tails.forEach((tail, variantIndex) => {
+      const pathId = "rule:" + Number(rule.id) + ":" + variantIndex;
+      const firstHost = tail.hostIds.length > 0 ? hostById.get(tail.hostIds[0]) : null;
+      const entrySubtitleParts = [
+        firstHost?.name ? String(firstHost.name) : "",
+        Number(rule?.sourcePort || 0) > 0 ? ":" + Number(rule.sourcePort) : "",
+      ].filter(Boolean);
+
+      const entry: PhysicalNode = {
+        id: pathId + ":entry",
+        kind: "entry",
+        label: String(rule?.name || "规则 #" + rule.id),
+        subtitle: entrySubtitleParts.join(" "),
+        detail: categoryLabel(currentCategory),
+        online: firstHost ? firstHost.isOnline !== false : null,
+        qualityTarget: {
+          scope: "rule",
+          id: Number(rule.id),
+          name: String(rule?.name || "规则 #" + rule.id),
+          subtitle: "该入口规则的历史链路质量",
+        },
+      };
+
+      const relayHostIds = tail.hostIds;
+      const relays = relayHostIds.map((hostId, index) => makeRelay(pathId, hostId, index));
+      const landing = { ...tail.landing, id: pathId + ":landing" };
+
+      const haystack = [
+        entry.label,
+        entry.subtitle,
+        ...relays.flatMap((node) => [node.label, node.subtitle]),
+        landing.label,
+        landing.subtitle,
+      ].join(" ").toLowerCase();
+      if (query && !haystack.includes(query)) return;
+
+      paths.push({
+        id: pathId,
+        name: String(rule?.name || "规则 #" + rule.id),
+        category: currentCategory,
+        entry,
+        relays,
+        landing,
       });
-      addEdge(previous, landingId);
+    });
+  }
+
+  if (category === "all" || category === "fullchain") {
+    for (const chain of fullChains || []) {
+      if (chain?.status === "draft" && chain?.isEnabled === false) continue;
+      const expandedHostIds: number[] = [];
+      for (const node of Array.isArray(chain?.nodes) ? chain.nodes : []) {
+        if (String(node?.nodeType || "host") === "forward-chain" && Number(node?.forwardGroupId || 0) > 0) {
+          const group = groupById.get(Number(node.forwardGroupId));
+          const variants = groupPhysicalVariants(group, groupById, tunnelById);
+          if (variants.length > 0) expandedHostIds.push(...variants[0]);
+        } else {
+          const hostId = Number(node?.hostId || 0);
+          if (hostId > 0) expandedHostIds.push(hostId);
+        }
+      }
+
+      const hostIds = uniqNumbers(expandedHostIds);
+      if (hostIds.length === 0) continue;
+      const pathId = "fullchain:" + Number(chain.id);
+      const entryHost = hostById.get(hostIds[0]);
+      const landingHostId = hostIds[hostIds.length - 1];
+      const landingHost = hostById.get(landingHostId);
+      const middleHostIds = hostIds.slice(1, -1);
+
+      const entry: PhysicalNode = {
+        id: pathId + ":entry",
+        kind: "entry",
+        label: String(entryHost?.name || chain?.name || "全链路 #" + chain.id),
+        subtitle: String(chain?.name || "全链路") + (Number(chain?.port || 0) > 0 ? " · :" + Number(chain.port) : ""),
+        detail: "全链路入口",
+        online: entryHost?.isOnline !== false,
+        qualityTarget: {
+          scope: "full-chain",
+          id: Number(chain.id),
+          name: String(chain?.name || "全链路 #" + chain.id),
+          subtitle: "该全链路的历史探测质量",
+        },
+      };
+
+      const relays = middleHostIds.map((hostId, index) => makeRelay(pathId, hostId, index));
+      const landing: PhysicalNode = {
+        id: pathId + ":landing",
+        kind: "landing",
+        label: String(landingHost?.name || "落地主机 #" + landingHostId),
+        subtitle: hostAddress(landingHost),
+        detail: "落地 SS",
+        online: landingHost?.isOnline !== false,
+      };
+
+      const haystack = [
+        entry.label,
+        entry.subtitle,
+        ...relays.flatMap((node) => [node.label, node.subtitle]),
+        landing.label,
+        landing.subtitle,
+      ].join(" ").toLowerCase();
+      if (query && !haystack.includes(query)) continue;
+
+      paths.push({
+        id: pathId,
+        name: String(chain?.name || "全链路 #" + chain.id),
+        category: "fullchain",
+        entry,
+        relays,
+        landing,
+      });
     }
   }
 
-  return {
-    nodes: Array.from(nodes.values()),
-    edges: Array.from(edges.values()),
-    ruleCount: filteredRules.length,
-    fullChainCount: filteredFullChains.length,
-  };
+  return paths;
 }
 
-function layoutTopology(nodes: TopologyNode[], edges: TopologyEdge[]) {
-  const depth = new Map<string, number>(nodes.map((node) => [node.id, 0]));
-  for (let pass = 0; pass < Math.max(1, nodes.length); pass++) {
-    let changed = false;
-    for (const edge of edges) {
-      const fromDepth = depth.get(edge.from) || 0;
-      const toDepth = depth.get(edge.to) || 0;
-      const nextDepth = Math.min(7, fromDepth + 1);
-      if (nextDepth > toDepth) {
-        depth.set(edge.to, nextDepth);
-        changed = true;
-      }
-    }
-    if (!changed) break;
-  }
+function buildGraph(paths: PhysicalPath[]) {
+  const maxRelays = Math.max(0, ...paths.map((path) => path.relays.length));
+  const landingColumn = maxRelays + 1;
+  const nodes: PositionedNode[] = [];
+  const edges: TopologyEdge[] = [];
+  const columns = new Map<number, PositionedNode[]>();
 
-  const columns = new Map<number, TopologyNode[]>();
-  for (const node of nodes) {
-    const d = depth.get(node.id) || 0;
-    const list = columns.get(d) || [];
-    list.push(node);
-    columns.set(d, list);
+  const addNode = (node: PhysicalNode, column: number) => {
+    const positioned: PositionedNode = { ...node, column, row: 0 };
+    const list = columns.get(column) || [];
+    positioned.row = list.length;
+    list.push(positioned);
+    columns.set(column, list);
+    nodes.push(positioned);
+  };
+
+  for (const path of paths) {
+    addNode(path.entry, 0);
+    path.relays.forEach((relay, index) => addNode(relay, index + 1));
+    addNode(path.landing, landingColumn);
+
+    const ordered = [path.entry, ...path.relays, path.landing];
+    for (let i = 0; i < ordered.length - 1; i += 1) {
+      edges.push({
+        id: path.id + ":edge:" + i,
+        from: ordered[i].id,
+        to: ordered[i + 1].id,
+      });
+    }
   }
 
   const xGap = 238;
   const yGap = 82;
-  const xOffset = 28;
-  const yOffset = 30;
+  const xOffset = 32;
+  const yOffset = 62;
   const nodeWidth = 188;
   const nodeHeight = 58;
   const positions = new Map<string, { x: number; y: number; width: number; height: number }>();
   let maxRows = 1;
-  let maxDepth = 0;
 
-  for (const [d, list] of columns) {
-    maxDepth = Math.max(maxDepth, d);
+  for (const [column, list] of columns) {
     maxRows = Math.max(maxRows, list.length);
-    list
-      .sort((a, b) => a.label.localeCompare(b.label, "zh-CN"))
-      .forEach((node, index) => {
-        positions.set(node.id, {
-          x: xOffset + d * xGap,
-          y: yOffset + index * yGap,
-          width: nodeWidth,
-          height: nodeHeight,
-        });
+    list.forEach((node, row) => {
+      positions.set(node.id, {
+        x: xOffset + column * xGap,
+        y: yOffset + row * yGap,
+        width: nodeWidth,
+        height: nodeHeight,
       });
+    });
   }
 
   return {
+    nodes,
+    edges,
     positions,
-    width: Math.max(760, xOffset * 2 + maxDepth * xGap + nodeWidth),
-    height: Math.max(420, yOffset * 2 + maxRows * yGap),
+    maxRelays,
+    landingColumn,
+    width: Math.max(820, xOffset * 2 + landingColumn * xGap + nodeWidth),
+    height: Math.max(440, yOffset + maxRows * yGap + 24),
   };
+}
+
+function nodeIcon(kind: PhysicalNodeKind) {
+  if (kind === "entry") return <Waypoints className="h-3.5 w-3.5" />;
+  if (kind === "relay") return <Server className="h-3.5 w-3.5" />;
+  return <Route className="h-3.5 w-3.5" />;
+}
+
+function nodeTone(node: PhysicalNode) {
+  if (node.kind === "entry") return "border-border/55 bg-card/90";
+  if (node.kind === "relay") {
+    return node.online === false
+      ? "border-destructive/35 bg-destructive/5"
+      : "border-emerald-500/30 bg-emerald-500/5";
+  }
+  return node.online === false
+    ? "border-destructive/35 bg-destructive/5"
+    : "border-amber-500/30 bg-amber-500/5";
 }
 
 function NetworkTopologyContent() {
@@ -470,8 +498,8 @@ function NetworkTopologyContent() {
     refetchOnWindowFocus: false,
   });
 
-  const topology = useMemo(
-    () => buildTopology(
+  const paths = useMemo(
+    () => buildPhysicalPaths(
       (rulesQuery.data || []) as any[],
       (hostsQuery.data || []) as any[],
       (tunnelsQuery.data || []) as any[],
@@ -483,9 +511,11 @@ function NetworkTopologyContent() {
     ),
     [rulesQuery.data, hostsQuery.data, tunnelsQuery.data, groupsQuery.data, landingQuery.data, fullChainsQuery.data, category, search],
   );
-  const layout = useMemo(() => layoutTopology(topology.nodes, topology.edges), [topology]);
-  const nodeById = useMemo(() => new Map(topology.nodes.map((node) => [node.id, node])), [topology.nodes]);
-  const selectedNode = selectedNodeId ? nodeById.get(selectedNodeId) || null : null;
+
+  const graph = useMemo(() => buildGraph(paths), [paths]);
+  const selectedNode = selectedNodeId
+    ? graph.nodes.find((node) => node.id === selectedNodeId) || null
+    : null;
   const isLoading = rulesQuery.isLoading || hostsQuery.isLoading || tunnelsQuery.isLoading || groupsQuery.isLoading || landingQuery.isLoading || fullChainsQuery.isLoading;
 
   const handleRefresh = async () => {
@@ -499,9 +529,8 @@ function NetworkTopologyContent() {
     ]);
   };
 
-  const hostCount = topology.nodes.filter((node) => node.kind === "host").length;
-  const resourceCount = topology.nodes.filter((node) => node.kind === "resource").length;
-  const targetCount = topology.nodes.filter((node) => node.kind === "target" || node.kind === "landing").length;
+  const relayCount = paths.reduce((sum, path) => sum + path.relays.length, 0);
+  const landingCount = paths.length;
 
   return (
     <div className="space-y-5">
@@ -509,7 +538,7 @@ function NetworkTopologyContent() {
         <div>
           <h1 className="text-xl font-bold tracking-tight sm:text-2xl">网络拓扑</h1>
           <p className="mt-1 text-xs text-muted-foreground sm:text-sm">
-            全局只读观测视图：展示规则、链路资源、节点与最终目标的引用及流量路径。
+            只展示真实转发方向：入口 → 中转节点（0~N）→ 落地 / 最终目标。
           </p>
         </div>
         <Button variant="outline" size="sm" className="gap-1.5" onClick={() => void handleRefresh()} disabled={isLoading}>
@@ -519,10 +548,10 @@ function NetworkTopologyContent() {
       </div>
 
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <Card className="border-border/40 bg-card/60"><CardContent className="p-3"><div className="text-xs text-muted-foreground">规则 / 全链路</div><div className="mt-1 text-xl font-semibold">{topology.ruleCount} / {topology.fullChainCount}</div></CardContent></Card>
-        <Card className="border-border/40 bg-card/60"><CardContent className="p-3"><div className="text-xs text-muted-foreground">链路资源</div><div className="mt-1 text-xl font-semibold">{resourceCount}</div></CardContent></Card>
-        <Card className="border-border/40 bg-card/60"><CardContent className="p-3"><div className="text-xs text-muted-foreground">节点</div><div className="mt-1 text-xl font-semibold">{hostCount}</div></CardContent></Card>
-        <Card className="border-border/40 bg-card/60"><CardContent className="p-3"><div className="text-xs text-muted-foreground">出口目标</div><div className="mt-1 text-xl font-semibold">{targetCount}</div></CardContent></Card>
+        <Card className="border-border/40 bg-card/60"><CardContent className="p-3"><div className="text-xs text-muted-foreground">链路路径</div><div className="mt-1 text-xl font-semibold">{paths.length}</div></CardContent></Card>
+        <Card className="border-border/40 bg-card/60"><CardContent className="p-3"><div className="text-xs text-muted-foreground">入口</div><div className="mt-1 text-xl font-semibold">{paths.length}</div></CardContent></Card>
+        <Card className="border-border/40 bg-card/60"><CardContent className="p-3"><div className="text-xs text-muted-foreground">中转节点</div><div className="mt-1 text-xl font-semibold">{relayCount}</div></CardContent></Card>
+        <Card className="border-border/40 bg-card/60"><CardContent className="p-3"><div className="text-xs text-muted-foreground">落地 / 目标</div><div className="mt-1 text-xl font-semibold">{landingCount}</div></CardContent></Card>
       </div>
 
       <div className="flex flex-col gap-2 rounded-xl border border-border/45 bg-card/45 p-3 sm:flex-row sm:items-center sm:justify-between">
@@ -533,7 +562,10 @@ function NetworkTopologyContent() {
               variant={category === option.value ? "secondary" : "ghost"}
               size="sm"
               className="h-8 px-2.5 text-xs"
-              onClick={() => setCategory(option.value)}
+              onClick={() => {
+                setCategory(option.value);
+                setSelectedNodeId(null);
+              }}
             >
               {option.label}
             </Button>
@@ -541,17 +573,17 @@ function NetworkTopologyContent() {
         </div>
         <div className="relative w-full sm:w-72">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-          <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索规则、链路或目标" className="h-8 pl-8 text-xs" />
+          <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索入口、节点或落地" className="h-8 pl-8 text-xs" />
         </div>
       </div>
 
       {isLoading ? (
         <DataSectionLoading label="正在加载网络拓扑" />
-      ) : topology.nodes.length === 0 ? (
+      ) : graph.nodes.length === 0 ? (
         <Card className="border-dashed border-border/50 bg-card/40">
           <CardContent className="flex min-h-72 flex-col items-center justify-center gap-2 text-center">
             <Network className="h-8 w-8 text-muted-foreground" />
-            <div className="text-sm font-medium">当前筛选没有可展示的链路</div>
+            <div className="text-sm font-medium">当前筛选没有可展示的物理链路</div>
             <div className="text-xs text-muted-foreground">调整类型或搜索条件后重试。</div>
           </CardContent>
         </Card>
@@ -560,33 +592,54 @@ function NetworkTopologyContent() {
           <Card className="overflow-hidden border-border/45 bg-card/45">
             <CardContent className="p-0">
               <div className="overflow-auto">
-                <div className="relative" style={{ width: layout.width, height: layout.height }}>
-                  <svg className="pointer-events-none absolute inset-0 h-full w-full" width={layout.width} height={layout.height}>
-                    {topology.edges.map((edge) => {
-                      const from = layout.positions.get(edge.from);
-                      const to = layout.positions.get(edge.to);
+                <div className="relative" style={{ width: graph.width, height: graph.height }}>
+                  <div
+                    className="absolute left-0 top-0 h-11 border-b border-border/35 bg-muted/10"
+                    style={{ width: graph.width }}
+                  />
+                  <div className="absolute left-8 top-3 text-xs font-medium text-muted-foreground">入口</div>
+                  {Array.from({ length: graph.maxRelays }).map((_, index) => (
+                    <div
+                      key={"relay-title-" + index}
+                      className="absolute top-3 text-xs font-medium text-muted-foreground"
+                      style={{ left: 32 + (index + 1) * 238 }}
+                    >
+                      中转 {index + 1}
+                    </div>
+                  ))}
+                  <div
+                    className="absolute top-3 text-xs font-medium text-muted-foreground"
+                    style={{ left: 32 + graph.landingColumn * 238 }}
+                  >
+                    落地 / 最终目标
+                  </div>
+
+                  <svg className="pointer-events-none absolute inset-0 h-full w-full" width={graph.width} height={graph.height}>
+                    {graph.edges.map((edge) => {
+                      const from = graph.positions.get(edge.from);
+                      const to = graph.positions.get(edge.to);
                       if (!from || !to) return null;
                       const x1 = from.x + from.width;
                       const y1 = from.y + from.height / 2;
                       const x2 = to.x;
                       const y2 = to.y + to.height / 2;
-                      const mid = x1 + Math.max(36, (x2 - x1) / 2);
+                      const control = Math.max(42, (x2 - x1) * 0.42);
                       return (
                         <path
                           key={edge.id}
-                          d={"M " + x1 + " " + y1 + " C " + mid + " " + y1 + ", " + (x2 - Math.max(36, (x2 - x1) / 2)) + " " + y2 + ", " + x2 + " " + y2}
+                          d={"M " + x1 + " " + y1 + " C " + (x1 + control) + " " + y1 + ", " + (x2 - control) + " " + y2 + ", " + x2 + " " + y2}
                           fill="none"
                           stroke="currentColor"
                           strokeWidth="1.5"
                           className="text-border"
-                          opacity="0.85"
+                          opacity="0.9"
                         />
                       );
                     })}
                   </svg>
 
-                  {topology.nodes.map((node) => {
-                    const pos = layout.positions.get(node.id);
+                  {graph.nodes.map((node) => {
+                    const pos = graph.positions.get(node.id);
                     if (!pos) return null;
                     const selected = selectedNodeId === node.id;
                     return (
@@ -603,10 +656,10 @@ function NetworkTopologyContent() {
                         title={node.label}
                       >
                         <div className="flex min-w-0 items-center gap-1.5">
-                          <span className="shrink-0 text-muted-foreground">{nodeIcon(node.kind, "h-3.5 w-3.5")}</span>
+                          <span className="shrink-0 text-muted-foreground">{nodeIcon(node.kind)}</span>
                           <span className="truncate text-xs font-semibold">{node.label}</span>
-                          {node.kind === "host" && (
-                            <span className={cn("ml-auto h-2 w-2 shrink-0 rounded-full", node.online === false ? "bg-destructive" : "bg-emerald-500")} />
+                          {node.online != null && (
+                            <span className={cn("ml-auto h-2 w-2 shrink-0 rounded-full", node.online ? "bg-emerald-500" : "bg-destructive")} />
                           )}
                         </div>
                         <div className="mt-1 truncate text-[10px] text-muted-foreground">{node.subtitle || node.detail || "—"}</div>
@@ -628,13 +681,20 @@ function NetworkTopologyContent() {
                     </div>
                     <div className="min-w-0">
                       <div className="truncate font-semibold">{selectedNode.label}</div>
-                      <div className="mt-1 text-xs text-muted-foreground">{selectedNode.subtitle || "暂无附加地址信息"}</div>
+                      <div className="mt-1 text-xs text-muted-foreground">{selectedNode.subtitle || "暂无附加信息"}</div>
                     </div>
                   </div>
                   <div className="space-y-2 border-t border-border/40 pt-3 text-xs">
-                    <div className="flex justify-between gap-2"><span className="text-muted-foreground">类型</span><span>{selectedNode.kind === "rule" ? "规则" : selectedNode.kind === "host" ? "主机" : selectedNode.kind === "resource" ? "链路资源" : selectedNode.kind === "landing" ? "落地 SS" : "最终目标"}</span></div>
-                    <div className="flex justify-between gap-2"><span className="text-muted-foreground">状态/说明</span><span className="text-right">{selectedNode.detail || "—"}</span></div>
-                    {selectedNode.kind === "host" && <div className="flex justify-between gap-2"><span className="text-muted-foreground">在线状态</span><Badge variant="outline" className={cn("h-5 text-[10px]", selectedNode.online === false ? "border-destructive/30 text-destructive" : "border-emerald-500/30 text-emerald-600")}>{selectedNode.online === false ? "离线" : "在线"}</Badge></div>}
+                    <div className="flex justify-between gap-2"><span className="text-muted-foreground">链路角色</span><span>{selectedNode.kind === "entry" ? "入口" : selectedNode.kind === "relay" ? "中转" : "落地 / 最终目标"}</span></div>
+                    <div className="flex justify-between gap-2"><span className="text-muted-foreground">说明</span><span className="text-right">{selectedNode.detail || "—"}</span></div>
+                    {selectedNode.online != null && (
+                      <div className="flex justify-between gap-2">
+                        <span className="text-muted-foreground">在线状态</span>
+                        <Badge variant="outline" className={cn("h-5 text-[10px]", selectedNode.online ? "border-emerald-500/30 text-emerald-600" : "border-destructive/30 text-destructive")}>
+                          {selectedNode.online ? "在线" : "离线"}
+                        </Badge>
+                      </div>
+                    )}
                   </div>
                   {selectedNode.qualityTarget && (
                     <Button variant="outline" className="w-full gap-2" onClick={() => setQualityTarget(selectedNode.qualityTarget || null)}>
@@ -646,8 +706,8 @@ function NetworkTopologyContent() {
               ) : (
                 <div className="flex min-h-40 flex-col items-center justify-center text-center">
                   <Layers3 className="h-7 w-7 text-muted-foreground" />
-                  <div className="mt-2 text-sm font-medium">选择一个拓扑节点</div>
-                  <p className="mt-1 text-xs text-muted-foreground">查看资源类型、在线状态以及可用的历史链路质量。</p>
+                  <div className="mt-2 text-sm font-medium">选择一个链路节点</div>
+                  <p className="mt-1 text-xs text-muted-foreground">拓扑现在只表达真实方向，不再把规则资源对象混进物理路径。</p>
                 </div>
               )}
             </CardContent>
@@ -656,12 +716,11 @@ function NetworkTopologyContent() {
       )}
 
       <div className="flex flex-wrap gap-x-4 gap-y-2 rounded-lg border border-border/40 bg-muted/15 px-3 py-2 text-[11px] text-muted-foreground">
-        <span className="inline-flex items-center gap-1"><Waypoints className="h-3 w-3" />规则</span>
-        <span className="inline-flex items-center gap-1"><GitBranch className="h-3 w-3" />链路资源</span>
-        <span className="inline-flex items-center gap-1"><Server className="h-3 w-3" />主机节点</span>
-        <span className="inline-flex items-center gap-1"><Route className="h-3 w-3" />落地 SS</span>
-        <span className="inline-flex items-center gap-1"><ArrowRight className="h-3 w-3" />最终目标</span>
-        <span className="ml-auto">本页面只读取现有配置与状态，不下发 Agent、不修改转发规则。</span>
+        <span className="inline-flex items-center gap-1"><Waypoints className="h-3 w-3" />入口</span>
+        <span className="inline-flex items-center gap-1"><Server className="h-3 w-3" />中转节点</span>
+        <span className="inline-flex items-center gap-1"><Route className="h-3 w-3" />落地 / 最终目标</span>
+        <span className="inline-flex items-center gap-1"><ArrowRight className="h-3 w-3" />从左向右为实际转发方向</span>
+        <span className="ml-auto">纯展示：不修改规则、不下发 Agent、不切换链路。</span>
       </div>
 
       <LinkQualityDialog target={qualityTarget} open={!!qualityTarget} onOpenChange={(open) => !open && setQualityTarget(null)} />
