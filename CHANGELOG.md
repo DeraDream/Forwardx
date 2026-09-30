@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.3.388] - 2026-10-01
+
+### 网络画像按 NodeQuality / IPQuality / NetQuality 思路重构
+
+- 风险数据库扩展为 9 个来源：ProxyCheck、IPinfo、ipregistry、ipapi.is、DB-IP、Scamalytics、IPQS、AbuseIPDB、IP2Location。前四个优先走独立直连接口，check.place 相关来源仅作为补充，避免 Cloudflare 403 导致整个矩阵失效。
+- IP 属性判定增加 BGP.Tools WHOIS 国家兜底：MaxMind 不可用时先尝试 RDAP，再尝试 BGP.Tools 注册国家，并继续与实际 GeoIP 国家比较。
+- 网络 / IXP 增加 BGP.Tools 接入统计：展示上游数量、Peers 数量、Transit-free 状态和 IXP 路由接入数；继续保留 RIPEstat 邻居、RPKI 与 PeeringDB IXP/机房信息。
+- IXP 展示在 PeeringDB 无名称数据时可使用 BGP.Tools 的 IXP 路由接入计数，不再长期只显示“待检测”。
+- 新增 BGP.Tools HTML 解析与注册国家匹配回归测试。
+- Panel / APK Release 升级至 `2.3.388`；Agent 升级至 `2.2.219`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.3.387] - 2026-10-01
 
 ### 网络画像风险源、IP 属性、IXP 与 ChatGPT 状态修复

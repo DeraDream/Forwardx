@@ -82,15 +82,18 @@ export function HostNetworkProfileDialog({
   const detectedIp = data.ip?.address || identity.ip || (family === "ipv4" ? query.data?.host.ipv4 : query.data?.host.ipv6);
   const ixpItems = Array.isArray(data.network?.ixp) ? data.network.ixp : [];
   const ixpNames = ixpItems.map((item: any) => typeof item === "string" ? item : item?.name).filter(Boolean);
+  const bgpToolsIXPCount = Number.isFinite(Number(data.network?.bgpToolsIXPCount)) ? Number(data.network.bgpToolsIXPCount) : null;
   const ixpText = ixpNames.length
     ? ixpNames.join(" · ")
-    : data.network?.registered === false
-      ? "PeeringDB 未登记"
-      : Number(data.network?.ixCount) === 0
-        ? "无 IXP 登记"
-        : Array.isArray(data.network?.warnings) && data.network.warnings.some((item: any) => String(item).startsWith("PeeringDB:"))
-          ? "IXP 检测失败"
-          : "待检测";
+    : bgpToolsIXPCount !== null
+      ? (bgpToolsIXPCount > 0 ? "BGP.Tools 检测到 " + bgpToolsIXPCount + " 个 IXP 路由接入" : "BGP.Tools 未检测到 IXP 路由接入")
+      : data.network?.registered === false
+        ? "PeeringDB 未登记"
+        : Number(data.network?.ixCount) === 0
+          ? "无 IXP 登记"
+          : Array.isArray(data.network?.warnings) && data.network.warnings.some((item: any) => String(item).startsWith("PeeringDB:"))
+            ? "IXP 检测失败"
+            : "待检测";
   const riskLevelText: Record<string, string> = { low: "低", medium: "中等", high: "高", very_high: "极高", unknown: "未知" };
   const networkType = risk.networkType || (risk.isDatacenter === true ? "Hosting / Datacenter" : "");
   const rpkiText: Record<string, string> = { valid: "有效", invalid_asn: "ASN 不匹配", invalid_length: "前缀长度无效", unknown: "未配置 ROA" };
@@ -235,8 +238,11 @@ export function HostNetworkProfileDialog({
                   ) : <span className="text-muted-foreground">待检测</span>}
                 </div>
                 <div className="sm:col-span-2">IXP：{ixpText}</div>
-                <div>交换点 / 机房：{data.network?.ixCount ?? "—"} / {data.network?.facilityCount ?? "—"}</div>
+                <div>PeeringDB 交换点 / 机房：{data.network?.ixCount ?? "—"} / {data.network?.facilityCount ?? "—"}</div>
                 <div>AS 邻居：{data.network?.neighbourUnique ?? "—"}（左 {data.network?.neighbourLeft ?? "—"} / 右 {data.network?.neighbourRight ?? "—"}）</div>
+                <div>上游：{data.network?.upstreamCount ?? "—"}{data.network?.transitFree === true ? "（Transit-free）" : ""}</div>
+                <div>Peers：{data.network?.peerCount ?? "—"}</div>
+                <div className="sm:col-span-2 text-[11px] text-muted-foreground">BGP 接入统计优先参考 BGP.Tools；互联 ASN 继续结合 RIPEstat，IXP 名称来自 PeeringDB。</div>
               </div>
             </div>
           </div>
