@@ -210,6 +210,7 @@ agentRouter.post("/api/agent/selftest-result", async (req: Request, res: Respons
           targetIp: (meta as any).targetIp || null,
           targetPort: (meta as any).targetPort || null,
           method: (meta as any).method || "tcp",
+          latencyMode: (meta as any).latencyMode || "sum",
           success,
           latencyMs: success ? cleanLatency : null,
           detail: cleanMessage,
