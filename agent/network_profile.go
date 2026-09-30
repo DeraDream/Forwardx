@@ -460,8 +460,8 @@ func profilePeering(client *http.Client, asnValue any) (map[string]any, error) {
 const networkProfileBodyLimit = 2 * 1024 * 1024
 
 var netflixRegionPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`"requestCountry"\\s*:\\s*\\{[^}]*"id"\\s*:\\s*"([A-Za-z]{2})"`),
-	regexp.MustCompile(`"requestCountry"\\s*:\\s*"([A-Za-z]{2})"`),
+	regexp.MustCompile(`"requestCountry"\s*:\s*\{[^}]*"id"\s*:\s*"([A-Za-z]{2})"`),
+	regexp.MustCompile(`"requestCountry"\s*:\s*"([A-Za-z]{2})"`),
 }
 
 func profileRead(client *http.Client, rawURL string, headers map[string]string) (int, string, error) {
@@ -528,8 +528,8 @@ func profilePostForm(client *http.Client, rawURL string, values url.Values, head
 	return resp.StatusCode, string(raw), nil
 }
 
-var youtubeRegionPattern = regexp.MustCompile(`"INNERTUBE_CONTEXT_GL"\\s*:\\s*"([^"]+)"`)
-var steamCurrencyPattern = regexp.MustCompile(`"priceCurrency"\\s*:\\s*"([^"]+)"`)
+var youtubeRegionPattern = regexp.MustCompile(`"INNERTUBE_CONTEXT_GL"\s*:\s*"([^"]+)"`)
+var steamCurrencyPattern = regexp.MustCompile(`"priceCurrency"\s*:\s*"([^"]+)"`)
 var googlePlayRegionPattern = regexp.MustCompile(`<div class="yVZQTb">([^<]+)`)
 
 func netflixRegion(body string) string {
@@ -683,7 +683,7 @@ func profilePrimeVideoCheck(client *http.Client) map[string]any {
 	}
 	lower := strings.ToLower(body)
 	region := ""
-	regionPattern := regexp.MustCompile(`"currentTerritory"\\s*:\\s*"([^"]+)"`)
+	regionPattern := regexp.MustCompile(`"currentTerritory"\s*:\s*"([^"]+)"`)
 	if match := regionPattern.FindStringSubmatch(body); len(match) > 1 {
 		region = strings.ToUpper(match[1])
 	}
