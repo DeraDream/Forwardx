@@ -981,10 +981,59 @@ export const diagnosticsRouter = router({
       }));
       const adjustedDetails = adjustHopTestDetailsForLatencyMode(rawDetails, latencyMode);
 
+      const sampleArrays = rows.map(({ meta }) =>
+        Array.isArray(meta?.latencySamples)
+          ? meta.latencySamples.map((value: unknown) => Number(value)).filter((value: number) => Number.isFinite(value) && value >= 0).slice(0, 8)
+          : []
+      );
+      const successfulSampleCounts = rows
+        .map(({ row }, index) => String(row.status) === "success" ? sampleArrays[index].length : 0)
+        .filter((count) => count > 0);
+      const commonSampleCount = successfulSampleCounts.length === rows.filter(({ row }) => String(row.status) === "success").length
+        && successfulSampleCounts.length > 0
+        ? Math.min(...successfulSampleCounts)
+        : 0;
+      const adjustedSamplesByRow: number[][] = rows.map(() => []);
+
+      for (let sampleIndex = 0; sampleIndex < commonSampleCount; sampleIndex += 1) {
+        const sampleDetails: HopTestResult[] = rows.map(({ row, meta }, index) => ({
+          success: String(row.status) === "success" && Number.isFinite(sampleArrays[index]?.[sampleIndex]),
+          latencyMs: Number.isFinite(sampleArrays[index]?.[sampleIndex]) ? sampleArrays[index][sampleIndex] : null,
+          message: null,
+          hopLabel: typeof meta?.hopLabel === "string" ? meta.hopLabel : `${index + 1}/${rows.length}`,
+          routeLabel: typeof meta?.routeLabel === "string" ? meta.routeLabel : "",
+          method: typeof meta?.method === "string" ? meta.method : null,
+        }));
+        const adjustedSampleDetails = adjustHopTestDetailsForLatencyMode(sampleDetails, latencyMode);
+        adjustedSampleDetails.forEach((detail, index) => {
+          const value = Number(detail.latencyMs);
+          if (detail.success && Number.isFinite(value) && value >= 0) adjustedSamplesByRow[index].push(value);
+        });
+      }
+
+      const median = (values: number[]) => {
+        if (values.length === 0) return null;
+        const sorted = [...values].sort((a, b) => a - b);
+        const middle = Math.floor(sorted.length / 2);
+        return sorted.length % 2 === 0
+          ? Math.round((sorted[middle - 1] + sorted[middle]) / 2)
+          : Math.round(sorted[middle]);
+      };
+      const average = (values: number[]) =>
+        values.length > 0 ? Math.round(values.reduce((sum, value) => sum + value, 0) / values.length) : null;
+      const jitter = (values: number[]) => {
+        if (values.length < 2) return 0;
+        let total = 0;
+        for (let index = 1; index < values.length; index += 1) total += Math.abs(values[index] - values[index - 1]);
+        return Math.round(total / (values.length - 1));
+      };
+
       return rows.map(({ row, meta }, index) => {
         const adjusted = adjustedDetails[index];
         const rawLatencyMs = row.latencyMs == null ? null : Number(row.latencyMs);
-        const latencyMs = adjusted?.latencyMs == null ? null : Number(adjusted.latencyMs);
+        const samples = adjustedSamplesByRow[index];
+        const sampleLatency = median(samples);
+        const latencyMs = sampleLatency ?? (adjusted?.latencyMs == null ? null : Number(adjusted.latencyMs));
         const latencyAdjusted = rawLatencyMs !== null
           && latencyMs !== null
           && Math.round(rawLatencyMs) !== Math.round(latencyMs);
@@ -996,6 +1045,30 @@ export const diagnosticsRouter = router({
           ? `${targetText ? "目标 " + targetText + " " : ""}${methodText}可达，逐跳延迟 ${Math.round(latencyMs || 0)}ms`
           : typeof meta?.detail === "string" ? meta.detail : "";
 
+        const inspection = meta?.portInspection && typeof meta.portInspection === "object"
+          ? meta.portInspection
+          : null;
+        const issues: Array<{ severity: "warn" | "fail"; message: string }> = [];
+        if (inspection?.portConflict === true) {
+          issues.push({ severity: "fail", message: "检测到监听端口冲突" });
+        }
+        if (
+          Number(meta?.sourcePort || 0) > 0
+          && Number(meta?.expectedRuleId || 0) > 0
+          && inspection?.available === true
+          && inspection?.runtimeReady !== true
+        ) {
+          issues.push({ severity: "fail", message: "Agent 实测运行规则未就绪" });
+        }
+        const attempts = Math.max(0, Number(meta?.sampleAttempts || 0));
+        const successes = Math.max(0, Number(meta?.sampleSuccesses || 0));
+        if (attempts > 0 && successes < attempts && successes > 0) {
+          issues.push({ severity: "warn", message: `稳定性采样 ${successes}/${attempts} 成功` });
+        }
+        if (meta?.dnsError && meta?.dnsSkipped !== true) {
+          issues.push({ severity: "fail", message: `DNS 解析失败：${String(meta.dnsError)}` });
+        }
+
         return {
           id: Number(row.id),
           status: String(row.status || "pending"),
@@ -1003,6 +1076,20 @@ export const diagnosticsRouter = router({
           rawLatencyMs,
           latencyAdjusted,
           latencyMode,
+          latencySamples: samples,
+          minLatencyMs: samples.length ? Math.round(Math.min(...samples)) : latencyMs,
+          averageLatencyMs: samples.length ? average(samples) : latencyMs,
+          maxLatencyMs: samples.length ? Math.round(Math.max(...samples)) : latencyMs,
+          jitterMs: samples.length ? jitter(samples) : Number(meta?.jitterMs || 0),
+          sampleAttempts: attempts,
+          sampleSuccesses: successes,
+          dnsMs: meta?.dnsMs == null ? null : Number(meta.dnsMs),
+          dnsAddresses: Array.isArray(meta?.dnsAddresses) ? meta.dnsAddresses : [],
+          dnsError: String(meta?.dnsError || ""),
+          dnsSkipped: meta?.dnsSkipped === true,
+          portInspection: inspection,
+          isFinalTarget: meta?.isFinalTarget === true,
+          issues,
           success: String(row.status) === "success",
           targetReachable: !!row.targetReachable,
           message: JSON.stringify({
@@ -1010,6 +1097,12 @@ export const diagnosticsRouter = router({
             latencyMs,
             rawLatencyMs,
             latencyAdjusted,
+            latencySamples: samples,
+            minLatencyMs: samples.length ? Math.round(Math.min(...samples)) : latencyMs,
+            averageLatencyMs: samples.length ? average(samples) : latencyMs,
+            maxLatencyMs: samples.length ? Math.round(Math.max(...samples)) : latencyMs,
+            jitterMs: samples.length ? jitter(samples) : Number(meta?.jitterMs || 0),
+            issues,
             detail: displayDetail,
           }),
           routeLabel: typeof meta?.routeLabel === "string" ? meta.routeLabel : "",
