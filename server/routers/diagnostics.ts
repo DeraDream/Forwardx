@@ -324,6 +324,324 @@ type DiagnosticSegment = {
   isFinalTarget?: boolean;
 };
 
+function activeRuntimeRule(rule: any) {
+  return !!rule
+    && rule.pendingDelete !== true
+    && rule.isEnabled !== false
+    && !rule.isForwardGroupTemplate
+    && Number(rule.id || 0) > 0
+    && Number(rule.hostId || 0) > 0
+    && Number(rule.sourcePort || 0) > 0;
+}
+
+function normalizeDiagnosticProtocol(value: unknown): "tcp" | "udp" | "both" {
+  const protocol = String(value || "").trim().toLowerCase();
+  return protocol === "udp" ? "udp" : protocol === "tcp" ? "tcp" : "both";
+}
+
+async function runtimeRulesForRule(rule: any, visited = new Set<number>()): Promise<any[]> {
+  const ruleId = Number(rule?.id || 0);
+  if (ruleId > 0 && visited.has(ruleId)) return [];
+  const nextVisited = new Set(visited);
+  if (ruleId > 0) nextVisited.add(ruleId);
+
+  const result: any[] = [];
+  if (rule?.isForwardGroupTemplate) {
+    for (const child of await getForwardGroupChildRulesForTemplate(ruleId)) {
+      if (activeRuntimeRule(child)) result.push(child);
+    }
+  } else if (activeRuntimeRule(rule)) {
+    result.push(rule);
+  }
+
+  const targetRuleId = Number(rule?.targetRuleId || 0);
+  if (targetRuleId > 0) {
+    const referenced = await db.getForwardRuleById(targetRuleId) as any;
+    if (referenced) result.push(...await runtimeRulesForRule(referenced, nextVisited));
+  }
+
+  return result;
+}
+
+function uniqueRuntimeRules(rules: any[]) {
+  const seen = new Set<number>();
+  return rules.filter((rule) => {
+    const id = Number(rule?.id || 0);
+    if (id <= 0 || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
+async function runtimeRulesForResource(
+  scope: "rule" | "tunnel" | "chain" | "full-chain",
+  resource: any,
+) {
+  if (scope === "rule") return uniqueRuntimeRules(await runtimeRulesForRule(resource));
+
+  if (scope === "tunnel") {
+    const rules = await db.getForwardRulesByTunnel(Number(resource?.id || 0)) as any[];
+    return uniqueRuntimeRules(rules.filter(activeRuntimeRule));
+  }
+
+  if (scope === "chain") {
+    const templates = await getForwardGroupTemplateRules(Number(resource?.id || 0));
+    const nested = await Promise.all((templates as any[]).map((rule) => runtimeRulesForRule(rule)));
+    return uniqueRuntimeRules(nested.flat());
+  }
+
+  const nodes = await db.getFullChainNodes(Number(resource?.id || 0)) as any[];
+  const rules: any[] = [];
+  for (const node of nodes) {
+    const ruleId = Number(node?.generatedRuleId || 0);
+    if (ruleId <= 0) continue;
+    const rule = await db.getForwardRuleById(ruleId) as any;
+    if (rule) rules.push(...await runtimeRulesForRule(rule));
+  }
+  return uniqueRuntimeRules(rules);
+}
+
+function decorateSegmentsWithRuntimeRules(segments: DiagnosticSegment[], runtimeRules: any[]) {
+  return segments.map((segment, index) => {
+    const candidates = runtimeRules.filter((rule) => Number(rule?.hostId || 0) === Number(segment.fromHostId));
+    const exact = candidates.find((rule) =>
+      String(rule?.targetIp || "").trim().toLowerCase() === String(segment.targetIp || "").trim().toLowerCase()
+      && Number(rule?.targetPort || 0) === Number(segment.targetPort || 0)
+    );
+    const expected = exact || (candidates.length === 1 ? candidates[0] : null);
+    return {
+      ...segment,
+      sourcePort: Number(expected?.sourcePort || segment.sourcePort || 0) || undefined,
+      sourceProtocol: expected ? normalizeDiagnosticProtocol(expected.protocol) : segment.sourceProtocol,
+      expectedRuleId: Number(expected?.id || segment.expectedRuleId || 0) || undefined,
+      expectedForwardType: String(expected?.forwardType || segment.expectedForwardType || "").trim() || undefined,
+      isFinalTarget: segment.isFinalTarget === true || index === segments.length - 1,
+    };
+  });
+}
+
+async function configSyncChecks(hostIds: number[]) {
+  const revision = await latestConfigRevision();
+  const checks: DiagnosticCheck[] = [];
+  for (const hostId of Array.from(new Set(hostIds.filter((id) => id > 0)))) {
+    const host = await db.getHostById(hostId) as any;
+    if (!host) continue;
+    const applied = Number(host.agentLastAppliedRevision || 0);
+    const received = Number(host.agentLastReceivedRevision || 0);
+    const appliedHash = String(host.agentLastAppliedHash || "").trim();
+    const receivedHash = String(host.agentLastReceivedHash || "").trim();
+    const hashMismatch = !!appliedHash && !!receivedHash && appliedHash !== receivedHash;
+    const synced = revision <= 0 || (applied >= revision && received >= revision && !hashMismatch);
+    checks.push(check(
+      `config-sync-${hostId}`,
+      `配置同步 · ${host.name || "主机 #" + hostId}`,
+      synced ? "pass" : "warn",
+      synced ? "Panel 与 Agent 已同步" : hashMismatch ? "Agent 已接收配置但应用哈希不一致" : "Agent 尚未应用面板最新配置版本",
+      `Panel rev ${revision || "—"} · received ${received || "—"} · applied ${applied || "—"}${hashMismatch ? " · hash mismatch" : ""}`,
+    ));
+  }
+  return checks;
+}
+
+async function runtimeReadinessChecks(
+  scope: "rule" | "tunnel" | "chain" | "full-chain",
+  resource: any,
+  runtimeRules: any[],
+  hostIds: number[],
+) {
+  const checks: DiagnosticCheck[] = [];
+  const now = Date.now();
+  const uniqueHosts = Array.from(new Set(hostIds.filter((id) => id > 0)));
+
+  for (const hostId of uniqueHosts) {
+    const host = await db.getHostById(hostId) as any;
+    const snapshot = getAgentLocalRuntimeStateSnapshot(hostId);
+    const fresh = !!snapshot && now - Number(snapshot.updatedAt || 0) <= 120_000;
+    const expected = runtimeRules.filter((rule) => Number(rule?.hostId || 0) === hostId);
+
+    if (!snapshot || !fresh) {
+      checks.push(check(
+        `runtime-real-${hostId}`,
+        `真实运行状态 · ${host?.name || "主机 #" + hostId}`,
+        "warn",
+        "暂缺新鲜的 Agent 本地运行快照",
+        snapshot ? `快照距今 ${Math.max(0, Math.round((now - snapshot.updatedAt) / 1000))} 秒` : "等待 Agent 上报本地运行状态",
+      ));
+      continue;
+    }
+
+    if (scope === "tunnel") {
+      const tunnelId = Number(resource?.id || 0);
+      const localTunnels = (snapshot.state?.tunnels || []).filter((item: any) => Number(item?.tunnelId || 0) === tunnelId);
+      if (localTunnels.length > 0) {
+        const ready = localTunnels.filter((item: any) => item?.ready !== false).length;
+        checks.push(check(
+          `runtime-real-${hostId}`,
+          `真实监听 · ${host?.name || "主机 #" + hostId}`,
+          ready === localTunnels.length ? "pass" : "fail",
+          ready === localTunnels.length ? `Agent 已确认 ${ready} 个隧道监听就绪` : `仅 ${ready}/${localTunnels.length} 个隧道监听就绪`,
+        ));
+        continue;
+      }
+    }
+
+    if (expected.length === 0) {
+      checks.push(check(
+        `runtime-real-${hostId}`,
+        `真实运行状态 · ${host?.name || "主机 #" + hostId}`,
+        "skip",
+        "当前路径没有需要在该主机确认的托管监听",
+      ));
+      continue;
+    }
+
+    const missing: number[] = [];
+    const notReady: number[] = [];
+    for (const rule of expected) {
+      const local = (snapshot.state?.rules || []).find((item: any) =>
+        Number(item?.ruleId || 0) === Number(rule.id)
+        && Number(item?.port || 0) === Number(rule.sourcePort)
+      );
+      if (!local) missing.push(Number(rule.id));
+      else if (local.ready === false) notReady.push(Number(rule.id));
+    }
+
+    const ok = missing.length === 0 && notReady.length === 0;
+    checks.push(check(
+      `runtime-real-${hostId}`,
+      `真实监听/规则 · ${host?.name || "主机 #" + hostId}`,
+      ok ? "pass" : "fail",
+      ok ? `Agent 已实测确认 ${expected.length} 个运行项就绪` : "实际运行状态与面板期望不一致",
+      [
+        missing.length ? `缺失规则 #${missing.join(", #")}` : "",
+        notReady.length ? `未就绪规则 #${notReady.join(", #")}` : "",
+      ].filter(Boolean).join("；") || "iptables/nftables 检查内核规则，进程型后端检查实际监听与进程",
+    ));
+  }
+  return checks;
+}
+
+async function portConflictChecks(runtimeRules: any[]) {
+  const checks: DiagnosticCheck[] = [];
+  const byHost = new Map<number, any[]>();
+  for (const rule of runtimeRules) {
+    const hostId = Number(rule?.hostId || 0);
+    if (hostId <= 0) continue;
+    byHost.set(hostId, [...(byHost.get(hostId) || []), rule]);
+  }
+
+  for (const [hostId, expectedRules] of byHost) {
+    const host = await db.getHostById(hostId) as any;
+    const expectedIds = new Set(expectedRules.map((rule) => Number(rule.id)));
+    const expectedPorts = new Set(expectedRules.map((rule) => Number(rule.sourcePort)).filter((port) => port > 0));
+    const databaseRules = (await db.getForwardRulesForAgent(hostId) as any[]).filter(activeRuntimeRule);
+    const conflicts = databaseRules.filter((rule) =>
+      expectedPorts.has(Number(rule.sourcePort || 0))
+      && !expectedIds.has(Number(rule.id || 0))
+    );
+    const snapshot = getAgentLocalRuntimeStateSnapshot(hostId);
+    const runtimeConflicts = (snapshot?.state?.rules || []).filter((item: any) =>
+      expectedPorts.has(Number(item?.port || 0))
+      && Number(item?.ruleId || 0) > 0
+      && !expectedIds.has(Number(item.ruleId))
+    );
+    const ids = Array.from(new Set([...conflicts, ...runtimeConflicts].map((item: any) => Number(item.id || item.ruleId || 0)).filter((id) => id > 0)));
+    checks.push(check(
+      `port-conflict-${hostId}`,
+      `端口冲突 · ${host?.name || "主机 #" + hostId}`,
+      ids.length > 0 ? "fail" : "pass",
+      ids.length > 0 ? `发现 ${ids.length} 个托管规则占用冲突` : "未发现托管规则端口冲突",
+      ids.length > 0 ? `冲突规则 #${ids.join(", #")}` : `检查端口 ${Array.from(expectedPorts).sort((a, b) => a - b).join(", ")}`,
+    ));
+  }
+  return checks;
+}
+
+async function templateIntegrityChecks(templates: any[]) {
+  const checks: DiagnosticCheck[] = [];
+  for (const template of uniqueRuntimeRules(templates.filter(Boolean))) {
+    // uniqueRuntimeRules excludes templates by design; this branch is intentionally unreachable.
+    void template;
+  }
+
+  const seenTemplates = new Set<number>();
+  for (const template of templates) {
+    const templateId = Number(template?.id || 0);
+    if (templateId <= 0 || seenTemplates.has(templateId) || !template?.isForwardGroupTemplate) continue;
+    seenTemplates.add(templateId);
+    const group = await db.getForwardGroupById(Number(template.forwardGroupId || 0)) as any;
+    if (!group) {
+      checks.push(check(`integrity-${templateId}`, `托管规则完整性 · #${templateId}`, "fail", "模板引用的转发组不存在"));
+      continue;
+    }
+    const childRules = await getForwardGroupChildRulesForTemplate(templateId) as any[];
+    let entryMembers: any[] = [];
+    if (String(group.groupMode || "") === "chain" && Number(group.entryGroupId || 0) > 0) {
+      const entryGroup = await db.getForwardGroupById(Number(group.entryGroupId)) as any;
+      entryMembers = (entryGroup?.members || []).filter((member: any) => enabled(member?.isEnabled));
+    }
+    const summary = summarizeForwardGroupRuntime({
+      group,
+      members: group.members || [],
+      entryMembers,
+      templateRules: [template],
+      childRules,
+    });
+    const row = summary.ruleStatuses.find((item) => Number(item.templateRuleId) === templateId);
+    const expected = Number(row?.expectedRuleCount || 0);
+    const configured = Number(row?.configuredRuleCount || 0);
+    const activeChildren = childRules.filter((child) => child.pendingDelete !== true);
+    const keys = new Set<string>();
+    let duplicates = 0;
+    for (const child of activeChildren) {
+      const key = `${Number(child.forwardGroupMemberId || 0)}:${Number(child.hostId || 0)}:${Number(child.sourcePort || 0)}`;
+      if (keys.has(key)) duplicates += 1;
+      keys.add(key);
+    }
+    const ok = expected > 0 && configured === expected && duplicates === 0;
+    checks.push(check(
+      `integrity-${templateId}`,
+      `托管子规则完整性 · ${template.name || "#" + templateId}`,
+      ok ? "pass" : "fail",
+      ok ? `应生成 ${expected} 条，实际 ${configured} 条，关系完整` : `应生成 ${expected} 条，实际 ${configured} 条${duplicates ? "，并发现重复" : ""}`,
+      duplicates ? `重复子规则 ${duplicates} 条` : "未发现重复托管子规则",
+    ));
+  }
+  return checks;
+}
+
+async function diagnosticTemplates(
+  scope: "rule" | "tunnel" | "chain" | "full-chain",
+  resource: any,
+) {
+  const templates: any[] = [];
+  const addRule = async (rule: any, visited = new Set<number>()) => {
+    const id = Number(rule?.id || 0);
+    if (id <= 0 || visited.has(id)) return;
+    const next = new Set(visited);
+    next.add(id);
+    if (rule?.isForwardGroupTemplate) templates.push(rule);
+    const targetRuleId = Number(rule?.targetRuleId || 0);
+    if (targetRuleId > 0) {
+      const referenced = await db.getForwardRuleById(targetRuleId) as any;
+      if (referenced) await addRule(referenced, next);
+    }
+  };
+
+  if (scope === "rule") await addRule(resource);
+  if (scope === "chain") templates.push(...await getForwardGroupTemplateRules(Number(resource?.id || 0)) as any[]);
+  if (scope === "full-chain") {
+    const nodes = await db.getFullChainNodes(Number(resource?.id || 0)) as any[];
+    for (const node of nodes) {
+      const ruleId = Number(node?.generatedRuleId || 0);
+      if (ruleId <= 0) continue;
+      const rule = await db.getForwardRuleById(ruleId) as any;
+      if (rule) await addRule(rule);
+    }
+  }
+  return templates;
+}
+
 async function hostTarget(hostId: number) {
   const host = await db.getHostById(hostId) as any;
   return { host, address: hostAddress(host) };
