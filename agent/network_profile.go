@@ -660,7 +660,7 @@ func profileShortASNName(asn int64, raw string) string {
 		return "Verizon"
 	case strings.Contains(upper, "ARELION") || strings.Contains(upper, "TELIA"):
 		return "Arelion"
-	case strings.Contains(upper, "CLOUDflare"):
+	case strings.Contains(upper, "CLOUDFLARE"):
 		return "Cloudflare"
 	}
 	// RIPE holder names often look like "BRAND - Legal Company Name".
@@ -1024,7 +1024,7 @@ func profileNetflixCheck(client *http.Client) map[string]any {
 		return map[string]any{"id": "netflix", "name": "Netflix", "status": "error", "region": region, "httpStatus": code2, "latencyMs": time.Since(started).Milliseconds(), "note": "Netflix 响应为空，检测失败"}
 	}
 	if ohNo1 && ohNo2 {
-		return map[string]any{"id": "netflix", "name": "Netflix", "status": "originals_only", "region": region, "httpStatus": code2, "latencyMs": time.Since(started).Milliseconds(), "note": "仅 Netflix Originals"}
+		return map[string]any{"id": "netflix", "name": "Netflix", "status": "unlocked", "region": region, "httpStatus": code2, "latencyMs": time.Since(started).Milliseconds(), "note": "Netflix 可用（仅 Originals）"}
 	}
 	return map[string]any{"id": "netflix", "name": "Netflix", "status": "unlocked", "region": region, "httpStatus": code2, "latencyMs": time.Since(started).Milliseconds(), "note": "Netflix 完整解锁"}
 }
@@ -1053,18 +1053,18 @@ func profileChatGPTCheck(client *http.Client) map[string]any {
 	note := "Web / App 检测通过"
 	if unsupported {
 		if !iosBlocked {
-			status = "app_only"
-			note = "Web/API 地区受限，仅 App 探测可用"
+			status = "unlocked"
+			note = "App 可用（Web/API 地区受限）"
 		} else {
 			status = "blocked"
 			note = "OpenAI 返回 unsupported_country"
 		}
 	} else if apiErr != nil || apiCode == 0 {
-		status = "unknown"
+		status = "error"
 		note = "OpenAI 合规接口检测失败"
 	} else if iosBlocked {
-		status = "web_only"
-		note = "Web/API 可用，App 探测受限"
+		status = "unlocked"
+		note = "Web/API 可用（App 探测受限）"
 	}
 	return map[string]any{
 		"id": "chatgpt", "name": "ChatGPT", "status": status, "region": region,
@@ -1181,8 +1181,8 @@ func profileYouTubeCheck(client *http.Client) map[string]any {
 		region = strings.ToUpper(match[1])
 	}
 	lower := strings.ToLower(body)
-	status := "unknown"
-	note := "无法确认 Premium 可用状态"
+	status := "unlocked"
+	note := "YouTube Premium 页面可用"
 	if strings.Contains(lower, "premium is not available in your country") || strings.Contains(lower, "www.google.cn") {
 		status = "blocked"
 		note = "YouTube Premium 当前地区不可用"
@@ -1207,7 +1207,7 @@ func profileSpotifyCheck(client *http.Client) map[string]any {
 	}
 	var payload map[string]any
 	if json.Unmarshal([]byte(body), &payload) != nil {
-		return map[string]any{"id": "spotify", "name": "Spotify", "status": "unknown", "httpStatus": code, "latencyMs": time.Since(started).Milliseconds(), "note": "Spotify 返回格式无法识别"}
+		return map[string]any{"id": "spotify", "name": "Spotify", "status": "error", "httpStatus": code, "latencyMs": time.Since(started).Milliseconds(), "note": "Spotify 返回格式无法识别"}
 	}
 	statusCode := int64(0)
 	if number, ok := profileNumber(payload["status"]); ok {
