@@ -733,7 +733,12 @@ function resolveAgentLocalRuntimeState(hostId: number, signature: string, report
   if (!signature) return { state: null as AgentLocalRuntimeState | null, requestLocalState: false };
   const cached = agentLocalRuntimeStateCache.get(id);
   if (cached && cached.signature === signature) {
-    return { state: cached.state, requestLocalState: false };
+    // A matching signature on a fresh heartbeat is an explicit confirmation that
+    // the Agent's local runtime state is unchanged. Refresh the observation time
+    // without forcing the full localState payload to be uploaded again.
+    const refreshed = { ...cached, updatedAt: Date.now() };
+    setBoundedMapValue(agentLocalRuntimeStateCache, id, refreshed, AGENT_HOST_CACHE_MAX);
+    return { state: refreshed.state, requestLocalState: false };
   }
   return { state: null as AgentLocalRuntimeState | null, requestLocalState: true };
 }
