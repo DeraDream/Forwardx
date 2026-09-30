@@ -40,7 +40,7 @@ func TestSelfTestInFlightDeduplicatesRetries(t *testing.T) {
 }
 
 func TestTunnelSelfTestsRetryTransientListenerReadiness(t *testing.T) {
-	for _, kind := range []string{"tunnel", "tunnel-hop", "forward-via-tunnel", "forward-via-tunnel-entry", "forward-chain", "full-chain"} {
+	for _, kind := range []string{"diagnostic-hop", "tunnel", "tunnel-hop", "forward-via-tunnel", "forward-via-tunnel-entry", "forward-chain", "full-chain"} {
 		if attempts := selfTestTCPAttempts(selfTest{Kind: kind}); attempts != 4 {
 			t.Fatalf("kind %s attempts = %d, want 4", kind, attempts)
 		}
@@ -95,6 +95,41 @@ func TestFullChainSelfTestsUseMedianOfThreeSuccessfulSamples(t *testing.T) {
 	}
 	if latency := medianLatency([]int{2, 152, 2}); latency != 2 {
 		t.Fatalf("median latency = %d, want 2", latency)
+	}
+}
+
+func TestDiagnosticSelfTestsUseFiveSamplesByDefault(t *testing.T) {
+	if samples := selfTestTCPSampleCount(selfTest{Kind: "diagnostic-hop"}); samples != 5 {
+		t.Fatalf("diagnostic samples = %d, want 5", samples)
+	}
+	if samples := selfTestTCPSampleCount(selfTest{Kind: "diagnostic-hop", SampleCount: 7}); samples != 7 {
+		t.Fatalf("diagnostic requested samples = %d, want 7", samples)
+	}
+	if samples := selfTestTCPSampleCount(selfTest{Kind: "diagnostic-hop", SampleCount: 99}); samples != 8 {
+		t.Fatalf("diagnostic sample cap = %d, want 8", samples)
+	}
+}
+
+func TestDiagnosticJitterAndAverage(t *testing.T) {
+	samples := []int{3, 4, 2, 3, 3}
+	if got := diagnosticAverage(samples); got != 3 {
+		t.Fatalf("average = %d, want 3", got)
+	}
+	if got := diagnosticJitter(samples); got != 1 {
+		t.Fatalf("jitter = %d, want 1", got)
+	}
+}
+
+func TestDiagnosticDNSLookupSkipsLiteralIP(t *testing.T) {
+	elapsed, addresses, errText, skipped := diagnosticDNSLookup("127.0.0.1")
+	if !skipped {
+		t.Fatal("literal IP must skip DNS lookup")
+	}
+	if elapsed != 0 || errText != "" {
+		t.Fatalf("literal IP lookup returned elapsed=%d error=%q", elapsed, errText)
+	}
+	if len(addresses) != 1 || addresses[0] != "127.0.0.1" {
+		t.Fatalf("literal IP addresses = %#v", addresses)
 	}
 }
 
