@@ -315,7 +315,28 @@ func handleSelfTest(cfg Config, t selfTest) {
 		method = "ping"
 	}
 	if method == "ping" {
-		latency, reachable, detail := pingLatency(t.TargetIP, selfTestPingTimeout)
+		sampleCount := 1
+		if diagnostic {
+			sampleCount = selfTestTCPSampleCount(t)
+		}
+		samples := make([]int, 0, sampleCount)
+		detail := ""
+		for attempt := 0; attempt < sampleCount; attempt++ {
+			if attempt > 0 {
+				time.Sleep(180 * time.Millisecond)
+			}
+			sample, ok, sampleDetail := pingLatency(t.TargetIP, selfTestPingTimeout)
+			if ok {
+				samples = append(samples, sample)
+			} else if sampleDetail != "" {
+				detail = sampleDetail
+			}
+		}
+		reachable := len(samples) > 0
+		latency := 0
+		if reachable {
+			latency = medianLatency(append([]int(nil), samples...))
+		}
 		msg := ""
 		if reachable {
 			msg = fmt.Sprintf("目标 %s Ping可达，延迟 %dms", t.TargetIP, latency)
@@ -334,12 +355,16 @@ func handleSelfTest(cfg Config, t selfTest) {
 			payload["dnsError"] = dnsError
 			payload["dnsSkipped"] = dnsSkipped
 			payload["portInspection"] = portInspection
-			payload["latencySamples"] = []int{latency}
-			payload["sampleAttempts"] = 1
-			if reachable {
-				payload["sampleSuccesses"] = 1
-			} else {
-				payload["sampleSuccesses"] = 0
+			payload["latencySamples"] = samples
+			payload["sampleAttempts"] = sampleCount
+			payload["sampleSuccesses"] = len(samples)
+			payload["jitterMs"] = diagnosticJitter(samples)
+			payload["averageLatencyMs"] = diagnosticAverage(samples)
+			if len(samples) > 0 {
+				sorted := append([]int(nil), samples...)
+				sort.Ints(sorted)
+				payload["minLatencyMs"] = sorted[0]
+				payload["maxLatencyMs"] = sorted[len(sorted)-1]
 			}
 			payload["isFinalTarget"] = t.IsFinalTarget
 		}
@@ -352,6 +377,7 @@ func handleSelfTest(cfg Config, t selfTest) {
 	latency, reachable, resolvedTarget := 0, false, ""
 	latencySamples := []int{}
 	sampleAttempts := 0
+	connectionAttempts := 0
 	minimumAttempts := selfTestTCPAttempts(t)
 	readinessWindow := selfTestTCPReadinessWindow(t)
 	startedAt := time.Now()
@@ -382,6 +408,7 @@ func handleSelfTest(cfg Config, t selfTest) {
 				attemptTimeout = remaining
 			}
 		}
+		connectionAttempts++
 		if t.WireGuardPeerID != "" && t.TunnelID > 0 {
 			latency, reachable = wireGuardTCPLatency(t.TunnelID, t.WireGuardPeerID, t.TargetPort, attemptTimeout)
 		} else {
@@ -389,7 +416,7 @@ func handleSelfTest(cfg Config, t selfTest) {
 		}
 		if reachable {
 			latencies := []int{latency}
-			sampleAttempts = 1
+			sampleAttempts = connectionAttempts
 			sampleCount := selfTestTCPSampleCount(t)
 			for attempts := 1; attempts < sampleCount; attempts++ {
 				time.Sleep(180 * time.Millisecond)
@@ -426,7 +453,7 @@ func handleSelfTest(cfg Config, t selfTest) {
 	}
 	if diagnostic {
 		if sampleAttempts == 0 {
-			sampleAttempts = selfTestTCPAttempts(t)
+			sampleAttempts = connectionAttempts
 		}
 		payload["latencySamples"] = latencySamples
 		payload["sampleAttempts"] = sampleAttempts
