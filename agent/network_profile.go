@@ -39,7 +39,6 @@ func profileHTTPClient(family string, timeout time.Duration) *http.Client {
 	}
 	dialer := &net.Dialer{Timeout: 4 * time.Second, KeepAlive: 20 * time.Second}
 	transport := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
 		DialContext: func(ctx context.Context, _ string, address string) (net.Conn, error) {
 			return dialer.DialContext(ctx, network, address)
 		},
