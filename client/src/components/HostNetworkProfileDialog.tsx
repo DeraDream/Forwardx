@@ -12,11 +12,14 @@ type Family = "ipv4" | "ipv6";
 function statusBadge(status: string) {
   if (status === "error") return <Badge className="border-red-200 bg-red-500/10 text-red-700">检测错误</Badge>;
   if (status === "blocked") return <Badge className="border-red-200 bg-red-500/15 text-red-700 dark:text-red-300">屏蔽</Badge>;
+  if (status === "app_only") return <Badge className="border-amber-200 bg-amber-500/15 text-amber-700 dark:text-amber-300">仅 App</Badge>;
+  if (status === "web_only") return <Badge className="border-amber-200 bg-amber-500/15 text-amber-700 dark:text-amber-300">仅 Web</Badge>;
   return <Badge className="border-emerald-200 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">解锁</Badge>;
 }
 
 function statusCardClass(status: string) {
   if (status === "error" || status === "blocked") return "border-red-200/80 bg-red-500/5";
+  if (status === "app_only" || status === "web_only") return "border-amber-200/80 bg-amber-500/5";
   return "border-emerald-200/80 bg-emerald-500/5";
 }
 
@@ -79,6 +82,15 @@ export function HostNetworkProfileDialog({
   const detectedIp = data.ip?.address || identity.ip || (family === "ipv4" ? query.data?.host.ipv4 : query.data?.host.ipv6);
   const ixpItems = Array.isArray(data.network?.ixp) ? data.network.ixp : [];
   const ixpNames = ixpItems.map((item: any) => typeof item === "string" ? item : item?.name).filter(Boolean);
+  const ixpText = ixpNames.length
+    ? ixpNames.join(" · ")
+    : data.network?.registered === false
+      ? "PeeringDB 未登记"
+      : Number(data.network?.ixCount) === 0
+        ? "无 IXP 登记"
+        : Array.isArray(data.network?.warnings) && data.network.warnings.some((item: any) => String(item).startsWith("PeeringDB:"))
+          ? "IXP 检测失败"
+          : "待检测";
   const riskLevelText: Record<string, string> = { low: "低", medium: "中等", high: "高", very_high: "极高", unknown: "未知" };
   const networkType = risk.networkType || (risk.isDatacenter === true ? "Hosting / Datacenter" : "");
   const rpkiText: Record<string, string> = { valid: "有效", invalid_asn: "ASN 不匹配", invalid_length: "前缀长度无效", unknown: "未配置 ROA" };
@@ -143,6 +155,9 @@ export function HostNetworkProfileDialog({
                 <div className="mb-2 flex items-center justify-between text-xs"><span>综合风险</span><span>{riskScore === null ? "暂无评分" : `${riskScore}/100 · ${riskLevelText[String(risk.level || "unknown")] || risk.level}`}</span></div>
                 <Progress value={riskScore ?? 0} className={riskScore == null ? "" : riskScore < 25 ? "[&>div]:bg-emerald-500" : riskScore < 60 ? "[&>div]:bg-amber-500" : "[&>div]:bg-red-500"} />
                 <div className="mt-2 flex flex-wrap gap-1">
+                  {riskScore !== null && riskScore < 25 && <Badge className="border-emerald-200 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">低风险</Badge>}
+                  {riskScore !== null && riskScore >= 25 && riskScore < 60 && <Badge className="border-amber-200 bg-amber-500/15 text-amber-700 dark:text-amber-300">中等风险</Badge>}
+                  {riskScore !== null && riskScore >= 60 && <Badge className="border-red-200 bg-red-500/15 text-red-700 dark:text-red-300">高风险</Badge>}
                   {risk.isDatacenter === true && <Badge variant="secondary">机房</Badge>}
                   {risk.isVPN === true && <Badge variant="secondary">VPN</Badge>}
                   {risk.isProxy === true && <Badge variant="secondary">Proxy</Badge>}
@@ -187,7 +202,7 @@ export function HostNetworkProfileDialog({
 
             <div className="rounded-lg border border-violet-200/60 bg-violet-500/[0.025] p-3">
               <div className="mb-1 flex items-center justify-between"><div className="text-sm font-medium text-violet-700 dark:text-violet-300">应用解锁 / 可达性</div><span className="text-xs text-muted-foreground">{apps.length ? `${apps.length} 项已返回` : "等待结果"}</span></div>
-              <div className="mb-3 text-[11px] text-muted-foreground">应用结果只显示“解锁 / 屏蔽”；网络或接口本身异常时单独显示“检测错误”。</div>
+              <div className="mb-3 text-[11px] text-muted-foreground">应用结果显示“解锁 / 屏蔽”；ChatGPT 会额外区分“仅 App / 仅 Web”，网络或接口本身异常时单独显示“检测错误”。</div>
               <div className="grid gap-2 sm:grid-cols-2 md:grid-cols-3">
                 {apps.map((app: any) => (
                   <div key={app.id} className={`flex min-h-14 items-center justify-between gap-2 rounded-md border px-2.5 py-2 ${statusCardClass(String(app.status || "unknown"))}`}>
@@ -219,7 +234,7 @@ export function HostNetworkProfileDialog({
                     </div>
                   ) : <span className="text-muted-foreground">待检测</span>}
                 </div>
-                <div className="sm:col-span-2">IXP：{ixpNames.length ? ixpNames.join(" · ") : data.network?.registered === false ? "PeeringDB 未登记" : "待检测"}</div>
+                <div className="sm:col-span-2">IXP：{ixpText}</div>
                 <div>交换点 / 机房：{data.network?.ixCount ?? "—"} / {data.network?.facilityCount ?? "—"}</div>
                 <div>AS 邻居：{data.network?.neighbourUnique ?? "—"}（左 {data.network?.neighbourLeft ?? "—"} / 右 {data.network?.neighbourRight ?? "—"}）</div>
               </div>
