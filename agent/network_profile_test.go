@@ -83,3 +83,22 @@ func TestProfileIPNature(t *testing.T) {
 		}
 	}
 }
+
+
+func TestProfileHTMLTableRowCount(t *testing.T) {
+	html := `<html><table id="upstreamTable"><tr><th>AS</th></tr><tr><td>AS1</td></tr><tr class="x"><td>AS2</td></tr></table></html>`
+	if got := profileHTMLTableRowCount(html, "upstreamTable"); got != 2 {
+		t.Fatalf("profileHTMLTableRowCount()=%d want=2", got)
+	}
+	if got := profileHTMLTableRowCount(html, "peersTable"); got != -1 {
+		t.Fatalf("missing table count=%d want=-1", got)
+	}
+}
+
+func TestProfileBGPCountryPattern(t *testing.T) {
+	body := "<pre>netname: TEST\ncountry: US\nsource: ARIN</pre>"
+	match := profileBGPCountryPattern.FindStringSubmatch(body)
+	if len(match) < 2 || match[1] != "US" {
+		t.Fatalf("profileBGPCountryPattern failed: %#v", match)
+	}
+}
