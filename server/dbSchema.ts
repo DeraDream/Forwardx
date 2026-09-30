@@ -162,6 +162,7 @@ const tables: TableDef[] = [
       c("telegramLinkedAt", "epoch"), c("telegramLastSeenAt", "epoch"), c("telegramAnnouncementSubscribed", "bool", { notNull: true, default: false }), c("telegramBindCode", "text"),
       c("telegramBindCodeExpiresAt", "epoch"), c("telegramLoginCode", "text"), c("telegramLoginCodeExpiresAt", "epoch"),
       c("twoFactorEnabled", "bool", { notNull: true, default: false }), c("twoFactorSecret", "text"), c("twoFactorEnabledAt", "epoch"),
+      c("passkeyEnabled", "bool", { notNull: true, default: false }), c("passkeyUserHandle", "text"), c("passkeyEnabledAt", "epoch"),
       c("browserSessionToken", "text"), c("mobileSessionToken", "text"), c("telegramSessionToken", "text"),
       c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }),
       c("lastSignedIn", "epoch", { notNull: true, default: "now" }),
@@ -178,6 +179,18 @@ const tables: TableDef[] = [
     ],
     unique: [["sid"]],
     indexes: [["userId"], ["userId", "kind"], ["expiresAt"]],
+  },
+  {
+    name: "passkey_credentials",
+    columns: [
+      c("id", "id"), c("userId", "int", { notNull: true }), c("credentialId", "text", { notNull: true }),
+      c("publicKeyJwk", "longtext", { notNull: true }), c("algorithm", "int", { notNull: true }),
+      c("counter", "bigint", { notNull: true, default: 0 }), c("transports", "text"),
+      c("authenticatorAttachment", "varchar", { length: 32 }), c("createdAt", "epoch", { notNull: true, default: "now" }),
+      c("lastUsedAt", "epoch"),
+    ],
+    unique: [["credentialId"]],
+    indexes: [["userId"]],
   },
   {
     name: "hosts",

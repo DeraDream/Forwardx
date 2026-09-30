@@ -49,6 +49,7 @@ export * from "./repositories/hostGroupRepository";
 export * from "./repositories/landingRepository";
 export * from "./repositories/fullChainRepository";
 export * from "./repositories/pluginRepository";
+export * from "./repositories/passkeyRepository";
 
 // ==================== Initialization ====================
 
