@@ -3,6 +3,9 @@ import { protectedProcedure, router } from "../_core/trpc";
 import * as db from "../db";
 import { pushAgentSelfTest } from "../agentEvents";
 import { isAgentVersionAtLeast } from "../agentRouteUtils";
+import { summarizeForwardGroupRuntime } from "../forwardGroupRuntimeStatus";
+import { getForwardGroupChildRulesForTemplate } from "../repositories/forwardRuleRepository";
+import { adjustHopTestDetailsForLatencyMode, type HopTestLatencyMode, type HopTestResult } from "../hopTestState";
 
 const DIAGNOSTIC_AGENT_VERSION = "2.2.209";
 
@@ -169,6 +172,108 @@ function agentChecks(nodes: DiagnosticNode[]) {
         node.agentVersion ? `Agent ${node.agentVersion}` : "未上报 Agent 版本",
       );
     });
+}
+
+async function ruleRuntimeCheck(rule: any): Promise<DiagnosticCheck> {
+  if (rule?.isForwardGroupTemplate && Number(rule?.forwardGroupId || 0) > 0) {
+    const group = await db.getForwardGroupById(Number(rule.forwardGroupId)) as any;
+    const childRules = await getForwardGroupChildRulesForTemplate(Number(rule.id));
+    let entryMembers: any[] = [];
+    if (String(group?.groupMode || "") === "chain" && Number(group?.entryGroupId || 0) > 0) {
+      const entryGroup = await db.getForwardGroupById(Number(group.entryGroupId)) as any;
+      entryMembers = (entryGroup?.members || []).filter((member: any) => enabled(member?.isEnabled));
+    }
+    const summary = summarizeForwardGroupRuntime({
+      group,
+      members: group?.members || [],
+      entryMembers,
+      templateRules: [rule],
+      childRules,
+    });
+    const ruleSummary = summary.ruleStatuses.find((item) => Number(item.templateRuleId) === Number(rule.id));
+    const expected = Number(ruleSummary?.expectedRuleCount || 0);
+    const running = Number(ruleSummary?.runningRuleCount || 0);
+    const configured = Number(ruleSummary?.configuredRuleCount || 0);
+
+    if (String(ruleSummary?.status || summary.status) === "running" && expected > 0 && running >= expected) {
+      return check(
+        "runtime",
+        "入口运行状态",
+        "pass",
+        `托管监听已确认运行（${running}/${expected}）`,
+        "模板规则自身不承载监听，运行状态来自其生成的托管子规则",
+      );
+    }
+    if (rule.isEnabled === false) {
+      return check("runtime", "入口运行状态", "skip", "规则已停用");
+    }
+    return check(
+      "runtime",
+      "入口运行状态",
+      "warn",
+      expected > 0
+        ? `等待托管监听确认（运行 ${running}/${expected}，已配置 ${configured}/${expected}）`
+        : "尚未生成可确认的托管监听",
+      "模板规则自身的 isRunning 不代表实际监听状态",
+    );
+  }
+
+  return check(
+    "runtime",
+    "入口运行状态",
+    rule?.isRunning ? "pass" : "warn",
+    rule?.isRunning ? "Agent 已确认规则运行" : "等待 Agent 确认规则运行",
+    "实时连通性以本次诊断探测结果为准",
+  );
+}
+
+async function diagnosticLatencyMode(
+  scope: "rule" | "tunnel" | "chain" | "full-chain",
+  resource: any,
+  segments: DiagnosticSegment[],
+): Promise<HopTestLatencyMode> {
+  if (scope !== "rule" || !segments.some((segment) => segment.method === "tcp")) return "sum";
+
+  const rule = resource as any;
+  const targetRuleId = Number(rule?.targetRuleId || 0);
+  if (targetRuleId > 0) {
+    const referenced = await db.getForwardRuleById(targetRuleId) as any;
+    const savedChain = referenced?.forwardGroupId
+      ? await db.getForwardGroupById(Number(referenced.forwardGroupId)) as any
+      : null;
+    if (referenced && String(savedChain?.groupMode || "") === "chain") {
+      let sourceHostCount = 1;
+      if (Number(rule.forwardGroupId || 0) > 0) {
+        const sourceGroup = await db.getForwardGroupById(Number(rule.forwardGroupId)) as any;
+        const sourceHostIds = String(sourceGroup?.groupMode || "") === "port"
+          ? await db.getForwardGroupRuleEntryHostIds(Number(sourceGroup.id))
+          : await groupHostIds(sourceGroup);
+        sourceHostCount = Math.max(1, sourceHostIds.length);
+      }
+      const kernelForward = ["iptables", "nftables"].includes(
+        String(savedChain.forwardType || "").trim().toLowerCase(),
+      );
+      if (kernelForward) {
+        return sourceHostCount > 1 || Number(savedChain.entryGroupId || 0) > 0
+          ? "multi-source-remaining-path"
+          : "remaining-path";
+      }
+    }
+  }
+
+  if (Number(rule?.forwardGroupId || 0) > 0) {
+    const group = await db.getForwardGroupById(Number(rule.forwardGroupId)) as any;
+    if (
+      String(group?.groupMode || "") === "chain"
+      && ["iptables", "nftables"].includes(String(group?.forwardType || "").trim().toLowerCase())
+    ) {
+      return Number(group?.entryGroupId || 0) > 0
+        ? "multi-source-remaining-path"
+        : "remaining-path";
+    }
+  }
+
+  return "sum";
 }
 
 async function ensureAccess(scope: string, id: number, user: any) {
@@ -456,6 +561,7 @@ export const diagnosticsRouter = router({
       const resource = await ensureAccess(input.scope, input.id, ctx.user);
       const segments = await diagnosticSegments(input.scope, resource);
       if (segments.length === 0) throw new Error("当前资源没有可执行的实时诊断链路");
+      const latencyMode = await diagnosticLatencyMode(input.scope, resource, segments);
       const sourceHostIds = Array.from(new Set(segments.map((segment) => Number(segment.fromHostId)).filter((id) => id > 0)));
       for (const hostId of sourceHostIds) {
         const host = await db.getHostById(hostId) as any;
@@ -482,6 +588,7 @@ export const diagnosticsRouter = router({
             targetIp: segment.targetIp,
             targetPort: segment.targetPort,
             method: segment.method,
+            latencyMode,
             hopLabel: `${index + 1}/${segments.length}`,
             routeLabel: segment.routeLabel,
           }),
@@ -496,6 +603,7 @@ export const diagnosticsRouter = router({
         diagnosticId,
         testIds,
         queued: testIds.length,
+        latencyMode,
         segments: segments.map((segment, index) => ({
           index,
           routeLabel: segment.routeLabel,
@@ -512,26 +620,63 @@ export const diagnosticsRouter = router({
       testIds: z.array(z.number().int().positive()).min(1).max(64),
     }))
     .query(async ({ input, ctx }) => {
-      const rows = [];
+      const rows: Array<{ row: any; meta: any }> = [];
       for (const id of input.testIds) {
         const row = await db.getForwardTestById(id) as any;
         if (!row) continue;
         if (String(ctx.user.role) !== "admin" && Number(row.userId) !== Number(ctx.user.id)) continue;
         let meta: any = null;
         try { meta = JSON.parse(String(row.message || "")); } catch {}
-        rows.push({
+        rows.push({ row, meta });
+      }
+
+      const latencyMode = (rows.find((item) => item.meta?.latencyMode)?.meta?.latencyMode || "sum") as HopTestLatencyMode;
+      const rawDetails: HopTestResult[] = rows.map(({ row, meta }, index) => ({
+        success: String(row.status) === "success",
+        latencyMs: row.latencyMs == null ? null : Number(row.latencyMs),
+        message: typeof meta?.detail === "string" ? meta.detail : null,
+        hopLabel: typeof meta?.hopLabel === "string" ? meta.hopLabel : `${index + 1}/${rows.length}`,
+        routeLabel: typeof meta?.routeLabel === "string" ? meta.routeLabel : "",
+        method: typeof meta?.method === "string" ? meta.method : null,
+      }));
+      const adjustedDetails = adjustHopTestDetailsForLatencyMode(rawDetails, latencyMode);
+
+      return rows.map(({ row, meta }, index) => {
+        const adjusted = adjustedDetails[index];
+        const rawLatencyMs = row.latencyMs == null ? null : Number(row.latencyMs);
+        const latencyMs = adjusted?.latencyMs == null ? null : Number(adjusted.latencyMs);
+        const latencyAdjusted = rawLatencyMs !== null
+          && latencyMs !== null
+          && Math.round(rawLatencyMs) !== Math.round(latencyMs);
+        const targetText = String(meta?.targetIp || "").trim()
+          ? `${String(meta.targetIp)}${Number(meta?.targetPort || 0) > 0 ? ":" + Number(meta.targetPort) : ""}`
+          : "";
+        const methodText = String(meta?.method || "tcp").toUpperCase();
+        const displayDetail = latencyAdjusted && String(row.status) === "success"
+          ? `${targetText ? "目标 " + targetText + " " : ""}${methodText}可达，逐跳延迟 ${Math.round(latencyMs || 0)}ms`
+          : typeof meta?.detail === "string" ? meta.detail : "";
+
+        return {
           id: Number(row.id),
           status: String(row.status || "pending"),
-          latencyMs: row.latencyMs == null ? null : Number(row.latencyMs),
+          latencyMs,
+          rawLatencyMs,
+          latencyAdjusted,
+          latencyMode,
           success: String(row.status) === "success",
           targetReachable: !!row.targetReachable,
-          message: String(row.message || ""),
+          message: JSON.stringify({
+            ...(meta || {}),
+            latencyMs,
+            rawLatencyMs,
+            latencyAdjusted,
+            detail: displayDetail,
+          }),
           routeLabel: typeof meta?.routeLabel === "string" ? meta.routeLabel : "",
           hopLabel: typeof meta?.hopLabel === "string" ? meta.hopLabel : "",
           updatedAt: row.updatedAt,
-        });
-      }
-      return rows;
+        };
+      });
     }),
 
   plan: protectedProcedure
@@ -587,13 +732,7 @@ export const diagnosticsRouter = router({
           hostIds.length > 0 ? "pass" : "fail",
           hostIds.length > 0 ? `已解析 ${hostIds.length} 个物理节点` : "无法解析入口主机",
         ));
-        checks.push(check(
-          "runtime",
-          "入口运行状态",
-          rule.isRunning ? "pass" : "warn",
-          rule.isRunning ? "当前标记为运行中" : "当前未标记为运行中",
-          "该项来自面板运行状态；实时连通性以本次诊断探测结果为准",
-        ));
+        checks.push(await ruleRuntimeCheck(rule));
 
         if (referencedRule) {
           const chainEntry = String(rule.targetIp || "").trim();
