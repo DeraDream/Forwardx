@@ -559,16 +559,20 @@ async function portConflictChecks(runtimeRules: any[]) {
 
 async function templateIntegrityChecks(templates: any[]) {
   const checks: DiagnosticCheck[] = [];
-  for (const template of uniqueRuntimeRules(templates.filter(Boolean))) {
-    // uniqueRuntimeRules excludes templates by design; this branch is intentionally unreachable.
-    void template;
-  }
-
   const seenTemplates = new Set<number>();
   for (const template of templates) {
     const templateId = Number(template?.id || 0);
     if (templateId <= 0 || seenTemplates.has(templateId) || !template?.isForwardGroupTemplate) continue;
     seenTemplates.add(templateId);
+    if (template.isEnabled === false || template.pendingDelete === true) {
+      checks.push(check(
+        `integrity-${templateId}`,
+        `托管子规则完整性 · ${template.name || "#" + templateId}`,
+        "skip",
+        "模板当前未启用，无需生成运行子规则",
+      ));
+      continue;
+    }
     const group = await db.getForwardGroupById(Number(template.forwardGroupId || 0)) as any;
     if (!group) {
       checks.push(check(`integrity-${templateId}`, `托管规则完整性 · #${templateId}`, "fail", "模板引用的转发组不存在"));
