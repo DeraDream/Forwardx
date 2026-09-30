@@ -10,8 +10,13 @@ import { toast } from "sonner";
 type Family = "ipv4" | "ipv6";
 
 function statusBadge(status: string) {
-  if (status === "reachable" || status === "unlocked" || status === "native") return <Badge className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-300">可用</Badge>;
-  if (status === "app_only" || status === "partial") return <Badge className="bg-amber-500/10 text-amber-700 dark:text-amber-300">部分</Badge>;
+  if (status === "native") return <Badge className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-300">原生</Badge>;
+  if (status === "unlocked") return <Badge className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-300">解锁</Badge>;
+  if (status === "reachable") return <Badge className="bg-sky-500/10 text-sky-700 dark:text-sky-300">可达</Badge>;
+  if (status === "originals_only") return <Badge className="bg-amber-500/10 text-amber-700 dark:text-amber-300">仅自制剧</Badge>;
+  if (status === "app_only") return <Badge className="bg-amber-500/10 text-amber-700 dark:text-amber-300">仅 App</Badge>;
+  if (status === "web_only") return <Badge className="bg-amber-500/10 text-amber-700 dark:text-amber-300">仅 Web</Badge>;
+  if (status === "partial") return <Badge className="bg-amber-500/10 text-amber-700 dark:text-amber-300">部分</Badge>;
   if (status === "blocked") return <Badge variant="destructive">失败</Badge>;
   if (status === "error") return <Badge variant="outline">错误</Badge>;
   return <Badge variant="secondary">待确认</Badge>;
@@ -67,6 +72,8 @@ export function HostNetworkProfileDialog({
   const total = Math.max(5, Object.keys(steps).length);
   const progress = Math.min(100, Math.round((completed / total) * 100));
   const detectedIp = data.ip?.address || identity.ip || (family === "ipv4" ? query.data?.host.ipv4 : query.data?.host.ipv6);
+  const ixpItems = Array.isArray(data.network?.ixp) ? data.network.ixp : [];
+  const ixpNames = ixpItems.map((item: any) => typeof item === "string" ? item : item?.name).filter(Boolean);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -139,9 +146,9 @@ export function HostNetworkProfileDialog({
               <div className="mb-2 text-sm font-medium">网络 / IXP</div>
               <div className="grid gap-1 text-xs sm:grid-cols-2">
                 <div>ASN：{data.network?.asn || identity.asn || "待检测"}</div>
-                <div>Prefix：{data.network?.prefix || "待检测"}</div>
-                <div>IXP：{Array.isArray(data.network?.ixp) && data.network.ixp.length ? data.network.ixp.join(" · ") : "待补全"}</div>
-                <div>Peering：{data.network?.peers ?? "待补全"}</div>
+                <div>网络名称：{data.network?.name || identity.company || "待检测"}</div>
+                <div>IXP：{ixpNames.length ? ixpNames.join(" · ") : data.network?.registered === false ? "PeeringDB 未登记" : "待检测"}</div>
+                <div>交换点 / 机房：{data.network?.ixCount ?? "—"} / {data.network?.facilityCount ?? "—"}</div>
               </div>
             </div>
           </div>
