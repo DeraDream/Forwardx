@@ -154,7 +154,26 @@ agentRouter.post("/api/agent/selftest-result", async (req: Request, res: Respons
       res.status(401).json({ error: "Invalid token" });
       return;
     }
-    const { testId, targetReachable, latencyMs, message, resolvedTargetIp } = req.body || {};
+    const {
+      testId,
+      targetReachable,
+      latencyMs,
+      message,
+      resolvedTargetIp,
+      dnsMs,
+      dnsAddresses,
+      dnsError,
+      dnsSkipped,
+      portInspection,
+      latencySamples,
+      sampleAttempts,
+      sampleSuccesses,
+      jitterMs,
+      averageLatencyMs,
+      minLatencyMs,
+      maxLatencyMs,
+      isFinalTarget,
+    } = req.body || {};
     if (typeof testId !== "number") {
       res.status(400).json({ error: "testId is required" });
       return;
@@ -169,6 +188,38 @@ agentRouter.post("/api/agent/selftest-result", async (req: Request, res: Respons
     const cleanLatency = typeof latencyMs === "number" ? latencyMs : null;
     const cleanMessage = typeof message === "string" ? message.slice(0, 4000) : null;
     const cleanResolvedTargetIp = typeof resolvedTargetIp === "string" ? resolvedTargetIp.trim().slice(0, 255) : "";
+    const cleanNumber = (value: unknown, min = 0, max = 60_000) => {
+      const number = Number(value);
+      return Number.isFinite(number) ? Math.min(max, Math.max(min, Math.round(number))) : null;
+    };
+    const cleanDnsAddresses = Array.isArray(dnsAddresses)
+      ? dnsAddresses.map((value: unknown) => String(value || "").trim().slice(0, 255)).filter(Boolean).slice(0, 8)
+      : [];
+    const cleanLatencySamples = Array.isArray(latencySamples)
+      ? latencySamples.map((value: unknown) => cleanNumber(value, 0, 60_000)).filter((value: number | null): value is number => value !== null).slice(0, 8)
+      : [];
+    const cleanPortInspection = portInspection && typeof portInspection === "object" && !Array.isArray(portInspection)
+      ? {
+          available: (portInspection as any).available === true,
+          sourcePort: cleanNumber((portInspection as any).sourcePort, 0, 65535) || 0,
+          sourceProtocol: String((portInspection as any).sourceProtocol || "").slice(0, 16),
+          expectedRuleId: cleanNumber((portInspection as any).expectedRuleId, 0, 2_147_483_647) || 0,
+          expectedForwardType: String((portInspection as any).expectedForwardType || "").slice(0, 64),
+          runtimeReady: (portInspection as any).runtimeReady === true,
+          socketPresent: (portInspection as any).socketPresent === true,
+          portConflict: (portInspection as any).portConflict === true,
+          managedRuleCount: cleanNumber((portInspection as any).managedRuleCount, 0, 10_000) || 0,
+          actualRuleId: cleanNumber((portInspection as any).actualRuleId, 0, 2_147_483_647) || 0,
+          actualForwardType: String((portInspection as any).actualForwardType || "").slice(0, 64),
+          actualProtocol: String((portInspection as any).actualProtocol || "").slice(0, 16),
+          conflictingRuleIds: Array.isArray((portInspection as any).conflictingRuleIds)
+            ? (portInspection as any).conflictingRuleIds.map((value: unknown) => cleanNumber(value, 1, 2_147_483_647)).filter(Boolean).slice(0, 16)
+            : [],
+          listenerOwners: Array.isArray((portInspection as any).listenerOwners)
+            ? (portInspection as any).listenerOwners.map((value: unknown) => String(value || "").slice(0, 320)).filter(Boolean).slice(0, 6)
+            : [],
+        }
+      : null;
     const tunnelLatencyBaselineId = meta?.kind === "forward-via-tunnel"
       ? Number((meta as any).tunnelLatencyBaselineId || 0)
       : 0;
@@ -211,8 +262,26 @@ agentRouter.post("/api/agent/selftest-result", async (req: Request, res: Respons
           targetPort: (meta as any).targetPort || null,
           method: (meta as any).method || "tcp",
           latencyMode: (meta as any).latencyMode || "sum",
+          sourcePort: Number((meta as any).sourcePort || 0) || 0,
+          sourceProtocol: (meta as any).sourceProtocol || "both",
+          expectedRuleId: Number((meta as any).expectedRuleId || 0) || 0,
+          expectedForwardType: (meta as any).expectedForwardType || "",
+          sampleCount: Number((meta as any).sampleCount || 0) || 0,
+          isFinalTarget: isFinalTarget === true || (meta as any).isFinalTarget === true,
           success,
           latencyMs: success ? cleanLatency : null,
+          latencySamples: cleanLatencySamples,
+          sampleAttempts: cleanNumber(sampleAttempts, 0, 32) || 0,
+          sampleSuccesses: cleanNumber(sampleSuccesses, 0, 32) || 0,
+          jitterMs: cleanNumber(jitterMs, 0, 60_000),
+          averageLatencyMs: cleanNumber(averageLatencyMs, 0, 60_000),
+          minLatencyMs: cleanNumber(minLatencyMs, 0, 60_000),
+          maxLatencyMs: cleanNumber(maxLatencyMs, 0, 60_000),
+          dnsMs: cleanNumber(dnsMs, 0, 60_000),
+          dnsAddresses: cleanDnsAddresses,
+          dnsError: typeof dnsError === "string" ? dnsError.slice(0, 1000) : "",
+          dnsSkipped: dnsSkipped === true,
+          portInspection: cleanPortInspection,
           detail: cleanMessage,
           resolvedTargetIp: cleanResolvedTargetIp || null,
         }),
