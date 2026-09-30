@@ -10,25 +10,14 @@ import { toast } from "sonner";
 type Family = "ipv4" | "ipv6";
 
 function statusBadge(status: string) {
-  if (status === "native") return <Badge className="border-emerald-200 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">原生</Badge>;
-  if (status === "unlocked") return <Badge className="border-emerald-200 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">解锁</Badge>;
-  if (status === "reachable") return <Badge className="border-sky-200 bg-sky-500/15 text-sky-700 dark:text-sky-300">仅可达</Badge>;
-  if (status === "originals_only") return <Badge className="border-amber-200 bg-amber-500/15 text-amber-700 dark:text-amber-300">仅自制剧</Badge>;
-  if (status === "app_only") return <Badge className="border-amber-200 bg-amber-500/15 text-amber-700 dark:text-amber-300">仅 App</Badge>;
-  if (status === "web_only") return <Badge className="border-amber-200 bg-amber-500/15 text-amber-700 dark:text-amber-300">仅 Web</Badge>;
-  if (status === "partial") return <Badge className="border-amber-200 bg-amber-500/15 text-amber-700 dark:text-amber-300">部分</Badge>;
-  if (status === "blocked") return <Badge className="border-red-200 bg-red-500/15 text-red-700 dark:text-red-300">屏蔽</Badge>;
-  if (status === "unsupported") return <Badge className="bg-slate-500/10 text-slate-600">不支持</Badge>;
   if (status === "error") return <Badge className="border-red-200 bg-red-500/10 text-red-700">检测错误</Badge>;
-  return <Badge className="border-amber-200 bg-amber-500/10 text-amber-700">未知</Badge>;
+  if (status === "blocked") return <Badge className="border-red-200 bg-red-500/15 text-red-700 dark:text-red-300">屏蔽</Badge>;
+  return <Badge className="border-emerald-200 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">解锁</Badge>;
 }
 
 function statusCardClass(status: string) {
-  if (status === "unlocked" || status === "native") return "border-emerald-200/80 bg-emerald-500/5";
-  if (status === "reachable") return "border-sky-200/80 bg-sky-500/5";
-  if (["originals_only", "app_only", "web_only", "partial", "unknown"].includes(status)) return "border-amber-200/80 bg-amber-500/5";
-  if (status === "blocked" || status === "error") return "border-red-200/80 bg-red-500/5";
-  return "bg-background/60";
+  if (status === "error" || status === "blocked") return "border-red-200/80 bg-red-500/5";
+  return "border-emerald-200/80 bg-emerald-500/5";
 }
 
 function riskValue(value: unknown) {
@@ -198,7 +187,7 @@ export function HostNetworkProfileDialog({
 
             <div className="rounded-lg border border-violet-200/60 bg-violet-500/[0.025] p-3">
               <div className="mb-1 flex items-center justify-between"><div className="text-sm font-medium text-violet-700 dark:text-violet-300">应用解锁 / 可达性</div><span className="text-xs text-muted-foreground">{apps.length ? `${apps.length} 项已返回` : "等待结果"}</span></div>
-              <div className="mb-3 text-[11px] text-muted-foreground">“解锁”=已通过地区/内容判定；“仅可达”只代表站点能打开，两者不是一个意思；“未知”表示服务拒绝自动探测或页面格式无法可靠判定。</div>
+              <div className="mb-3 text-[11px] text-muted-foreground">应用结果只显示“解锁 / 屏蔽”；网络或接口本身异常时单独显示“检测错误”。</div>
               <div className="grid gap-2 sm:grid-cols-2 md:grid-cols-3">
                 {apps.map((app: any) => (
                   <div key={app.id} className={`flex min-h-14 items-center justify-between gap-2 rounded-md border px-2.5 py-2 ${statusCardClass(String(app.status || "unknown"))}`}>
@@ -224,7 +213,7 @@ export function HostNetworkProfileDialog({
                       {neighbours.map((item: any, index: number) => (
                         <div key={`${item.asn}-${index}`} className={`min-w-[78px] rounded-md border px-2 py-1 text-center leading-tight ${relationClass(item.relation, index)}`}>
                           <div className="text-[11px] font-semibold">AS{item.asn}</div>
-                          <div className="max-w-[110px] truncate text-[10px]" title={item.name || ""}>{item.name || "未知网络"}</div>
+                          <div className="max-w-[96px] truncate text-[10px] font-medium" title={item.fullName || item.name || ""}>{item.name || "未知"}</div>
                         </div>
                       ))}
                     </div>
