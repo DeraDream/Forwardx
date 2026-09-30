@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.3.382] - 2026-09-30
+
+### 网络画像完整信息补强
+
+- IPv4 / IPv6 身份查询改为优先使用支持双栈的 ipwho.is，并保留 ipapi.is 分类信息补充，修复部分 IPv6 只显示地址、ASN/运营商/地区为空的问题。
+- 新增 proxycheck.io 无密钥风险查询：展示 0~100 风险分、风险等级、Proxy/VPN/Tor/机房类型、网络类型和提供商；服务不可用时自动回退基础风险字段。
+- 网络信息新增 RIPEstat 路由数据：BGP Prefix、RPKI 状态、ASN 邻居数量，并与 PeeringDB 的 IXP/机房信息合并展示。
+- 应用检测新增 YouTube Premium、Spotify 注册区、Steam 商店币种、Apple Region、Google Play 区域、Bilibili 港澳台专用检测；Netflix 与通用 HTTP 检测增加短重试，降低瞬时网络错误。
+- 应用卡片继续明确区分“解锁 / 仅 App / 仅 Web / 仅自制剧 / 可达 / 失败 / 错误”，不会把单纯官网可访问误标为完整解锁。
+- Panel / APK Release 升级至 `2.3.382`；Agent 升级至 `2.2.213`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.3.381] - 2026-09-30
 
 ### 网络画像回报通道修复

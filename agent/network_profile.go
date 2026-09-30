@@ -387,7 +387,7 @@ func profileNetwork(client *http.Client, ip string, asnValue any) (map[string]an
 		errorsFound = append(errorsFound, "RIPEstat: "+err.Error())
 	}
 	if len(result) == 0 {
-		return nil, fmt.Errorf(strings.Join(errorsFound, "; "))
+		return nil, fmt.Errorf("%s", strings.Join(errorsFound, "; "))
 	}
 	if len(errorsFound) > 0 {
 		result["warnings"] = errorsFound

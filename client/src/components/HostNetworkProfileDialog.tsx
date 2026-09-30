@@ -18,6 +18,7 @@ function statusBadge(status: string) {
   if (status === "web_only") return <Badge className="bg-amber-500/10 text-amber-700 dark:text-amber-300">仅 Web</Badge>;
   if (status === "partial") return <Badge className="bg-amber-500/10 text-amber-700 dark:text-amber-300">部分</Badge>;
   if (status === "blocked") return <Badge variant="destructive">失败</Badge>;
+  if (status === "unsupported") return <Badge variant="secondary">不支持</Badge>;
   if (status === "error") return <Badge variant="outline">错误</Badge>;
   return <Badge variant="secondary">待确认</Badge>;
 }
@@ -74,6 +75,9 @@ export function HostNetworkProfileDialog({
   const detectedIp = data.ip?.address || identity.ip || (family === "ipv4" ? query.data?.host.ipv4 : query.data?.host.ipv6);
   const ixpItems = Array.isArray(data.network?.ixp) ? data.network.ixp : [];
   const ixpNames = ixpItems.map((item: any) => typeof item === "string" ? item : item?.name).filter(Boolean);
+  const riskLevelText: Record<string, string> = { low: "低", medium: "中等", high: "高", very_high: "极高", unknown: "未知" };
+  const networkType = risk.networkType || (risk.isDatacenter === true ? "Hosting / Datacenter" : "");
+  const rpkiText: Record<string, string> = { valid: "有效", invalid_asn: "ASN 不匹配", invalid_length: "前缀长度无效", unknown: "未配置 ROA" };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -110,13 +114,14 @@ export function HostNetworkProfileDialog({
                 <div className="space-y-1 text-xs">
                   <div className="font-mono text-sm">{detectedIp || "检测中..."}</div>
                   <div>{identity.asn || "ASN 待检测"}</div>
-                  <div>{identity.company || "运营商待检测"}</div>
-                  <div>{[identity.city, identity.region, identity.country].filter(Boolean).join(" · ") || "地区待检测"}</div>
+                  <div>{identity.company || identity.isp || "运营商待检测"}</div>
+                  <div>{[identity.flag, identity.city, identity.region, identity.country].filter(Boolean).join(" · ") || "地区待检测"}</div>
+                  <div className="text-muted-foreground">IP 类型：{networkType || "待检测"}{identity.domain ? ` · ${identity.domain}` : ""}</div>
                 </div>
               </div>
               <div className="rounded-lg border p-3">
                 <div className="mb-2 flex items-center gap-2 text-sm font-medium"><ShieldCheck className="h-4 w-4" />IP 风险</div>
-                <div className="mb-2 flex items-center justify-between text-xs"><span>综合风险</span><span>{riskScore === null ? "暂无评分" : `${riskScore}/100`}</span></div>
+                <div className="mb-2 flex items-center justify-between text-xs"><span>综合风险</span><span>{riskScore === null ? "暂无评分" : `${riskScore}/100 · ${riskLevelText[String(risk.level || "unknown")] || risk.level}`}</span></div>
                 <Progress value={riskScore ?? 0} />
                 <div className="mt-2 flex flex-wrap gap-1">
                   {risk.isDatacenter === true && <Badge variant="secondary">机房</Badge>}
@@ -124,8 +129,12 @@ export function HostNetworkProfileDialog({
                   {risk.isProxy === true && <Badge variant="secondary">Proxy</Badge>}
                   {risk.isTor === true && <Badge variant="destructive">Tor</Badge>}
                   {risk.isAbuser === true && <Badge variant="destructive">滥用记录</Badge>}
-                  {riskScore === null && <span className="text-xs text-muted-foreground">风险评分源未配置或暂未返回</span>}
+                  {networkType && <Badge variant="outline">{networkType}</Badge>}
                 </div>
+                <div className="mt-2 text-[11px] text-muted-foreground">
+                  数据源：{risk.provider || "待检测"}{risk.providerName ? ` · ${risk.providerName}` : ""}{risk.lastSeen ? ` · 最近发现 ${risk.lastSeen}` : ""}
+                </div>
+                {riskScore === null && <div className="mt-1 text-xs text-muted-foreground">风险评分源暂未返回，已保留可用的代理/机房判定。</div>}
               </div>
             </div>
 
@@ -134,7 +143,7 @@ export function HostNetworkProfileDialog({
               <div className="grid gap-2 sm:grid-cols-2 md:grid-cols-3">
                 {apps.map((app: any) => (
                   <div key={app.id} className="flex min-h-14 items-center justify-between gap-2 rounded-md border bg-background/60 px-2.5 py-2">
-                    <div className="min-w-0"><div className="truncate text-sm font-medium">{app.name || app.id}</div><div className="truncate text-[10px] text-muted-foreground">{app.region || (app.latencyMs != null ? `${app.latencyMs} ms` : app.message || "")}</div></div>
+                    <div className="min-w-0"><div className="truncate text-sm font-medium">{app.name || app.id}</div><div className="truncate text-[10px] text-muted-foreground" title={app.note || app.message || ""}>{app.region ? `${app.region}${app.latencyMs != null ? ` · ${app.latencyMs} ms` : ""}` : (app.latencyMs != null ? `${app.latencyMs} ms` : app.message || app.note || "")}</div></div>
                     {statusBadge(String(app.status || "unknown"))}
                   </div>
                 ))}
@@ -145,10 +154,13 @@ export function HostNetworkProfileDialog({
             <div className="rounded-lg border p-3">
               <div className="mb-2 text-sm font-medium">网络 / IXP</div>
               <div className="grid gap-1 text-xs sm:grid-cols-2">
-                <div>ASN：{data.network?.asn || identity.asn || "待检测"}</div>
+                <div>ASN：{data.network?.asn || identity.asnNumber || identity.asn || "待检测"}</div>
                 <div>网络名称：{data.network?.name || identity.company || "待检测"}</div>
-                <div>IXP：{ixpNames.length ? ixpNames.join(" · ") : data.network?.registered === false ? "PeeringDB 未登记" : "待检测"}</div>
+                <div>Prefix：{data.network?.prefix || "待检测"}</div>
+                <div>RPKI：{data.network?.rpki ? (rpkiText[String(data.network.rpki)] || data.network.rpki) : "待检测"}</div>
+                <div className="sm:col-span-2">IXP：{ixpNames.length ? ixpNames.join(" · ") : data.network?.registered === false ? "PeeringDB 未登记" : "待检测"}</div>
                 <div>交换点 / 机房：{data.network?.ixCount ?? "—"} / {data.network?.facilityCount ?? "—"}</div>
+                <div>AS 邻居：{data.network?.neighbourUnique ?? "—"}（左 {data.network?.neighbourLeft ?? "—"} / 右 {data.network?.neighbourRight ?? "—"}）</div>
               </div>
             </div>
           </div>
