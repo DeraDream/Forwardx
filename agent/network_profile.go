@@ -274,46 +274,268 @@ func profileRiskLevel(score float64) string {
 	}
 }
 
-func profileProxyRisk(client *http.Client, ip string) (map[string]any, error) {
+type profileRiskSource struct {
+	Name         string `json:"name"`
+	Score        *float64 `json:"score,omitempty"`
+	Level        string `json:"level,omitempty"`
+	Country      string `json:"country,omitempty"`
+	IsProxy      *bool `json:"isProxy,omitempty"`
+	IsVPN        *bool `json:"isVPN,omitempty"`
+	IsTor        *bool `json:"isTor,omitempty"`
+	IsDatacenter *bool `json:"isDatacenter,omitempty"`
+	IsAbuser     *bool `json:"isAbuser,omitempty"`
+	IsBot        *bool `json:"isBot,omitempty"`
+	NetworkType  string `json:"networkType,omitempty"`
+	Error        string `json:"error,omitempty"`
+}
+
+func profileBoolPtr(value any) *bool {
+	if parsed, ok := profileBool(value); ok {
+		return &parsed
+	}
+	return nil
+}
+
+func profileScorePtr(value any) *float64 {
+	if parsed, ok := profileNumber(value); ok {
+		if parsed >= 0 {
+			return &parsed
+		}
+	}
+	return nil
+}
+
+func profileRiskFromCheckPlace(client *http.Client, ip, db string) (map[string]any, error) {
 	var payload map[string]any
-	endpoint := "https://proxycheck.io/v2/" + url.PathEscape(ip) + "?vpn=1&asn=1&risk=1&days=7"
+	endpoint := "https://ipinfo.check.place/" + url.PathEscape(ip) + "?db=" + url.QueryEscape(db)
 	if err := profileGetJSON(client, endpoint, &payload); err != nil {
 		return nil, err
 	}
-	if !strings.EqualFold(profileString(payload["status"]), "ok") {
-		return nil, fmt.Errorf("proxycheck.io status=%s", profileString(payload["status"]))
+	return payload, nil
+}
+
+func profileProxyCheckSource(client *http.Client, ip string) profileRiskSource {
+	source := profileRiskSource{Name: "ProxyCheck"}
+	var payload map[string]any
+	endpoint := "https://proxycheck.io/v2/" + url.PathEscape(ip) + "?vpn=1&asn=1&risk=1&days=7"
+	if err := profileGetJSON(client, endpoint, &payload); err != nil {
+		source.Error = err.Error()
+		return source
 	}
 	item := profileMap(payload[ip])
 	if item == nil {
-		return nil, fmt.Errorf("proxycheck.io returned no IP record")
+		source.Error = "no IP record"
+		return source
 	}
-	score, hasScore := profileNumber(item["risk"])
+	source.Score = profileScorePtr(item["risk"])
+	if source.Score != nil {
+		source.Level = profileRiskLevel(*source.Score)
+	}
 	proxy := strings.EqualFold(profileString(item["proxy"]), "yes")
+	source.IsProxy = &proxy
 	networkType := profileString(item["type"])
+	source.NetworkType = networkType
 	lowerType := strings.ToLower(networkType)
-	result := map[string]any{
-		"provider": "proxycheck.io",
-		"score": nil,
-		"level": "unknown",
-		"isProxy": proxy,
-		"isVPN": strings.Contains(lowerType, "vpn"),
-		"isTor": strings.Contains(lowerType, "tor"),
-		"isDatacenter": strings.Contains(lowerType, "hosting") || strings.Contains(lowerType, "server") || strings.Contains(lowerType, "datacenter"),
+	vpn := strings.Contains(lowerType, "vpn")
+	tor := strings.Contains(lowerType, "tor")
+	server := strings.Contains(lowerType, "hosting") || strings.Contains(lowerType, "server") || strings.Contains(lowerType, "datacenter")
+	source.IsVPN = &vpn
+	source.IsTor = &tor
+	source.IsDatacenter = &server
+	source.Country = profileString(item["country"])
+	return source
+}
+
+func profileScamalyticsSource(client *http.Client, ip string) profileRiskSource {
+	source := profileRiskSource{Name: "Scamalytics"}
+	payload, err := profileRiskFromCheckPlace(client, ip, "scamalytics")
+	if err != nil {
+		source.Error = err.Error()
+		return source
+	}
+	scam := profileMap(payload["scamalytics"])
+	proxy := profileMap(scam["scamalytics_proxy"])
+	external := profileMap(payload["external_datasources"])
+	firehol := profileMap(external["firehol"])
+	x4b := profileMap(external["x4bnet"])
+	maxmind := profileMap(external["maxmind_geolite2"])
+	source.Score = profileScorePtr(scam["scamalytics_score"])
+	if source.Score != nil {
+		source.Level = profileRiskLevel(*source.Score)
+	}
+	source.IsVPN = profileBoolPtr(proxy["is_vpn"])
+	source.IsDatacenter = profileBoolPtr(proxy["is_datacenter"])
+	source.IsProxy = profileBoolPtr(firehol["is_proxy"])
+	source.IsTor = profileBoolPtr(x4b["is_tor"])
+	source.IsAbuser = profileBoolPtr(scam["is_blacklisted_external"])
+	source.Country = profileString(maxmind["ip_country_code"])
+	return source
+}
+
+func profileIPQSSource(client *http.Client, ip string) profileRiskSource {
+	source := profileRiskSource{Name: "IPQS"}
+	payload, err := profileRiskFromCheckPlace(client, ip, "ipqualityscore")
+	if err != nil {
+		source.Error = err.Error()
+		return source
+	}
+	source.Score = profileScorePtr(payload["fraud_score"])
+	if source.Score != nil {
+		source.Level = profileRiskLevel(*source.Score)
+	}
+	source.Country = profileString(payload["country_code"])
+	source.IsProxy = profileBoolPtr(payload["proxy"])
+	source.IsVPN = profileBoolPtr(payload["vpn"])
+	source.IsTor = profileBoolPtr(payload["tor"])
+	source.IsAbuser = profileBoolPtr(payload["recent_abuse"])
+	source.IsBot = profileBoolPtr(payload["bot_status"])
+	return source
+}
+
+func profileIPAPISource(client *http.Client, ip string) profileRiskSource {
+	source := profileRiskSource{Name: "ipapi"}
+	payload, err := profileRiskFromCheckPlace(client, ip, "ipapi")
+	if err != nil {
+		source.Error = err.Error()
+		return source
+	}
+	company := profileMap(payload["company"])
+	scoreText := profileString(company["abuser_score"])
+	if scoreText != "" {
+		fields := strings.Fields(scoreText)
+		if len(fields) > 0 {
+			if raw, err := strconv.ParseFloat(fields[0], 64); err == nil {
+				score := raw
+				if raw <= 1 {
+					score = raw * 100
+				}
+				source.Score = &score
+				source.Level = profileRiskLevel(score)
+			}
+		}
+	}
+	location := profileMap(payload["location"])
+	source.Country = profileString(location["country_code"])
+	source.IsProxy = profileBoolPtr(payload["is_proxy"])
+	source.IsVPN = profileBoolPtr(payload["is_vpn"])
+	source.IsTor = profileBoolPtr(payload["is_tor"])
+	source.IsDatacenter = profileBoolPtr(payload["is_datacenter"])
+	source.IsAbuser = profileBoolPtr(payload["is_abuser"])
+	source.IsBot = profileBoolPtr(payload["is_crawler"])
+	return source
+}
+
+func profileAbuseIPDBSource(client *http.Client, ip string) profileRiskSource {
+	source := profileRiskSource{Name: "AbuseIPDB"}
+	payload, err := profileRiskFromCheckPlace(client, ip, "abuseipdb")
+	if err != nil {
+		source.Error = err.Error()
+		return source
+	}
+	data := profileMap(payload["data"])
+	source.Score = profileScorePtr(data["abuseConfidenceScore"])
+	if source.Score != nil {
+		source.Level = profileRiskLevel(*source.Score)
+	}
+	source.Country = profileString(data["countryCode"])
+	source.NetworkType = profileString(data["usageType"])
+	server := strings.Contains(strings.ToLower(source.NetworkType), "data center") || strings.Contains(strings.ToLower(source.NetworkType), "hosting")
+	source.IsDatacenter = &server
+	return source
+}
+
+func profileIP2LocationSource(client *http.Client, ip string) profileRiskSource {
+	source := profileRiskSource{Name: "IP2Location"}
+	payload, err := profileRiskFromCheckPlace(client, ip, "ip2location")
+	if err != nil {
+		source.Error = err.Error()
+		return source
+	}
+	source.Country = profileString(payload["country_code"])
+	source.NetworkType = profileString(payload["usage_type"])
+	proxyType := strings.ToUpper(profileString(payload["proxy_type"]))
+	if proxyType != "" && proxyType != "-" {
+		proxy := true
+		source.IsProxy = &proxy
+	}
+	lowerType := strings.ToLower(source.NetworkType)
+	server := strings.Contains(lowerType, "data center") || strings.Contains(lowerType, "hosting") || strings.HasPrefix(strings.ToUpper(source.NetworkType), "DCH")
+	source.IsDatacenter = &server
+	return source
+}
+
+func profileRiskAnyTrue(sources []profileRiskSource, selector func(profileRiskSource) *bool) any {
+	has := false
+	for _, source := range sources {
+		value := selector(source)
+		if value == nil {
+			continue
+		}
+		has = true
+		if *value {
+			return true
+		}
+	}
+	if has {
+		return false
+	}
+	return nil
+}
+
+func profileRisk(client *http.Client, ip string) map[string]any {
+	sources := make([]profileRiskSource, 6)
+	var wg sync.WaitGroup
+	checks := []func() profileRiskSource{
+		func() profileRiskSource { return profileProxyCheckSource(client, ip) },
+		func() profileRiskSource { return profileScamalyticsSource(client, ip) },
+		func() profileRiskSource { return profileIPQSSource(client, ip) },
+		func() profileRiskSource { return profileIPAPISource(client, ip) },
+		func() profileRiskSource { return profileAbuseIPDBSource(client, ip) },
+		func() profileRiskSource { return profileIP2LocationSource(client, ip) },
+	}
+	for index := range checks {
+		index := index
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sources[index] = checks[index]()
+		}()
+	}
+	wg.Wait()
+
+	var scoreTotal float64
+	scoreCount := 0
+	networkType := ""
+	for _, source := range sources {
+		if source.Score != nil {
+			scoreTotal += *source.Score
+			scoreCount++
+		}
+		if networkType == "" && source.NetworkType != "" {
+			networkType = source.NetworkType
+		}
+	}
+	var score any
+	level := "unknown"
+	if scoreCount > 0 {
+		average := scoreTotal / float64(scoreCount)
+		score = average
+		level = profileRiskLevel(average)
+	}
+
+	return map[string]any{
+		"provider": "multi-source",
+		"score": score,
+		"level": level,
 		"networkType": networkType,
-		"providerName": profileString(item["provider"]),
-		"organisation": profileString(item["organisation"]),
-		"asn": profileString(item["asn"]),
-		"country": profileString(item["country"]),
-		"city": profileString(item["city"]),
+		"isProxy": profileRiskAnyTrue(sources, func(source profileRiskSource) *bool { return source.IsProxy }),
+		"isVPN": profileRiskAnyTrue(sources, func(source profileRiskSource) *bool { return source.IsVPN }),
+		"isTor": profileRiskAnyTrue(sources, func(source profileRiskSource) *bool { return source.IsTor }),
+		"isDatacenter": profileRiskAnyTrue(sources, func(source profileRiskSource) *bool { return source.IsDatacenter }),
+		"isAbuser": profileRiskAnyTrue(sources, func(source profileRiskSource) *bool { return source.IsAbuser }),
+		"isBot": profileRiskAnyTrue(sources, func(source profileRiskSource) *bool { return source.IsBot }),
+		"sources": sources,
 	}
-	if hasScore {
-		result["score"] = score
-		result["level"] = profileRiskLevel(score)
-	}
-	if lastSeen := profileString(item["last seen human"]); lastSeen != "" {
-		result["lastSeen"] = lastSeen
-	}
-	return result, nil
 }
 
 func profileRouting(client *http.Client, ip string, asnValue any) (map[string]any, error) {
@@ -551,35 +773,41 @@ func netflixPlayable(body string) bool {
 
 func profileNetflixCheck(client *http.Client) map[string]any {
 	started := time.Now()
-	originalCode, originalBody, originalErr := profileReadRetry(client, "https://www.netflix.com/title/81280792", nil, 2)
-	if originalErr != nil {
-		return map[string]any{"id": "netflix", "name": "Netflix", "status": "error", "message": originalErr.Error()}
-	}
-	region := netflixRegion(originalBody)
-	originalOK := originalCode >= 200 && originalCode < 400 && netflixPlayable(originalBody)
-	if !originalOK {
-		return map[string]any{
-			"id": "netflix", "name": "Netflix", "status": "blocked", "region": region,
-			"httpStatus": originalCode, "latencyMs": time.Since(started).Milliseconds(),
-			"note": "Netflix 测试标题不可用",
+	code1, body1, err1 := profileReadRetry(client, "https://www.netflix.com/title/81280792", nil, 2)
+	code2, body2, err2 := profileReadRetry(client, "https://www.netflix.com/title/70143836", nil, 2)
+	if err1 != nil || err2 != nil {
+		message := ""
+		if err1 != nil {
+			message = err1.Error()
+		} else {
+			message = err2.Error()
 		}
+		return map[string]any{"id": "netflix", "name": "Netflix", "status": "error", "message": message, "latencyMs": time.Since(started).Milliseconds()}
 	}
-	regionalCode, regionalBody, regionalErr := profileReadRetry(client, "https://www.netflix.com/title/70143836", nil, 2)
+	region := netflixRegion(body1)
 	if region == "" {
-		region = netflixRegion(regionalBody)
+		region = netflixRegion(body2)
 	}
-	if regionalErr == nil && regionalCode >= 200 && regionalCode < 400 && netflixPlayable(regionalBody) {
-		return map[string]any{
-			"id": "netflix", "name": "Netflix", "status": "unlocked", "region": region,
-			"httpStatus": regionalCode, "latencyMs": time.Since(started).Milliseconds(),
-			"note": "完整片库测试通过",
+	if region == "" {
+		regionPattern := regexp.MustCompile(`"id":"([A-Za-z]{2})"[^}]*"countryName"`)
+		if match := regionPattern.FindStringSubmatch(body1); len(match) > 1 {
+			region = strings.ToUpper(match[1])
 		}
 	}
-	return map[string]any{
-		"id": "netflix", "name": "Netflix", "status": "originals_only", "region": region,
-		"httpStatus": regionalCode, "latencyMs": time.Since(started).Milliseconds(),
-		"note": "仅 Netflix Originals",
+	lower1 := strings.ToLower(body1)
+	lower2 := strings.ToLower(body2)
+	ohNo1 := strings.Contains(lower1, "oh no!")
+	ohNo2 := strings.Contains(lower2, "oh no!")
+	if code1 == 403 || code1 == 451 || code2 == 403 || code2 == 451 {
+		return map[string]any{"id": "netflix", "name": "Netflix", "status": "blocked", "region": region, "httpStatus": code2, "latencyMs": time.Since(started).Milliseconds(), "note": "Netflix 返回地区/访问限制"}
 	}
+	if strings.TrimSpace(body1) == "" || strings.TrimSpace(body2) == "" {
+		return map[string]any{"id": "netflix", "name": "Netflix", "status": "unknown", "region": region, "httpStatus": code2, "latencyMs": time.Since(started).Milliseconds(), "note": "Netflix 响应为空，无法可靠判定"}
+	}
+	if ohNo1 && ohNo2 {
+		return map[string]any{"id": "netflix", "name": "Netflix", "status": "originals_only", "region": region, "httpStatus": code2, "latencyMs": time.Since(started).Milliseconds(), "note": "仅 Netflix Originals"}
+	}
+	return map[string]any{"id": "netflix", "name": "Netflix", "status": "unlocked", "region": region, "httpStatus": code2, "latencyMs": time.Since(started).Milliseconds(), "note": "Netflix 完整解锁"}
 }
 
 func profileChatGPTCheck(client *http.Client) map[string]any {
@@ -855,6 +1083,55 @@ func profileBilibiliHKMCTWCheck(client *http.Client) map[string]any {
 	return map[string]any{"id": "bilibili_hmt", "name": "Bilibili 港澳台", "status": status, "httpStatus": code, "latencyMs": time.Since(started).Milliseconds(), "note": note}
 }
 
+func profileTikTokCheck(client *http.Client) map[string]any {
+	started := time.Now()
+	code, body, err := profileReadRetry(client, "https://www.tiktok.com/", map[string]string{"Accept-Language": "en-US,en;q=0.9"}, 2)
+	if err != nil {
+		return map[string]any{"id": "tiktok", "name": "TikTok", "status": "error", "message": err.Error()}
+	}
+	if strings.Contains(body, "Please wait...") {
+		code, body, err = profileReadRetry(client, "https://www.tiktok.com/explore", map[string]string{"Accept-Language": "en-US,en;q=0.9"}, 2)
+	}
+	if err != nil {
+		return map[string]any{"id": "tiktok", "name": "TikTok", "status": "error", "message": err.Error()}
+	}
+	pattern := regexp.MustCompile(`"region"\s*:\s*"([A-Za-z]{2})"`)
+	region := ""
+	if match := pattern.FindStringSubmatch(body); len(match) > 1 {
+		region = strings.ToUpper(match[1])
+	}
+	status := "unknown"
+	note := "TikTok 页面可达，但未识别地区"
+	if region != "" {
+		status = "unlocked"
+		note = "TikTok 地区识别成功"
+	}
+	return map[string]any{"id": "tiktok", "name": "TikTok", "status": status, "region": region, "httpStatus": code, "latencyMs": time.Since(started).Milliseconds(), "note": note}
+}
+
+func profileRedditCheck(client *http.Client) map[string]any {
+	started := time.Now()
+	code, body, err := profileReadRetry(client, "https://www.reddit.com/svc/shreddit/reddit-chat", nil, 2)
+	if err != nil {
+		return map[string]any{"id": "reddit", "name": "Reddit", "status": "error", "message": err.Error()}
+	}
+	region := ""
+	pattern := regexp.MustCompile(`country="([^"]+)"`)
+	if match := pattern.FindStringSubmatch(body); len(match) > 1 {
+		region = strings.ToUpper(match[1])
+	}
+	status := "unknown"
+	note := "Reddit 返回状态无法确认地区限制"
+	if code == 200 {
+		status = "unlocked"
+		note = "Reddit 可用"
+	} else if code == 403 {
+		status = "blocked"
+		note = "Reddit 拒绝当前出口"
+	}
+	return map[string]any{"id": "reddit", "name": "Reddit", "status": status, "region": region, "httpStatus": code, "latencyMs": time.Since(started).Milliseconds(), "note": note}
+}
+
 func profileGenericAppCheck(client *http.Client, id, name, target string) map[string]any {
 	started := time.Now()
 	code, _, err := profileReadRetry(client, target, nil, 2)
@@ -862,15 +1139,17 @@ func profileGenericAppCheck(client *http.Client, id, name, target string) map[st
 		return map[string]any{"id": id, "name": name, "status": "error", "message": err.Error()}
 	}
 	status := "reachable"
+	note := "仅确认官方站点可达，不代表区域完整解锁"
 	if code == http.StatusForbidden || code == http.StatusUnavailableForLegalReasons {
-		status = "blocked"
+		status = "unknown"
+		note = "站点拒绝自动探测，不能据此判定为地区屏蔽"
 	} else if code >= 500 {
 		status = "unknown"
+		note = "站点响应异常，无法判定解锁状态"
 	}
 	return map[string]any{
 		"id": id, "name": name, "status": status, "httpStatus": code,
-		"latencyMs": time.Since(started).Milliseconds(),
-		"note": "当前为官方站点可达性检测，未把可达误标为完整解锁",
+		"latencyMs": time.Since(started).Milliseconds(), "note": note,
 	}
 }
 
@@ -892,6 +1171,10 @@ func profileAppCheck(client *http.Client, id, name, target string) map[string]an
 		return profileMaxCheck(client)
 	case "spotify":
 		return profileSpotifyCheck(client)
+	case "tiktok":
+		return profileTikTokCheck(client)
+	case "reddit":
+		return profileRedditCheck(client)
 	case "steam":
 		return profileSteamCheck(client)
 	case "apple":
@@ -953,22 +1236,23 @@ func runNetworkProfile(cfg Config, request networkProfileRequest) {
 	}
 
 	report("risk", "running", nil, "")
-	risk, riskErr := profileProxyRisk(client, ip)
-	if riskErr != nil {
-		risk = map[string]any{
-			"score": nil,
-			"level": "unknown",
-			"isDatacenter": identity["is_datacenter"],
-			"isVPN": identity["is_vpn"],
-			"isProxy": identity["is_proxy"],
-			"isTor": identity["is_tor"],
-			"isAbuser": identity["is_abuser"],
-			"provider": "ipapi.is",
-		}
-		report("risk", "success", risk, "proxycheck.io 不可用，已回退基础风险字段："+riskErr.Error())
-	} else {
-		report("risk", "success", risk, "")
+	risk := profileRisk(client, ip)
+	if risk["isDatacenter"] == nil {
+		risk["isDatacenter"] = identity["is_datacenter"]
 	}
+	if risk["isVPN"] == nil {
+		risk["isVPN"] = identity["is_vpn"]
+	}
+	if risk["isProxy"] == nil {
+		risk["isProxy"] = identity["is_proxy"]
+	}
+	if risk["isTor"] == nil {
+		risk["isTor"] = identity["is_tor"]
+	}
+	if risk["isAbuser"] == nil {
+		risk["isAbuser"] = identity["is_abuser"]
+	}
+	report("risk", "success", risk, "")
 
 	apps := []struct{ id, name, target string }{
 		{"chatgpt", "ChatGPT", "https://chatgpt.com/"},
