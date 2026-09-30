@@ -37,7 +37,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.210"
+var Version = "2.2.211"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -329,7 +329,14 @@ var heartbeatStateCache heartbeatStateSnapshot
 var heartbeatStateSignatures = map[string]string{}
 var localRuntimeStateMu sync.Mutex
 var lastLocalRuntimeStateSignature string
+var lastLocalRuntimeStateObservedAt time.Time
 var forceSendLocalRuntimeState = true
+
+// Busy/metrics-only heartbeats intentionally avoid expensive runtime scans.
+// Re-observe local runtime state at least once per minute so the Panel's
+// diagnostic snapshot remains genuinely fresh while staying below the
+// diagnostic 120s freshness threshold.
+const localRuntimeStateKeepaliveRefreshInterval = 60 * time.Second
 
 // readLocalRuntimeReadiness 的跨心跳缓存。
 // TTL 5s：正常心跳间隔 30s，对数据新鲜度无影响；
@@ -2293,6 +2300,7 @@ func localRuntimeStateForHeartbeat() (string, *localRuntimeStatePayload) {
 	state := readLocalRuntimeStatePayload()
 	signature := localRuntimeStateSignature(state)
 	localRuntimeStateMu.Lock()
+	lastLocalRuntimeStateObservedAt = time.Now()
 	sendFull := forceSendLocalRuntimeState || signature != lastLocalRuntimeStateSignature
 	if sendFull {
 		lastLocalRuntimeStateSignature = signature
@@ -2303,6 +2311,24 @@ func localRuntimeStateForHeartbeat() (string, *localRuntimeStatePayload) {
 		return signature, &state
 	}
 	return signature, nil
+}
+
+func localRuntimeStateKeepaliveSnapshot(now time.Time) (string, *localRuntimeStatePayload) {
+	localRuntimeStateMu.Lock()
+	due := forceSendLocalRuntimeState ||
+		lastLocalRuntimeStateSignature == "" ||
+		lastLocalRuntimeStateObservedAt.IsZero() ||
+		now.Sub(lastLocalRuntimeStateObservedAt) >= localRuntimeStateKeepaliveRefreshInterval
+	cachedSignature := lastLocalRuntimeStateSignature
+	localRuntimeStateMu.Unlock()
+
+	if due {
+		return localRuntimeStateForHeartbeat()
+	}
+	// Reuse only a recently observed signature. Sending it on every keepalive lets
+	// the Panel renew snapshot freshness without repeating ss/systemctl/iptables
+	// inspection on every lightweight heartbeat.
+	return cachedSignature, nil
 }
 
 func requestLocalRuntimeStateUpload() {
@@ -4025,6 +4051,12 @@ func heartbeatKeepalive(cfg Config) (heartbeatResult, error) {
 	}
 	if currentStatic.DefaultNetworkInterface != "" {
 		payload["defaultNetworkInterface"] = currentStatic.DefaultNetworkInterface
+	}
+	if signature, localState := localRuntimeStateKeepaliveSnapshot(time.Now()); signature != "" {
+		payload["localStateSignature"] = signature
+		if localState != nil {
+			payload["localState"] = localState
+		}
 	}
 	var resp heartbeatResp
 	if err := postHeartbeat(cfg, "/api/agent/heartbeat", payload, &resp); err != nil {
