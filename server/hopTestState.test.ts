@@ -2,7 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createTunnelHopBatch, recordTunnelHopTestResult, registerTunnelHopTest } from "./tunnelHopTestState";
-import { createHopTestBatch, recordHopTestResult, registerHopTest } from "./hopTestState";
+import { adjustHopTestDetailsForLatencyMode, createHopTestBatch, recordHopTestResult, registerHopTest } from "./hopTestState";
+
+test("diagnostic raw remaining-path latency is converted into physical per-hop latency", () => {
+  const adjusted = adjustHopTestDetailsForLatencyMode([
+    { success: true, latencyMs: 37, message: null, hopLabel: "1/3", routeLabel: "Heptasky-QHIX -> DataWave-HK" },
+    { success: true, latencyMs: 34, message: null, hopLabel: "2/3", routeLabel: "DataWave-HK -> DataWave-SG" },
+    { success: true, latencyMs: 2, message: null, hopLabel: "3/3", routeLabel: "DataWave-SG -> LegendSG" },
+  ], "remaining-path");
+
+  assert.deepEqual(adjusted.map((detail) => detail.latencyMs), [3, 32, 2]);
+});
 
 test("kernel NAT chain probes convert remaining-path latency into per-hop latency", () => {
   const batchId = createHopTestBatch("fgr", 24);
