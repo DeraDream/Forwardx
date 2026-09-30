@@ -221,6 +221,8 @@ func profileBool(value any) (bool, bool) {
 	return false, false
 }
 
+var profileBGPCountryPattern = regexp.MustCompile(`(?i)country:\s*(?:&nbsp;|\s)*([A-Z]{2})`)
+
 func profileIdentity(cfg Config, client *http.Client, ip string) (map[string]any, error) {
 	result := map[string]any{"ip": ip}
 	var primaryErr error
@@ -326,6 +328,18 @@ func profileIdentity(cfg Config, client *http.Client, ip string) (map[string]any
 				result["registeredCountryCode"] = registeredCode
 				result["ipNature"] = profileIPNature(actualCode, registeredCode)
 				result["ipNatureProvider"] = "RDAP"
+			}
+		}
+	}
+	if profileString(result["ipNature"]) == "" {
+		if _, body, err := profileReadRetry(client, "https://bgp.tools/prefix/"+url.PathEscape(ip), nil, 2); err == nil {
+			if match := profileBGPCountryPattern.FindStringSubmatch(body); len(match) > 1 {
+				actualCode := strings.ToUpper(profileString(result["countryCode"]))
+				registeredCode := strings.ToUpper(strings.TrimSpace(match[1]))
+				result["actualCountryCode"] = actualCode
+				result["registeredCountryCode"] = registeredCode
+				result["ipNature"] = profileIPNature(actualCode, registeredCode)
+				result["ipNatureProvider"] = "BGP.Tools WHOIS"
 			}
 		}
 	}
@@ -606,6 +620,45 @@ func profileDBIPSource(client *http.Client, ip string) profileRiskSource {
 	return source
 }
 
+
+func profileIPAPIDirectSource(client *http.Client, ip string) profileRiskSource {
+	source := profileRiskSource{Name: "ipapi.is"}
+	var payload map[string]any
+	if err := profileGetJSONRetry(client, "https://api.ipapi.is/?q="+url.QueryEscape(ip), &payload, 2); err != nil {
+		source.Error = err.Error()
+		return source
+	}
+	location := profileMap(payload["location"])
+	company := profileMap(payload["company"])
+	asn := profileMap(payload["asn"])
+	source.Country = profileString(location["country_code"])
+	source.NetworkType = firstNonEmpty(profileString(asn["type"]), profileString(company["type"]))
+	source.IsProxy = profileBoolPtr(payload["is_proxy"])
+	source.IsVPN = profileBoolPtr(payload["is_vpn"])
+	source.IsTor = profileBoolPtr(payload["is_tor"])
+	source.IsDatacenter = profileBoolPtr(payload["is_datacenter"])
+	source.IsAbuser = profileBoolPtr(payload["is_abuser"])
+	source.IsBot = profileBoolPtr(payload["is_crawler"])
+	scoreText := profileString(company["abuser_score"])
+	if scoreText != "" {
+		fields := strings.Fields(scoreText)
+		if len(fields) > 0 {
+			if raw, err := strconv.ParseFloat(fields[0], 64); err == nil {
+				score := raw
+				if raw <= 1 {
+					score *= 100
+				}
+				source.Score = &score
+				source.Level = profileRiskLevel(score)
+			}
+		}
+	}
+	if source.Country == "" && source.Score == nil && source.IsProxy == nil && source.IsVPN == nil && source.IsTor == nil && source.IsDatacenter == nil && source.IsAbuser == nil {
+		source.Error = "ipapi.is risk data unavailable"
+	}
+	return source
+}
+
 func profileScamalyticsSource(cfg Config, client *http.Client, ip string) profileRiskSource {
 	source := profileRiskSource{Name: "Scamalytics"}
 	payload, err := profileRiskFromCheckPlace(cfg, client, ip, "scamalytics")
@@ -743,25 +796,28 @@ func profileRiskAnyTrue(sources []profileRiskSource, selector func(profileRiskSo
 }
 
 func profileRisk(cfg Config, client *http.Client, ip string) map[string]any {
-	sources := make([]profileRiskSource, 6)
+	sources := make([]profileRiskSource, 9)
 	var wg sync.WaitGroup
 	checks := []func() profileRiskSource{
 		func() profileRiskSource { return profileProxyCheckSource(cfg, client, ip) },
 		func() profileRiskSource { return profileIPInfoSource(client, ip) },
 		func() profileRiskSource { return profileIPRegistrySource(client, ip) },
+		func() profileRiskSource { return profileIPAPIDirectSource(client, ip) },
 		func() profileRiskSource { return profileDBIPSource(client, ip) },
 		func() profileRiskSource { return profileScamalyticsSource(cfg, client, ip) },
 		func() profileRiskSource { return profileIPQSSource(cfg, client, ip) },
+		func() profileRiskSource { return profileAbuseIPDBSource(cfg, client, ip) },
+		func() profileRiskSource { return profileIP2LocationSource(cfg, client, ip) },
 	}
 	for index := range checks {
 		index := index
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if index >= 4 {
-				// The two remaining check.place-backed sources are optional. Avoid
-				// hitting their Cloudflare edge in the same-millisecond burst.
-				time.Sleep(time.Duration(index-3) * 350 * time.Millisecond)
+			if index >= 5 {
+				// check.place-backed sources are optional. Keep the independent
+				// direct providers fast and stagger only the shared edge requests.
+				time.Sleep(time.Duration(index-4) * 350 * time.Millisecond)
 			}
 			sources[index] = checks[index]()
 		}()
@@ -1009,9 +1065,85 @@ func profileRouting(client *http.Client, ip string, asnValue any) (map[string]an
 	return result, nil
 }
 
+
+var profileBGPToolsPrefixPattern = regexp.MustCompile(`(?s)<p id="network-name" class="heading-xlarge">\s*([^<]+)\s*</p>`)
+var profileBGPToolsASNPattern = regexp.MustCompile(`(?s)Originated by.*?<strong>\s*([^<]+)\s*</strong>`)
+
+func profileHTMLTableRowCount(body, tableID string) int {
+	startToken := `<table id="` + tableID + `"`
+	start := strings.Index(body, startToken)
+	if start < 0 {
+		return -1
+	}
+	end := strings.Index(body[start:], "</table>")
+	if end < 0 {
+		return -1
+	}
+	table := body[start : start+end]
+	rows := strings.Count(table, "<tr")
+	if rows <= 0 {
+		return 0
+	}
+	return rows - 1
+}
+
+func profileBGPTools(client *http.Client, ip string) map[string]any {
+	result := map[string]any{"provider": "BGP.Tools"}
+	code, body, err := profileReadRetry(client, "https://bgp.tools/prefix/"+url.PathEscape(ip), nil, 2)
+	if err != nil || code < 200 || code >= 300 || strings.TrimSpace(body) == "" {
+		if err != nil {
+			result["error"] = err.Error()
+		} else {
+			result["error"] = fmt.Sprintf("HTTP %d", code)
+		}
+		return result
+	}
+	if match := profileBGPToolsPrefixPattern.FindStringSubmatch(body); len(match) > 1 {
+		result["prefix"] = strings.TrimSpace(match[1])
+	}
+	if match := profileBGPToolsASNPattern.FindStringSubmatch(body); len(match) > 1 {
+		asnText := strings.TrimSpace(strings.Split(match[1], ",")[0])
+		result["asn"] = asnText
+	}
+	if upstreams := profileHTMLTableRowCount(body, "upstreamTable"); upstreams >= 0 {
+		if strings.Contains(body, "This network is transit-free.") {
+			result["upstreamCount"] = 0
+			result["transitFree"] = true
+		} else {
+			result["upstreamCount"] = upstreams
+		}
+	}
+	if peers := profileHTMLTableRowCount(body, "peersTable"); peers >= 0 {
+		result["peerCount"] = peers
+	}
+	prefix := profileString(result["prefix"])
+	if prefix != "" {
+		ixCode, ixBody, ixErr := profileReadRetry(client, "https://bgp.tools/ixp-rs-route/"+url.PathEscape(prefix), nil, 2)
+		if ixErr == nil && ixCode >= 200 && ixCode < 300 {
+			if ixCount := profileHTMLTableRowCount(ixBody, "upstreamTable"); ixCount >= 0 {
+				result["bgpToolsIXPCount"] = ixCount
+			}
+		}
+	}
+	return result
+}
+
 func profileNetwork(client *http.Client, ip string, asnValue any) (map[string]any, error) {
 	result := map[string]any{}
 	var errorsFound []string
+	if bgpTools := profileBGPTools(client, ip); len(bgpTools) > 0 {
+		if errText := profileString(bgpTools["error"]); errText != "" {
+			errorsFound = append(errorsFound, "BGP.Tools: "+errText)
+		} else {
+			for key, value := range bgpTools {
+				if key == "provider" {
+					result["bgpProvider"] = value
+					continue
+				}
+				result[key] = value
+			}
+		}
+	}
 	if peering, err := profilePeering(client, asnValue); err == nil {
 		for key, value := range peering {
 			result[key] = value
