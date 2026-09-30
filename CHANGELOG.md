@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.3.381] - 2026-09-30
+
+### 网络画像回报通道修复
+
+- 修复网络画像检测任务已在 Agent 执行，但 Agent 通过加密 `/api/sync` 隧道回报 `/api/agent/network-profile-report` 时被 Panel 白名单拒绝，导致界面长期停留在 0% 的问题。
+- 将网络画像回报接口加入 Agent 加密隧道路由白名单，并新增回归测试，防止后续新增/重构时再次漏掉该路径。
+- 本次仅修复 Panel 端回报路由；Agent `2.2.212` 无需再次升级。
+- Panel / APK Release 升级至 `2.3.381`；Agent 保持 `2.2.212`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.3.380] - 2026-09-30
 
 ### 落地机网络画像与最终 SS 快捷操作

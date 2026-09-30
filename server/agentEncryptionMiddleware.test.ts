@@ -18,7 +18,7 @@ import {
   verifyAgentAuthProofDetails,
 } from "./agentCrypto";
 import { issueAgentAuthChallenge, resetAgentAuthChallengesForTests } from "./agentAuthChallenge";
-import { agentEncryptionMiddleware } from "./agentEncryptionMiddleware";
+import { AGENT_TUNNEL_PATHS, agentEncryptionMiddleware } from "./agentEncryptionMiddleware";
 
 async function withAgentMiddlewareServer(
   run: (baseUrl: string) => Promise<void>,
@@ -59,6 +59,10 @@ test("Agent middleware marks pre-auth failures as rejected", async () => {
     assert.equal(response.status, 401);
     assert.equal(response.headers.get(AGENT_AUTH_RESULT_HEADER), AGENT_AUTH_RESULT_REJECTED);
   });
+});
+
+test("network profile report is allowed through the encrypted Agent tunnel", () => {
+  assert.equal(AGENT_TUNNEL_PATHS.has("/api/agent/network-profile-report"), true);
 });
 
 test("Agent auth proof keeps the full path inside the mounted Agent API router", async () => {
