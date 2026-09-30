@@ -133,6 +133,12 @@ export type SelfTestMeta =
       targetPort?: number;
       method?: "tcp" | "ping";
       latencyMode?: "sum" | "remaining-path" | "multi-source-remaining-path";
+      sourcePort?: number;
+      sourceProtocol?: "tcp" | "udp" | "both";
+      expectedRuleId?: number;
+      expectedForwardType?: string;
+      sampleCount?: number;
+      isFinalTarget?: boolean;
       hopLabel?: string;
       routeLabel?: string;
     }
