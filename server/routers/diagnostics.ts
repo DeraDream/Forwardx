@@ -713,6 +713,7 @@ async function diagnosticSegments(scope: "rule" | "tunnel" | "chain" | "full-cha
       targetPort: Number(probe.targetPort || 0),
       method: (probe.method === "ping" ? "ping" : "tcp") as "ping" | "tcp",
       routeLabel: String(probe.routeLabel || probe.hopLabel || "链路"),
+      isFinalTarget: probe.runtimeDependent === false,
     })).filter((item: DiagnosticSegment) => item.fromHostId > 0 && !!item.targetIp && (item.method === "ping" || item.targetPort > 0));
   }
 
@@ -761,6 +762,7 @@ async function diagnosticSegments(scope: "rule" | "tunnel" | "chain" | "full-cha
             targetPort: Number(probe.targetPort || 0),
             method: (probe.method === "ping" ? "ping" : "tcp") as "ping" | "tcp",
             routeLabel: String(probe.routeLabel || probe.hopLabel || "链路"),
+            isFinalTarget: probe.runtimeDependent === false,
           });
         }
         return segments.filter((item) => item.fromHostId > 0 && item.targetIp && (item.method === "ping" || item.targetPort > 0));
@@ -855,6 +857,7 @@ async function diagnosticSegments(scope: "rule" | "tunnel" | "chain" | "full-cha
           targetPort: Number(probe.targetPort || 0),
           method: (probe.method === "ping" ? "ping" : "tcp") as "ping" | "tcp",
           routeLabel: String(probe.routeLabel || probe.hopLabel || "转发链"),
+          isFinalTarget: probe.runtimeDependent === false,
         });
       }
       const memberIds = await groupHostIds(group);
