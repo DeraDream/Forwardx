@@ -74,6 +74,7 @@ import {
   Mail,
   MoreHorizontal,
   Pencil,
+  KeyRound,
 } from "lucide-react";
 import { useState, useEffect, useMemo, type ElementType } from "react";
 import { toast } from "sonner";
@@ -259,6 +260,9 @@ function UsersContent() {
   const [removeTwoFactorUserId, setRemoveTwoFactorUserId] = useState<number | null>(null);
   const [removeTwoFactorUserName, setRemoveTwoFactorUserName] = useState("");
   const [showRemoveTwoFactor, setShowRemoveTwoFactor] = useState(false);
+  const [passkeyAdminUserId, setPasskeyAdminUserId] = useState<number | null>(null);
+  const [passkeyAdminUserName, setPasskeyAdminUserName] = useState("");
+  const [showPasskeyAdmin, setShowPasskeyAdmin] = useState(false);
 
   // Traffic settings dialog
   const [showTrafficSettings, setShowTrafficSettings] = useState(false);
@@ -492,6 +496,33 @@ function UsersContent() {
       setRemoveTwoFactorUserName("");
     },
     onError: (err) => toast.error(err.message || "移除双因素认证失败"),
+  });
+
+  const passkeyAdminStatusQuery = trpc.users.passkeyStatus.useQuery(
+    { userId: passkeyAdminUserId! },
+    { enabled: showPasskeyAdmin && !!passkeyAdminUserId, retry: false, refetchOnWindowFocus: false },
+  );
+  const adminSetPasskeyEnabledMutation = trpc.users.setPasskeyEnabled.useMutation({
+    onSuccess: async (_data, variables) => {
+      await Promise.all([
+        passkeyAdminStatusQuery.refetch(),
+        utils.users.list.invalidate(),
+        utils.users.listPage.invalidate(),
+      ]);
+      toast.success(variables.enabled ? "该用户 Passkey 登录已开启" : "该用户 Passkey 登录已关闭");
+    },
+    onError: (err) => toast.error(err.message || "更新 Passkey 状态失败"),
+  });
+  const adminResetPasskeysMutation = trpc.users.resetPasskeys.useMutation({
+    onSuccess: async () => {
+      await Promise.all([
+        passkeyAdminStatusQuery.refetch(),
+        utils.users.list.invalidate(),
+        utils.users.listPage.invalidate(),
+      ]);
+      toast.success("该用户 Passkey 已重置");
+    },
+    onError: (err) => toast.error(err.message || "重置 Passkey 失败"),
   });
 
   const sendEmailMutation = trpc.users.sendEmail.useMutation({
@@ -818,6 +849,12 @@ function UsersContent() {
     setRemoveTwoFactorUserId(u.id);
     setRemoveTwoFactorUserName(userLabel(u));
     setShowRemoveTwoFactor(true);
+  };
+
+  const openPasskeyAdminDialog = (u: any) => {
+    setPasskeyAdminUserId(u.id);
+    setPasskeyAdminUserName(userLabel(u));
+    setShowPasskeyAdmin(true);
   };
 
   const handleDeleteUser = () => {
@@ -1184,6 +1221,10 @@ function UsersContent() {
         <DropdownMenuItem disabled={!u.twoFactorEnabled} onSelect={() => openRemoveTwoFactorDialog(u)}>
           <ShieldOff />
           <span>移除 2FA</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => openPasskeyAdminDialog(u)}>
+          <KeyRound />
+          <span>Passkey 管理</span>
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem
@@ -1906,6 +1947,60 @@ function UsersContent() {
               disabled={removeTwoFactorMutation.isPending}
             >
               {removeTwoFactorMutation.isPending ? "移除中..." : "确认移除"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showPasskeyAdmin} onOpenChange={(open) => {
+        setShowPasskeyAdmin(open);
+        if (!open) {
+          setPasskeyAdminUserId(null);
+          setPasskeyAdminUserName("");
+        }
+      }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogTitle>Passkey 管理</DialogTitle>
+          <DialogDescription>
+            管理 "{passkeyAdminUserName}" 的 Passkey 登录。关闭只停用登录，重置会删除全部已绑定 Passkey。
+          </DialogDescription>
+          <div className="space-y-3 py-2">
+            <div className="flex items-center justify-between rounded-lg border border-border/50 bg-muted/20 p-3">
+              <div>
+                <p className="text-sm font-medium">Passkey 登录</p>
+                <p className="text-xs text-muted-foreground">
+                  已绑定 {passkeyAdminStatusQuery.data?.credentialCount ?? 0} 个 Passkey
+                </p>
+              </div>
+              <Badge variant={passkeyAdminStatusQuery.data?.enabled ? "default" : "outline"}>
+                {passkeyAdminStatusQuery.isLoading ? "读取中" : passkeyAdminStatusQuery.data?.enabled ? "已启用" : "已关闭"}
+              </Badge>
+            </div>
+          </div>
+          <DialogFooter className="gap-2 sm:justify-between">
+            <Button
+              variant="destructive"
+              disabled={!passkeyAdminStatusQuery.data?.credentialCount || adminResetPasskeysMutation.isPending}
+              onClick={() => {
+                if (!passkeyAdminUserId) return;
+                if (!window.confirm(`确认重置 "${passkeyAdminUserName}" 的全部 Passkey？`)) return;
+                adminResetPasskeysMutation.mutate({ userId: passkeyAdminUserId });
+              }}
+            >
+              {adminResetPasskeysMutation.isPending ? "重置中..." : "重置 Passkey"}
+            </Button>
+            <Button
+              variant="outline"
+              disabled={!passkeyAdminStatusQuery.data?.credentialCount || adminSetPasskeyEnabledMutation.isPending}
+              onClick={() => {
+                if (!passkeyAdminUserId || !passkeyAdminStatusQuery.data) return;
+                adminSetPasskeyEnabledMutation.mutate({
+                  userId: passkeyAdminUserId,
+                  enabled: !passkeyAdminStatusQuery.data.enabled,
+                });
+              }}
+            >
+              {passkeyAdminStatusQuery.data?.enabled ? "关闭 Passkey" : "重新开启 Passkey"}
             </Button>
           </DialogFooter>
         </DialogContent>

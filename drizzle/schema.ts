@@ -192,6 +192,9 @@ export const users = table("users", {
   twoFactorEnabled: boolean("twoFactorEnabled").notNull().default(false),
   twoFactorSecret: text("twoFactorSecret"),
   twoFactorEnabledAt: epoch("twoFactorEnabledAt"),
+  passkeyEnabled: boolean("passkeyEnabled").notNull().default(false),
+  passkeyUserHandle: text("passkeyUserHandle"),
+  passkeyEnabledAt: epoch("passkeyEnabledAt"),
   browserSessionToken: text("browserSessionToken"),
   mobileSessionToken: text("mobileSessionToken"),
   telegramSessionToken: text("telegramSessionToken"),
@@ -215,6 +218,21 @@ export const authSessions = table("auth_sessions", {
 });
 export type AuthSession = typeof authSessions.$inferSelect;
 export type InsertAuthSession = typeof authSessions.$inferInsert;
+
+export const passkeyCredentials = table("passkey_credentials", {
+  id: serial("id"),
+  userId: int("userId").notNull(),
+  credentialId: text("credentialId").notNull().unique(),
+  publicKeyJwk: longtext("publicKeyJwk").notNull(),
+  algorithm: int("algorithm").notNull(),
+  counter: bigint("counter", { mode: "number" }).notNull().default(0),
+  transports: text("transports"),
+  authenticatorAttachment: varchar("authenticatorAttachment", { length: 32 }),
+  createdAt: epoch("createdAt").notNull().default(nowDefault()),
+  lastUsedAt: epoch("lastUsedAt"),
+});
+export type PasskeyCredential = typeof passkeyCredentials.$inferSelect;
+export type InsertPasskeyCredential = typeof passkeyCredentials.$inferInsert;
 
 export const hosts = table("hosts", {
   id: serial("id"),

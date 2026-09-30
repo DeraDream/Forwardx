@@ -95,6 +95,7 @@ import {
   PanelLeft,
   Pencil,
   Plus,
+  KeyRound,
 } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useMemo, useRef, useState, useEffect } from "react";
@@ -3044,6 +3045,7 @@ type SystemSettingsSaveKey =
   | "panelUrl"
   | "registration"
   | "twoFactor"
+  | "passkey"
   | "sessionPolicy"
   | "updateAutoCheck"
   | "ddns"
@@ -4227,6 +4229,7 @@ function SystemInfoSection() {
   const [panelSslCountdown, setPanelSslCountdown] = useState(5);
   const [registrationEnabled, setRegistrationEnabled] = useState(true);
   const [twoFactorEnabled, setTwoFactorEnabled] = useState(false);
+  const [passkeyEnabled, setPasskeyEnabled] = useState(false);
   const [lookingGlassUserEnabled, setLookingGlassUserEnabled] = useState(true);
   const [forwardProtocols, setForwardProtocols] = useState<ForwardProtocolSettings>(() => normalizeForwardProtocolSettings());
   const [sidebarMenu, setSidebarMenu] = useState<SidebarMenuSettings>(() => normalizeSidebarMenuSettings());
@@ -4291,6 +4294,7 @@ function SystemInfoSection() {
       setPanelSslKeyPem(settings.panelSsl?.keyPem || "");
       setRegistrationEnabled(settings.registrationEnabled ?? true);
       setTwoFactorEnabled(!!settings.twoFactorEnabled);
+      setPasskeyEnabled(!!settings.passkeyEnabled);
       setLookingGlassUserEnabled(settings.lookingGlassUserEnabled ?? true);
       setAllowMultiDeviceLogin(!!settings.allowMultiDeviceLogin);
       setUpdateAutoCheckEnabled(settings.upgrade?.autoCheckEnabled !== false);
@@ -4579,6 +4583,10 @@ function SystemInfoSection() {
 
   const handleSaveTwoFactor = () => {
     saveSystemSettings("twoFactor", { twoFactorEnabled });
+  };
+
+  const handleSavePasskey = () => {
+    saveSystemSettings("passkey", { passkeyEnabled });
   };
 
   const handleSaveDdns = () => {
@@ -5340,6 +5348,34 @@ function SystemInfoSection() {
             <div className="flex justify-end">
               <Button onClick={handleSaveTwoFactor} disabled={isSavingSetting("twoFactor")}>
                 保存双重验证设置
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="border-border/40 bg-card/60 backdrop-blur-md">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <KeyRound className="h-4 w-4 text-primary" />
+              Passkey
+            </CardTitle>
+            <CardDescription>
+              允许用户在个人资料中绑定 Passkey，并在登录页使用浏览器、系统钥匙串或 Bitwarden 登录。
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-border/40 bg-muted/20 p-3">
+              <div>
+                <p className="text-sm font-medium">启用 Passkey 登录</p>
+                <p className="text-xs text-muted-foreground">
+                  关闭后隐藏用户绑定入口和登录页 Passkey 按钮，已绑定凭据会保留。
+                </p>
+              </div>
+              <Switch checked={passkeyEnabled} onCheckedChange={setPasskeyEnabled} />
+            </div>
+            <div className="flex justify-end">
+              <Button onClick={handleSavePasskey} disabled={isSavingSetting("passkey")}>
+                保存 Passkey 设置
               </Button>
             </div>
           </CardContent>

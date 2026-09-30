@@ -74,6 +74,7 @@ export function stripSessionSensitiveFields<T extends Record<string, any>>(user:
   const {
     password,
     twoFactorSecret,
+    passkeyUserHandle,
     browserSessionToken,
     mobileSessionToken,
     telegramSessionToken,
@@ -81,6 +82,7 @@ export function stripSessionSensitiveFields<T extends Record<string, any>>(user:
   } = user as Record<string, any>;
   void password;
   void twoFactorSecret;
+  void passkeyUserHandle;
   void browserSessionToken;
   void mobileSessionToken;
   void telegramSessionToken;

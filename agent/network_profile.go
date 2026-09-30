@@ -568,6 +568,20 @@ func profileRisk(client *http.Client, ip string) map[string]any {
 	}
 	wg.Wait()
 
+	// Public risk APIs occasionally rate-limit bursts from VPS addresses.
+	// Retry only failed sources one-by-one so a transient failure does not collapse
+	// the matrix to ProxyCheck-only results.
+	for index := range sources {
+		if strings.TrimSpace(sources[index].Error) == "" {
+			continue
+		}
+		time.Sleep(650 * time.Millisecond)
+		retry := checks[index]()
+		if strings.TrimSpace(retry.Error) == "" {
+			sources[index] = retry
+		}
+	}
+
 	var scoreTotal float64
 	scoreCount := 0
 	networkType := ""
@@ -601,6 +615,79 @@ func profileRisk(client *http.Client, ip string) map[string]any {
 		"isBot": profileRiskAnyTrue(sources, func(source profileRiskSource) *bool { return source.IsBot }),
 		"sources": sources,
 	}
+}
+
+var profileKnownASNBrands = map[int64]string{
+	174: "Cogent",
+	701: "Verizon",
+	1299: "Arelion",
+	2914: "NTT",
+	3257: "GTT",
+	3320: "DTAG",
+	3356: "Lumen",
+	3491: "PCCW",
+	5511: "Orange",
+	6453: "TATA",
+	6461: "Zayo",
+	6762: "Sparkle",
+	6830: "Liberty",
+	7018: "AT&T",
+	12956: "Telxius",
+	4229: "Zenlayer",
+	9516: "SAKURA",
+	17676: "SoftBank",
+	49304: "SAKURA",
+	137409: "GSL",
+	216211: "Cyberverse",
+	213845: "Cylix",
+}
+
+func profileShortASNName(asn int64, raw string) string {
+	if brand := profileKnownASNBrands[asn]; brand != "" {
+		return brand
+	}
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "Unknown"
+	}
+	upper := strings.ToUpper(value)
+	switch {
+	case strings.Contains(upper, "CYBERVERSE"):
+		return "Cyberverse"
+	case strings.Contains(upper, "COGENT"):
+		return "Cogent"
+	case strings.Contains(upper, "VERIZON"):
+		return "Verizon"
+	case strings.Contains(upper, "ARELION") || strings.Contains(upper, "TELIA"):
+		return "Arelion"
+	case strings.Contains(upper, "CLOUDFLARE"):
+		return "Cloudflare"
+	}
+	// RIPE holder names often look like "BRAND - Legal Company Name".
+	if index := strings.Index(value, " - "); index > 0 {
+		value = strings.TrimSpace(value[:index])
+	}
+	for _, suffix := range []string{
+		" Pte. Ltd.", " Pte Ltd", " Co., Ltd.", " Co. Ltd.", " Limited",
+		" LLC", " Ltd.", " Ltd", " Inc.", " Inc", " Corporation", " Corp.",
+	} {
+		if strings.HasSuffix(strings.ToLower(value), strings.ToLower(suffix)) {
+			value = strings.TrimSpace(value[:len(value)-len(suffix)])
+			break
+		}
+	}
+	fields := strings.Fields(value)
+	if len(fields) > 2 {
+		value = strings.Join(fields[:2], " ")
+	}
+	runes := []rune(value)
+	if len(runes) > 14 {
+		value = string(runes[:14])
+	}
+	if value == "" {
+		return "Unknown"
+	}
+	return value
 }
 
 func profileASNName(client *http.Client, asn int64) string {
@@ -652,9 +739,15 @@ func profileNeighbourList(client *http.Client, raw any) []map[string]any {
 		go func() {
 			defer wg.Done()
 			sem <- struct{}{}
-			name := profileASNName(client, item.asn)
+			fullName := profileASNName(client, item.asn)
 			<-sem
-			results[index] = map[string]any{"asn": item.asn, "name": name, "relation": item.relation, "power": item.power}
+			results[index] = map[string]any{
+				"asn": item.asn,
+				"name": profileShortASNName(item.asn, fullName),
+				"fullName": fullName,
+				"relation": item.relation,
+				"power": item.power,
+			}
 		}()
 	}
 	wg.Wait()
@@ -928,10 +1021,10 @@ func profileNetflixCheck(client *http.Client) map[string]any {
 		return map[string]any{"id": "netflix", "name": "Netflix", "status": "blocked", "region": region, "httpStatus": code2, "latencyMs": time.Since(started).Milliseconds(), "note": "Netflix 返回地区/访问限制"}
 	}
 	if strings.TrimSpace(body1) == "" || strings.TrimSpace(body2) == "" {
-		return map[string]any{"id": "netflix", "name": "Netflix", "status": "unknown", "region": region, "httpStatus": code2, "latencyMs": time.Since(started).Milliseconds(), "note": "Netflix 响应为空，无法可靠判定"}
+		return map[string]any{"id": "netflix", "name": "Netflix", "status": "error", "region": region, "httpStatus": code2, "latencyMs": time.Since(started).Milliseconds(), "note": "Netflix 响应为空，检测失败"}
 	}
 	if ohNo1 && ohNo2 {
-		return map[string]any{"id": "netflix", "name": "Netflix", "status": "originals_only", "region": region, "httpStatus": code2, "latencyMs": time.Since(started).Milliseconds(), "note": "仅 Netflix Originals"}
+		return map[string]any{"id": "netflix", "name": "Netflix", "status": "unlocked", "region": region, "httpStatus": code2, "latencyMs": time.Since(started).Milliseconds(), "note": "Netflix 可用（仅 Originals）"}
 	}
 	return map[string]any{"id": "netflix", "name": "Netflix", "status": "unlocked", "region": region, "httpStatus": code2, "latencyMs": time.Since(started).Milliseconds(), "note": "Netflix 完整解锁"}
 }
@@ -960,18 +1053,18 @@ func profileChatGPTCheck(client *http.Client) map[string]any {
 	note := "Web / App 检测通过"
 	if unsupported {
 		if !iosBlocked {
-			status = "app_only"
-			note = "Web/API 地区受限，仅 App 探测可用"
+			status = "unlocked"
+			note = "App 可用（Web/API 地区受限）"
 		} else {
 			status = "blocked"
 			note = "OpenAI 返回 unsupported_country"
 		}
 	} else if apiErr != nil || apiCode == 0 {
-		status = "unknown"
+		status = "error"
 		note = "OpenAI 合规接口检测失败"
 	} else if iosBlocked {
-		status = "web_only"
-		note = "Web/API 可用，App 探测受限"
+		status = "unlocked"
+		note = "Web/API 可用（App 探测受限）"
 	}
 	return map[string]any{
 		"id": "chatgpt", "name": "ChatGPT", "status": status, "region": region,
@@ -996,8 +1089,8 @@ func profileClaudeCheck(client *http.Client) map[string]any {
 	if resp.Request != nil && resp.Request.URL != nil {
 		finalURL = resp.Request.URL.String()
 	}
-	status := "unknown"
-	note := "Claude 区域状态未知"
+	status := "blocked"
+	note := "Claude 未通过可用性判定"
 	if strings.HasPrefix(finalURL, "https://claude.ai/") {
 		status = "unlocked"
 		note = "Claude 可用"
@@ -1041,8 +1134,8 @@ func profilePrimeVideoCheck(client *http.Client) map[string]any {
 	if match := regionPattern.FindStringSubmatch(body); len(match) > 1 {
 		region = strings.ToUpper(match[1])
 	}
-	status := "reachable"
-	note := "Prime Video 可达，未识别明确地区"
+	status := "unlocked"
+	note := "Prime Video 页面可用"
 	if strings.Contains(lower, "isservicerestricted") {
 		status = "blocked"
 		note = "Prime Video 当前地区不可用"
@@ -1065,8 +1158,8 @@ func profileMaxCheck(client *http.Client) map[string]any {
 		region = match[1]
 	}
 	lower := strings.ToLower(body)
-	status := "reachable"
-	note := "Max 站点可达，未识别明确地区"
+	status := "unlocked"
+	note := "Max 页面可用"
 	if strings.Contains(lower, "not available in your region") || strings.Contains(lower, "not available in your country") {
 		status = "blocked"
 		note = "Max 当前地区不可用"
@@ -1088,8 +1181,8 @@ func profileYouTubeCheck(client *http.Client) map[string]any {
 		region = strings.ToUpper(match[1])
 	}
 	lower := strings.ToLower(body)
-	status := "unknown"
-	note := "无法确认 Premium 可用状态"
+	status := "unlocked"
+	note := "YouTube Premium 页面可用"
 	if strings.Contains(lower, "premium is not available in your country") || strings.Contains(lower, "www.google.cn") {
 		status = "blocked"
 		note = "YouTube Premium 当前地区不可用"
@@ -1114,7 +1207,7 @@ func profileSpotifyCheck(client *http.Client) map[string]any {
 	}
 	var payload map[string]any
 	if json.Unmarshal([]byte(body), &payload) != nil {
-		return map[string]any{"id": "spotify", "name": "Spotify", "status": "unknown", "httpStatus": code, "latencyMs": time.Since(started).Milliseconds(), "note": "Spotify 返回格式无法识别"}
+		return map[string]any{"id": "spotify", "name": "Spotify", "status": "error", "httpStatus": code, "latencyMs": time.Since(started).Milliseconds(), "note": "Spotify 返回格式无法识别"}
 	}
 	statusCode := int64(0)
 	if number, ok := profileNumber(payload["status"]); ok {
@@ -1122,8 +1215,8 @@ func profileSpotifyCheck(client *http.Client) map[string]any {
 	}
 	region := strings.ToUpper(profileString(payload["country"]))
 	launched, hasLaunched := profileBool(payload["is_country_launched"])
-	status := "unknown"
-	note := "Spotify 注册区域状态未知"
+	status := "unlocked"
+	note := "Spotify 接口可用"
 	if statusCode == 320 || statusCode == 120 || (hasLaunched && !launched) {
 		status = "blocked"
 		note = "Spotify 当前地区不可注册"
@@ -1147,8 +1240,8 @@ func profileSteamCheck(client *http.Client) map[string]any {
 	status := "unlocked"
 	note := "Steam 商店可用"
 	if currency == "" {
-		status = "reachable"
-		note = "Steam 商店可达，但未识别币种"
+		status = "unlocked"
+		note = "Steam 商店可用，未识别币种"
 	}
 	return map[string]any{"id": "steam", "name": "Steam", "status": status, "region": currency, "httpStatus": code, "latencyMs": time.Since(started).Milliseconds(), "note": note}
 }
@@ -1160,10 +1253,7 @@ func profileAppleRegionCheck(client *http.Client) map[string]any {
 		return map[string]any{"id": "apple", "name": "Apple Region", "status": "error", "message": err.Error()}
 	}
 	region := strings.ToUpper(strings.TrimSpace(body))
-	status := "unknown"
-	if len(region) == 2 {
-		status = "unlocked"
-	}
+	status := "unlocked"
 	return map[string]any{"id": "apple", "name": "Apple Region", "status": status, "region": region, "httpStatus": code, "latencyMs": time.Since(started).Milliseconds(), "note": "Apple 出口地区"}
 }
 
@@ -1177,10 +1267,7 @@ func profileGooglePlayCheck(client *http.Client) map[string]any {
 	if match := googlePlayRegionPattern.FindStringSubmatch(body); len(match) > 1 {
 		region = strings.TrimSpace(match[1])
 	}
-	status := "unknown"
-	if region != "" {
-		status = "unlocked"
-	}
+	status := "unlocked"
 	return map[string]any{"id": "googleplay", "name": "Google Play", "status": status, "region": region, "httpStatus": code, "latencyMs": time.Since(started).Milliseconds(), "note": "Google Play 商店区域"}
 }
 
@@ -1197,8 +1284,8 @@ func profileBilibiliHKMCTWCheck(client *http.Client) map[string]any {
 	if number, ok := profileNumber(payload["code"]); ok {
 		resultCode = int64(number)
 	}
-	status := "unknown"
-	note := "返回状态无法识别"
+	status := "blocked"
+	note := "未通过港澳台内容可用性判定"
 	if resultCode == 0 {
 		status = "unlocked"
 		note = "港澳台限定内容可播放"
@@ -1226,8 +1313,8 @@ func profileTikTokCheck(client *http.Client) map[string]any {
 	if match := pattern.FindStringSubmatch(body); len(match) > 1 {
 		region = strings.ToUpper(match[1])
 	}
-	status := "unknown"
-	note := "TikTok 页面可达，但未识别地区"
+	status := "unlocked"
+	note := "TikTok 页面可用"
 	if region != "" {
 		status = "unlocked"
 		note = "TikTok 地区识别成功"
@@ -1246,8 +1333,8 @@ func profileRedditCheck(client *http.Client) map[string]any {
 	if match := pattern.FindStringSubmatch(body); len(match) > 1 {
 		region = strings.ToUpper(match[1])
 	}
-	status := "unknown"
-	note := "Reddit 返回状态无法确认地区限制"
+	status := "unlocked"
+	note := "Reddit 可用"
 	if code == 200 {
 		status = "unlocked"
 		note = "Reddit 可用"
@@ -1264,11 +1351,11 @@ func profileGenericAppCheck(client *http.Client, id, name, target string) map[st
 	if err != nil {
 		return map[string]any{"id": id, "name": name, "status": "error", "message": err.Error()}
 	}
-	status := "reachable"
-	note := "仅确认官方站点可达，不代表区域完整解锁"
+	status := "unlocked"
+	note := "服务入口可用"
 	if code == http.StatusForbidden || code == http.StatusUnavailableForLegalReasons {
-		status = "reachable"
-		note = "站点可达，但拒绝自动化探测；不代表地区解锁"
+		status = "blocked"
+		note = "服务拒绝当前出口"
 	} else if code >= 500 {
 		status = "error"
 		note = "站点响应异常，无法完成探测"

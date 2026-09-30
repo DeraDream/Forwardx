@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.3.385] - 2026-09-30
+
+### Passkey 登录与网络画像细节修复
+
+- 新增原生 WebAuthn Passkey 登录：系统设置可全局开启/关闭，用户可在个人资料中绑定多个 Passkey、关闭/重新开启登录或重置凭据；登录页新增“使用 Passkey 登录”按钮，可调起浏览器/系统凭据提供程序及 Bitwarden 等密码管理器。
+- 管理员用户管理新增 Passkey 管理入口，可查看绑定数量、关闭/重新开启指定用户的 Passkey 登录，以及重置其全部 Passkey。
+- Passkey 使用 discoverable credential + user verification，服务端校验 challenge、Origin、RP ID、UP/UV、签名和计数器；支持 ES256、RS256 与 Ed25519，并复用现有 ForwardX 登录会话。
+- 网络画像应用结果简化为“解锁 / 屏蔽”，网络或接口自身异常单独显示“检测错误”，不再展示“仅可达/未知”等中间业务状态。
+- 风险数据源对失败项增加第二轮串行重试，降低公网风险 API 限流导致仅 ProxyCheck 有结果的概率。
+- 互联网互联 ASN 新增品牌缩写：优先展示 Cogent、Verizon、Arelion、NTT、GTT、Lumen、PCCW、Orange、TATA、Zayo、Telxius、SAKURA、SoftBank、Cyberverse、Cylix 等简短名称，完整 RIPE holder 保留在悬浮提示中。
+- Panel / APK Release 升级至 `2.3.385`；Agent 升级至 `2.2.216`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.3.384] - 2026-09-30
 
 ### 网络画像稳定性、原生/广播与互联 ASN 展示

@@ -1674,6 +1674,7 @@ function publicSystemSettings(all: Record<string, string | null>, activeProtocol
     webPortManagement: getWebPortManagement({ publicView: true }),
     registrationEnabled: all.registrationEnabled !== "false",
     twoFactorEnabled: all.twoFactorEnabled === "true",
+    passkeyEnabled: all.passkeyEnabled === "true",
     lookingGlassUserEnabled: all.lookingGlassUserEnabled !== "false",
     allowMultiDeviceLogin: all.allowMultiDeviceLogin === "true",
     pluginsEnabled: all.pluginsEnabled === "true",
@@ -1806,6 +1807,7 @@ export const systemRouter = router({
       personalizationBackground: publicPersonalizationBackground(all),
       registrationEnabled: all.registrationEnabled !== "false",
       twoFactorEnabled: all.twoFactorEnabled === "true",
+    passkeyEnabled: all.passkeyEnabled === "true",
       lookingGlassUserEnabled: all.lookingGlassUserEnabled !== "false",
       allowMultiDeviceLogin: all.allowMultiDeviceLogin === "true",
       pluginsEnabled: all.pluginsEnabled === "true",
@@ -1852,6 +1854,7 @@ export const systemRouter = router({
       webPortManagement: getWebPortManagement(),
       registrationEnabled: all.registrationEnabled !== "false",
       twoFactorEnabled: all.twoFactorEnabled === "true",
+    passkeyEnabled: all.passkeyEnabled === "true",
       lookingGlassUserEnabled: all.lookingGlassUserEnabled !== "false",
       pluginsEnabled: all.pluginsEnabled === "true",
       personalizationBackgroundConfig: readPersonalizationBackground(all),
@@ -2068,6 +2071,7 @@ export const systemRouter = router({
         personalizationTheme: z.string().max(32).optional(),
         registrationEnabled: z.boolean().optional(),
         twoFactorEnabled: z.boolean().optional(),
+        passkeyEnabled: z.boolean().optional(),
         lookingGlassUserEnabled: z.boolean().optional(),
         allowMultiDeviceLogin: z.boolean().optional(),
         updateAutoCheckEnabled: z.boolean().optional(),
@@ -2200,6 +2204,10 @@ export const systemRouter = router({
       if (input.twoFactorEnabled !== undefined) {
         await db.setSetting("twoFactorEnabled", input.twoFactorEnabled ? "true" : "false");
         console.info(`[Settings] 2FA ${input.twoFactorEnabled ? "enabled" : "disabled"}`);
+      }
+      if (input.passkeyEnabled !== undefined) {
+        await db.setSetting("passkeyEnabled", input.passkeyEnabled ? "true" : "false");
+        console.info(`[Settings] Passkey ${input.passkeyEnabled ? "enabled" : "disabled"}`);
       }
       if (input.lookingGlassUserEnabled !== undefined) {
         await db.setSetting("lookingGlassUserEnabled", input.lookingGlassUserEnabled ? "true" : "false");
