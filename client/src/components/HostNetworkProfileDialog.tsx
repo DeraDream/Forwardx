@@ -17,9 +17,14 @@ function statusBadge(status: string) {
   return <Badge variant="secondary">待确认</Badge>;
 }
 
-function riskPercent(data: any) {
+function riskPercent(data: any): number | null {
   const score = Number(data?.score);
-  if (Number.isFinite(score) && score >= 0) return Math.min(100, Math.round(score));
+  if (data?.score !== null && data?.score !== undefined && Number.isFinite(score) && score >= 0) {
+    return Math.min(100, Math.round(score));
+  }
+  const knownFlags = ["isDatacenter", "isVPN", "isProxy", "isTor", "isAbuser"]
+    .filter((key) => typeof data?.[key] === "boolean");
+  if (knownFlags.length === 0) return null;
   let derived = 0;
   if (data?.isDatacenter === true) derived += 20;
   if (data?.isVPN === true) derived += 25;
@@ -56,6 +61,7 @@ export function HostNetworkProfileDialog({
   const identity = data.identity || {};
   const risk = data.risk || {};
   const apps = useMemo(() => Object.values(data.apps || {}) as any[], [data.apps]);
+  const riskScore = riskPercent(risk);
   const steps = current?.steps || {};
   const completed = Object.values(steps).filter((item: any) => ["success", "error", "skip"].includes(item?.status)).length;
   const total = Math.max(5, Object.keys(steps).length);
@@ -103,15 +109,15 @@ export function HostNetworkProfileDialog({
               </div>
               <div className="rounded-lg border p-3">
                 <div className="mb-2 flex items-center gap-2 text-sm font-medium"><ShieldCheck className="h-4 w-4" />IP 风险</div>
-                <div className="mb-2 flex items-center justify-between text-xs"><span>综合风险</span><span>{riskPercent(risk)}/100</span></div>
-                <Progress value={riskPercent(risk)} />
+                <div className="mb-2 flex items-center justify-between text-xs"><span>综合风险</span><span>{riskScore === null ? "暂无评分" : `${riskScore}/100`}</span></div>
+                <Progress value={riskScore ?? 0} />
                 <div className="mt-2 flex flex-wrap gap-1">
                   {risk.isDatacenter === true && <Badge variant="secondary">机房</Badge>}
                   {risk.isVPN === true && <Badge variant="secondary">VPN</Badge>}
                   {risk.isProxy === true && <Badge variant="secondary">Proxy</Badge>}
                   {risk.isTor === true && <Badge variant="destructive">Tor</Badge>}
                   {risk.isAbuser === true && <Badge variant="destructive">滥用记录</Badge>}
-                  {Object.values(risk).filter((v) => v === true).length === 0 && <span className="text-xs text-muted-foreground">风险数据待补全</span>}
+                  {riskScore === null && <span className="text-xs text-muted-foreground">风险评分源未配置或暂未返回</span>}
                 </div>
               </div>
             </div>

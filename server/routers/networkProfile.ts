@@ -5,6 +5,7 @@ import { isAgentVersionAtLeast } from "../agentRouteUtils";
 import { pushAgentNetworkProfile } from "../agentEvents";
 import {
   hostNetworkProfileView,
+  reportHostNetworkProfile,
   startHostNetworkProfileTask,
   type NetworkProfileFamily,
 } from "../hostNetworkProfileState";
@@ -97,6 +98,16 @@ export const networkProfileRouter = router({
         mode: input.mode,
       });
       if (!pushed) {
+        await reportHostNetworkProfile({
+          hostId: input.hostId,
+          taskId: task.taskId,
+          family,
+          stage: "dispatch",
+          status: "error",
+          message: "Agent 实时通道不可用",
+          completed: true,
+          failed: true,
+        });
         throw new Error("Agent 实时通道不可用，请确认 Agent 在线后重试");
       }
       return task;
