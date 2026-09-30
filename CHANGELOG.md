@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.3.387] - 2026-10-01
+
+### 网络画像风险源、IP 属性、IXP 与 ChatGPT 状态修复
+
+- 确认 `ipinfo.check.place` 当前存在 Cloudflare 403 封禁问题；风险画像不再把 5 个数据库全部压在该单点上，改为优先使用 ProxyCheck、IPinfo、ipregistry、DB-IP 四个独立直连来源，并仅将 Scamalytics / IPQS 保留为 check.place 的可选补充。
+- IP 属性在 MaxMind/check.place 不可用时新增 RDAP 注册国家兜底，与当前 GeoIP 国家比较，减少长期显示“待确认”。
+- ChatGPT 检测新增“仅 App / 仅 Web”状态，不再把“App 可用但 Web/API 地区受限”的节点统一标成“解锁”。
+- IP 风险卡新增低/中/高风险彩色标签，0 分低风险也会明确显示绿色“低风险”。
+- IXP 展示修正：PeeringDB 已登记但 `ix_count=0` 时显示“无 IXP 登记”，不再误显示“待检测”。
+- Panel / APK Release 升级至 `2.3.387`；Agent 升级至 `2.2.218`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.3.386] - 2026-10-01
 
 ### 网络画像原生/广播判定与风险源容灾修复
