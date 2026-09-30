@@ -550,14 +550,29 @@ export const diagnosticsRouter = router({
       if (input.scope === "rule") {
         const rule = resource as any;
         const hostIds = await ruleHostIds(rule);
+        const targetRuleId = Number(rule.targetRuleId || 0);
+        const referencedRule = targetRuleId > 0
+          ? await db.getForwardRuleById(targetRuleId) as any
+          : null;
         let landing: any = null;
         if (Number(rule.targetLandingServiceId || 0) > 0) {
           landing = await db.getLandingServiceById(Number(rule.targetLandingServiceId), true) as any;
         }
+
         nodes = await buildNodes(hostIds, Number(landing?.hostId || 0));
-        target = landing
-          ? `${String(landing.endpoint || "")}:${Number(landing.port || 0)}`
-          : `${String(rule.targetIp || "")}:${Number(rule.targetPort || 0)}`;
+
+        const referencedFinalIp = String(referencedRule?.targetIp || "").trim();
+        const referencedFinalPort = Number(referencedRule?.targetPort || 0);
+        const referencedFinalName = String(referencedRule?.name || "").trim();
+        if (referencedRule && referencedFinalIp && referencedFinalPort > 0) {
+          target = referencedFinalName
+            ? `${referencedFinalName} · ${referencedFinalIp}:${referencedFinalPort}`
+            : `${referencedFinalIp}:${referencedFinalPort}`;
+        } else {
+          target = landing
+            ? `${String(landing.endpoint || "")}:${Number(landing.port || 0)}`
+            : `${String(rule.targetIp || "")}:${Number(rule.targetPort || 0)}`;
+        }
 
         checks.push(check("config-resource", "配置完整性", "pass", "规则存在"));
         checks.push(check(
@@ -579,22 +594,38 @@ export const diagnosticsRouter = router({
           rule.isRunning ? "当前标记为运行中" : "当前未标记为运行中",
           "该项来自面板运行状态；实时连通性以本次诊断探测结果为准",
         ));
-        checks.push(check(
-          "target",
-          "目标配置",
-          String(rule.targetIp || landing?.endpoint || "").trim() && Number(rule.targetPort || landing?.port || 0) > 0 ? "pass" : "fail",
-          target || "目标地址不完整",
-        ));
-        if (Number(rule.targetLandingServiceId || 0) > 0) {
+
+        if (referencedRule) {
+          const chainEntry = String(rule.targetIp || "").trim();
+          const chainEntryPort = Number(rule.targetPort || 0);
           checks.push(check(
-            "landing",
-            "落地 SS",
-            !landing ? "fail" : landing.isEnabled === false || String(landing.status || "") === "disabled" ? "warn" : "pass",
-            !landing ? "引用的落地 SS 不存在" : String(landing.statusMessage || landing.status || "已配置"),
-            landing ? `${landing.name || "落地 SS"} · ${landing.endpoint || ""}:${landing.port || ""}` : null,
+            "target",
+            "目标配置",
+            referencedFinalIp && referencedFinalPort > 0 ? "pass" : "fail",
+            `引用转发链 · ${referencedFinalName || "已完成转发"}`,
+            chainEntry && chainEntryPort > 0
+              ? `链路入口 ${chainEntry}:${chainEntryPort}；最终出口 ${target || "未解析"}`
+              : `最终出口 ${target || "未解析"}`,
           ));
+          checks.push(check("landing", "落地 SS", "skip", "当前规则引用已完成转发链，落地由被引用链路负责"));
         } else {
-          checks.push(check("landing", "落地 SS", "skip", "当前规则使用直连目标"));
+          checks.push(check(
+            "target",
+            "目标配置",
+            String(rule.targetIp || landing?.endpoint || "").trim() && Number(rule.targetPort || landing?.port || 0) > 0 ? "pass" : "fail",
+            target || "目标地址不完整",
+          ));
+          if (Number(rule.targetLandingServiceId || 0) > 0) {
+            checks.push(check(
+              "landing",
+              "落地 SS",
+              !landing ? "fail" : landing.isEnabled === false || String(landing.status || "") === "disabled" ? "warn" : "pass",
+              !landing ? "引用的落地 SS 不存在" : String(landing.statusMessage || landing.status || "已配置"),
+              landing ? `${landing.name || "落地 SS"} · ${landing.endpoint || ""}:${landing.port || ""}` : null,
+            ));
+          } else {
+            checks.push(check("landing", "落地 SS", "skip", "当前规则使用直连目标"));
+          }
         }
       }
 
