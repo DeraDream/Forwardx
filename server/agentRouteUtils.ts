@@ -126,7 +126,12 @@ export function buildMetaAgentSelfTestPayload(
       forwardType: "diagnostic",
       protocol: method,
       method,
-      sourcePort: 0,
+      sourcePort: agentInteger(meta.sourcePort),
+      sourceProtocol: meta.sourceProtocol || "both",
+      expectedRuleId: agentInteger(meta.expectedRuleId),
+      expectedForwardType: String(meta.expectedForwardType || ""),
+      sampleCount: Math.max(1, Math.min(8, agentInteger(meta.sampleCount) || 1)),
+      isFinalTarget: meta.isFinalTarget === true,
       targetIp: meta.targetIp,
       targetPort: agentInteger(meta.targetPort),
     };
