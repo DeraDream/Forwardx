@@ -317,6 +317,19 @@ func profileIdentity(cfg Config, client *http.Client, ip string) (map[string]any
 	}
 
 	if profileString(result["ipNature"]) == "" {
+		var rdap map[string]any
+		if err := profileGetJSONRetry(client, "https://rdap.org/ip/"+url.PathEscape(ip), &rdap, 2); err == nil {
+			actualCode := strings.ToUpper(profileString(result["countryCode"]))
+			registeredCode := strings.ToUpper(profileString(rdap["country"]))
+			if registeredCode != "" {
+				result["actualCountryCode"] = actualCode
+				result["registeredCountryCode"] = registeredCode
+				result["ipNature"] = profileIPNature(actualCode, registeredCode)
+				result["ipNatureProvider"] = "RDAP"
+			}
+		}
+	}
+	if profileString(result["ipNature"]) == "" {
 		result["ipNature"] = "unknown"
 	}
 
@@ -438,6 +451,158 @@ func profileProxyCheckSource(cfg Config, client *http.Client, ip string) profile
 	source.IsTor = &tor
 	source.IsDatacenter = &server
 	source.Country = profileString(item["country"])
+	return source
+}
+
+
+func profileIPInfoSource(client *http.Client, ip string) profileRiskSource {
+	source := profileRiskSource{Name: "IPinfo"}
+	var payload map[string]any
+	if err := profileGetJSONRetry(client, "https://ipinfo.io/widget/demo/"+url.PathEscape(ip), &payload, 2); err != nil {
+		source.Error = err.Error()
+		return source
+	}
+	data := profileMap(payload["data"])
+	if data == nil {
+		source.Error = "no IPinfo data"
+		return source
+	}
+	privacy := profileMap(data["privacy"])
+	asn := profileMap(data["asn"])
+	source.Country = profileString(data["country"])
+	source.NetworkType = profileString(asn["type"])
+	source.IsProxy = profileBoolPtr(privacy["proxy"])
+	source.IsVPN = profileBoolPtr(privacy["vpn"])
+	source.IsTor = profileBoolPtr(privacy["tor"])
+	source.IsDatacenter = profileBoolPtr(privacy["hosting"])
+	if source.Country == "" && source.IsProxy == nil && source.IsVPN == nil && source.IsTor == nil && source.IsDatacenter == nil {
+		source.Error = "IPinfo privacy data unavailable"
+	}
+	return source
+}
+
+var profileIPRegistryKeyPattern = regexp.MustCompile(`apiKey=["']([A-Za-z0-9]+)["']`)
+
+func profileIPRegistrySource(client *http.Client, ip string) profileRiskSource {
+	source := profileRiskSource{Name: "ipregistry"}
+	key := "sb69ksjcajfs4c"
+	if _, body, err := profileReadRetry(client, "https://ipregistry.co", nil, 2); err == nil {
+		if match := profileIPRegistryKeyPattern.FindStringSubmatch(body); len(match) > 1 {
+			key = match[1]
+		}
+	}
+	headers := map[string]string{
+		"Accept": "application/json,text/plain,*/*",
+		"Origin": "https://ipregistry.co",
+		"Referer": "https://ipregistry.co/",
+	}
+	code, body, err := profileReadRetry(client, "https://api.ipregistry.co/"+url.PathEscape(ip)+"?hostname=true&key="+url.QueryEscape(key), headers, 2)
+	if err != nil {
+		source.Error = err.Error()
+		return source
+	}
+	if code < 200 || code >= 300 {
+		source.Error = fmt.Sprintf("HTTP %d", code)
+		return source
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(body), &payload); err != nil {
+		source.Error = err.Error()
+		return source
+	}
+	location := profileMap(payload["location"])
+	country := profileMap(location["country"])
+	security := profileMap(payload["security"])
+	connection := profileMap(payload["connection"])
+	source.Country = profileString(country["code"])
+	source.NetworkType = profileString(connection["type"])
+	source.IsProxy = profileBoolPtr(security["is_proxy"])
+	source.IsVPN = profileBoolPtr(security["is_vpn"])
+	tor := profileBoolPtr(security["is_tor"])
+	if tor == nil {
+		tor = profileBoolPtr(security["is_tor_exit"])
+	}
+	source.IsTor = tor
+	source.IsDatacenter = profileBoolPtr(security["is_cloud_provider"])
+	source.IsAbuser = profileBoolPtr(security["is_abuser"])
+	if source.Country == "" && source.IsProxy == nil && source.IsVPN == nil && source.IsTor == nil && source.IsDatacenter == nil {
+		source.Error = "ipregistry security data unavailable"
+	}
+	return source
+}
+
+func profilePostRaw(client *http.Client, rawURL, contentType, body string, headers map[string]string) (int, string, error) {
+	req, err := http.NewRequest(http.MethodPost, rawURL, strings.NewReader(body))
+	if err != nil {
+		return 0, "", err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36")
+	req.Header.Set("Accept", "application/json,text/plain,*/*")
+	req.Header.Set("Content-Type", contentType)
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, "", err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, networkProfileBodyLimit))
+	if err != nil {
+		return resp.StatusCode, "", err
+	}
+	return resp.StatusCode, string(raw), nil
+}
+
+var profileDBIPKeyPattern = regexp.MustCompile(`data-api-key=["']([^"']+)["']`)
+
+func profileDBIPSource(client *http.Client, ip string) profileRiskSource {
+	source := profileRiskSource{Name: "DB-IP"}
+	_, coreBody, err := profileReadRetry(client, "https://db-ip.com/api/core/", map[string]string{"Accept": "*/*"}, 2)
+	if err != nil {
+		source.Error = err.Error()
+		return source
+	}
+	match := profileDBIPKeyPattern.FindStringSubmatch(coreBody)
+	if len(match) < 2 {
+		source.Error = "DB-IP web key unavailable"
+		return source
+	}
+	endpoint := "https://api.db-ip.com/v2/" + url.PathEscape(match[1]) + "/self?convertCurrencies"
+	headers := map[string]string{"Origin": "https://db-ip.com", "Referer": "https://db-ip.com/"}
+	code, body, err := profilePostRaw(client, endpoint, "text/plain;charset=UTF-8", `[["11.49","EUR"],["139.90","EUR"],["699.90","EUR"]]`, headers)
+	if err != nil {
+		source.Error = err.Error()
+		return source
+	}
+	if code < 200 || code >= 300 {
+		source.Error = fmt.Sprintf("HTTP %d", code)
+		return source
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(body), &payload); err != nil {
+		source.Error = err.Error()
+		return source
+	}
+	returnedIP := profileString(payload["ipAddress"])
+	if returnedIP != "" && returnedIP != ip {
+		source.Error = "DB-IP returned a different egress IP"
+		return source
+	}
+	source.Country = profileString(payload["countryCode"])
+	source.IsProxy = profileBoolPtr(payload["isProxy"])
+	source.IsBot = profileBoolPtr(payload["isCrawler"])
+	switch strings.ToLower(profileString(payload["threatLevel"])) {
+	case "low":
+		score := float64(0); source.Score = &score; source.Level = "low"
+	case "medium":
+		score := float64(50); source.Score = &score; source.Level = "medium"
+	case "high":
+		score := float64(100); source.Score = &score; source.Level = "very_high"
+	}
+	if source.Country == "" && source.Score == nil && source.IsProxy == nil && source.IsBot == nil {
+		source.Error = "DB-IP threat data unavailable"
+	}
 	return source
 }
 
@@ -582,21 +747,21 @@ func profileRisk(cfg Config, client *http.Client, ip string) map[string]any {
 	var wg sync.WaitGroup
 	checks := []func() profileRiskSource{
 		func() profileRiskSource { return profileProxyCheckSource(cfg, client, ip) },
+		func() profileRiskSource { return profileIPInfoSource(client, ip) },
+		func() profileRiskSource { return profileIPRegistrySource(client, ip) },
+		func() profileRiskSource { return profileDBIPSource(client, ip) },
 		func() profileRiskSource { return profileScamalyticsSource(cfg, client, ip) },
 		func() profileRiskSource { return profileIPQSSource(cfg, client, ip) },
-		func() profileRiskSource { return profileIPAPISource(cfg, client, ip) },
-		func() profileRiskSource { return profileAbuseIPDBSource(cfg, client, ip) },
-		func() profileRiskSource { return profileIP2LocationSource(cfg, client, ip) },
 	}
 	for index := range checks {
 		index := index
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if index > 0 {
-				// check.place-backed databases are more reliable when requests are not fired
-				// as a same-millisecond burst from one VPS address.
-				time.Sleep(time.Duration(index-1) * 220 * time.Millisecond)
+			if index >= 4 {
+				// The two remaining check.place-backed sources are optional. Avoid
+				// hitting their Cloudflare edge in the same-millisecond burst.
+				time.Sleep(time.Duration(index-3) * 350 * time.Millisecond)
 			}
 			sources[index] = checks[index]()
 		}()
@@ -1083,23 +1248,29 @@ func profileChatGPTCheck(client *http.Client) map[string]any {
 		}
 	}
 	iosCode, iosBody, iosErr := profileRead(client, "https://ios.chat.openai.com/", nil)
-	iosBlocked := iosErr != nil || strings.Contains(strings.ToLower(iosBody), "vpn")
+	iosBlocked := iosErr == nil && strings.Contains(strings.ToLower(iosBody), "vpn")
 	status := "unlocked"
 	note := "Web / App 检测通过"
 	if unsupported {
-		if !iosBlocked {
-			status = "unlocked"
-			note = "App 可用（Web/API 地区受限）"
-		} else {
+		if iosErr == nil && !iosBlocked {
+			status = "app_only"
+			note = "仅 App 可用（Web/API 地区受限）"
+		} else if iosErr == nil && iosBlocked {
 			status = "blocked"
-			note = "OpenAI 返回 unsupported_country"
+			note = "Web/API 与 App 均受限"
+		} else {
+			status = "error"
+			note = "Web/API 地区受限，App 探测失败"
 		}
 	} else if apiErr != nil || apiCode == 0 {
 		status = "error"
 		note = "OpenAI 合规接口检测失败"
+	} else if iosErr != nil {
+		status = "error"
+		note = "Web/API 可用，App 探测失败"
 	} else if iosBlocked {
-		status = "unlocked"
-		note = "Web/API 可用（App 探测受限）"
+		status = "web_only"
+		note = "仅 Web/API 可用（App 受限）"
 	}
 	return map[string]any{
 		"id": "chatgpt", "name": "ChatGPT", "status": status, "region": region,
