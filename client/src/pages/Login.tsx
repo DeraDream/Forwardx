@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Eye, EyeOff, Loader2, Sun, Moon, RefreshCw, UserPlus, LogIn, Send, Settings as SettingsIcon, Server, ShieldCheck, Zap } from "lucide-react";
+import { Eye, EyeOff, Loader2, Sun, Moon, RefreshCw, UserPlus, LogIn, Send, Settings as SettingsIcon, Server, ShieldCheck, Zap, KeyRound } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { toast } from "sonner";
 import { useTheme } from "@/contexts/ThemeContext";
@@ -13,6 +13,7 @@ import { useLocation } from "wouter";
 import { mobileAuth } from "@/lib/mobileAuth";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "@/components/ui/dialog";
 import { ACCOUNT_DISABLED_ERR_MSG } from "@shared/const";
+import { getPasskeyCredential } from "@/lib/passkey";
 
 const REGISTRATION_CLOSED_MESSAGE = "当前注册未开放，请联系管理员";
 
@@ -276,6 +277,11 @@ export default function Login() {
     retry: false,
     refetchOnWindowFocus: false,
   });
+  const { data: publicInfo } = trpc.system.publicInfo.useQuery(undefined, {
+    enabled: hasMobilePanelUrl && mode === "login",
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
   const registrationEnabled = emailConfig?.registrationEnabled !== false;
   const siteTitle = "ForwardX";
   const logoSrc = resolvedTheme === "dark" ? "/logo-dark.png" : "/logo-light.png";
@@ -414,6 +420,34 @@ export default function Login() {
       }
     },
   });
+
+  const finishPasskeyLoginMutation = trpc.auth.finishPasskeyLogin.useMutation({
+    onSuccess: (data) => {
+      if (mobileAuth.isNative) mobileAuth.setToken(data.mobileToken);
+      rememberLoginWelcome(data);
+      utils.auth.me.invalidate();
+      window.location.href = "/";
+    },
+    onError: (error) => {
+      if (error.message === ACCOUNT_DISABLED_ERR_MSG && mobileAuth.isNative) mobileAuth.clear();
+      toast.error(error.message || "Passkey 登录失败");
+    },
+  });
+
+  const handlePasskeyLogin = async () => {
+    if (!hasMobilePanelUrl) {
+      setShowPanelSettings(true);
+      return;
+    }
+    try {
+      const options = await utils.auth.beginPasskeyLogin.fetch();
+      const credential = await getPasskeyCredential(options);
+      finishPasskeyLoginMutation.mutate({ credential, mobile: mobileAuth.isNative || undefined });
+    } catch (error: any) {
+      if (error?.name === "NotAllowedError") return;
+      toast.error(error?.message || "Passkey 登录失败");
+    }
+  };
 
   const telegramLoginMutation = trpc.telegram.login.useMutation({
     onSuccess: (data) => {
@@ -1024,6 +1058,30 @@ export default function Login() {
                   </>
                 )}
               </Button>
+
+              {publicInfo?.passkeyEnabled && (
+                <>
+                  <div className="relative flex items-center justify-center">
+                    <div className="absolute inset-x-0 top-1/2 h-px bg-border" />
+                    <span className="relative bg-card px-3 text-xs text-muted-foreground">或</span>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="lg"
+                    className="w-full gap-2 rounded-full bg-slate-800 text-slate-100 hover:bg-slate-700 dark:bg-slate-700 dark:hover:bg-slate-600"
+                    onClick={() => void handlePasskeyLogin()}
+                    disabled={isPending || finishPasskeyLoginMutation.isPending}
+                  >
+                    {finishPasskeyLoginMutation.isPending ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <KeyRound className="h-4 w-4 text-blue-300" />
+                    )}
+                    使用 Passkey 登录
+                  </Button>
+                </>
+              )}
 
               {showTelegramLoginSlot && (
                 <div className="auth-telegram-slot space-y-3">
