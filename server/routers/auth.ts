@@ -25,6 +25,7 @@ import {
   twoFactorChallengeIssueState,
 } from "../authRateLimit";
 import { pruneMapEntries, setBoundedMapValue } from "../boundedCache";
+import { beginPasskeyLogin, beginPasskeyRegistration, finishPasskeyLogin, finishPasskeyRegistration } from "../passkey";
 
 const emailCodeStore = new Map<string, { code: string; expiresAt: number; lastSentAt: number; attempts: number }>();
 const emailSendIpStore = new Map<string, LoginFailEntry>();
@@ -492,6 +493,126 @@ export const authRouter = router({
       }
       console.info(`[Auth] Password changed userId=${ctx.user.id}`);
       return { success: true };
+    }),
+
+  passkeyStatus: protectedProcedure.query(async ({ ctx }) => {
+    const globalEnabled = (await db.getSetting("passkeyEnabled")) === "true";
+    const credentials = await db.getUserPasskeyCredentials(ctx.user.id);
+    return {
+      globalEnabled,
+      enabled: !!(ctx.user as any).passkeyEnabled,
+      enabledAt: (ctx.user as any).passkeyEnabledAt || null,
+      credentials: credentials.map((item) => ({
+        credentialId: item.credentialId,
+        transports: String(item.transports || "").split(",").filter(Boolean),
+        authenticatorAttachment: item.authenticatorAttachment,
+        createdAt: item.createdAt,
+        lastUsedAt: item.lastUsedAt,
+      })),
+    };
+  }),
+
+  beginPasskeyRegistration: protectedProcedure
+    .input(z.object({ password: z.string().min(1, "请输入当前密码") }))
+    .mutation(async ({ input, ctx }) => {
+      const globalEnabled = (await db.getSetting("passkeyEnabled")) === "true";
+      if (!globalEnabled) throw new Error("管理员尚未启用 Passkey 功能");
+      if (!(await db.verifyUserPassword(ctx.user.id, input.password))) throw new Error("当前密码错误");
+      const userHandle = await db.ensureUserPasskeyHandle(ctx.user.id);
+      const credentials = await db.getUserPasskeyCredentials(ctx.user.id);
+      return beginPasskeyRegistration({
+        req: ctx.req,
+        userId: ctx.user.id,
+        username: ctx.user.username,
+        displayName: ctx.user.name,
+        userHandle,
+        existingCredentialIds: credentials.map((item) => item.credentialId),
+      });
+    }),
+
+  finishPasskeyRegistration: protectedProcedure
+    .input(z.object({ credential: z.any() }))
+    .mutation(async ({ input, ctx }) => {
+      const globalEnabled = (await db.getSetting("passkeyEnabled")) === "true";
+      if (!globalEnabled) throw new Error("管理员尚未启用 Passkey 功能");
+      const verified = finishPasskeyRegistration({ userId: ctx.user.id, credential: input.credential });
+      const existing = await db.getPasskeyCredentialByCredentialId(verified.credentialId);
+      if (existing) {
+        if (existing.userId !== ctx.user.id) throw new Error("该 Passkey 已绑定其他账户");
+        await db.setUserPasskeyEnabled(ctx.user.id, true);
+        return { success: true, credentialId: verified.credentialId, existed: true };
+      }
+      await db.savePasskeyCredential({ userId: ctx.user.id, ...verified });
+      console.info(`[Auth] Passkey registered userId=${ctx.user.id}`);
+      return { success: true, credentialId: verified.credentialId, existed: false };
+    }),
+
+  setPasskeyEnabled: protectedProcedure
+    .input(z.object({ enabled: z.boolean(), password: z.string().min(1, "请输入当前密码") }))
+    .mutation(async ({ input, ctx }) => {
+      const globalEnabled = (await db.getSetting("passkeyEnabled")) === "true";
+      if (!globalEnabled && input.enabled) throw new Error("管理员尚未启用 Passkey 功能");
+      if (!(await db.verifyUserPassword(ctx.user.id, input.password))) throw new Error("当前密码错误");
+      await db.setUserPasskeyEnabled(ctx.user.id, input.enabled);
+      console.info(`[Auth] Passkey ${input.enabled ? "enabled" : "disabled"} userId=${ctx.user.id}`);
+      return { success: true };
+    }),
+
+  removePasskey: protectedProcedure
+    .input(z.object({
+      credentialId: z.string().min(16),
+      password: z.string().min(1, "请输入当前密码"),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      if (!(await db.verifyUserPassword(ctx.user.id, input.password))) throw new Error("当前密码错误");
+      const remaining = await db.deleteUserPasskeyCredential(ctx.user.id, input.credentialId);
+      console.info(`[Auth] Passkey removed userId=${ctx.user.id} remaining=${remaining}`);
+      return { success: true, remaining };
+    }),
+
+  resetPasskeys: protectedProcedure
+    .input(z.object({ password: z.string().min(1, "请输入当前密码") }))
+    .mutation(async ({ input, ctx }) => {
+      if (!(await db.verifyUserPassword(ctx.user.id, input.password))) throw new Error("当前密码错误");
+      await db.resetUserPasskeys(ctx.user.id);
+      console.info(`[Auth] Passkeys reset userId=${ctx.user.id}`);
+      return { success: true };
+    }),
+
+  beginPasskeyLogin: publicProcedure.query(async ({ ctx }) => {
+    const globalEnabled = (await db.getSetting("passkeyEnabled")) === "true";
+    if (!globalEnabled) throw new Error("Passkey 登录未启用");
+    return beginPasskeyLogin(ctx.req);
+  }),
+
+  finishPasskeyLogin: publicProcedure
+    .input(z.object({ credential: z.any(), mobile: z.boolean().optional() }))
+    .mutation(async ({ input, ctx }) => {
+      const globalEnabled = (await db.getSetting("passkeyEnabled")) === "true";
+      if (!globalEnabled) throw new Error("Passkey 登录未启用");
+      const credentialId = String(input.credential?.rawId || input.credential?.id || "").trim();
+      if (!credentialId) throw new Error("Passkey 凭据无效");
+      const stored = await db.getPasskeyCredentialByCredentialId(credentialId);
+      if (!stored) throw new Error("未找到该 Passkey，请使用账号密码登录");
+      const user = await db.getUserById(stored.userId);
+      if (!user || (user as any).accountEnabled === false) {
+        throw new TRPCError({ code: "UNAUTHORIZED", message: ACCOUNT_DISABLED_ERR_MSG });
+      }
+      if (!(user as any).passkeyEnabled) throw new Error("该账户的 Passkey 登录已关闭");
+      const verified = finishPasskeyLogin({
+        credential: input.credential,
+        publicKeyJwk: stored.publicKeyJwk,
+        algorithm: Number(stored.algorithm),
+        storedCounter: Number(stored.counter || 0),
+      });
+      const expectedHandle = String((user as any).passkeyUserHandle || "").trim();
+      if (verified.userHandle && expectedHandle && verified.userHandle !== expectedHandle) {
+        throw new Error("Passkey 用户句柄不匹配");
+      }
+      await db.updatePasskeyCredentialCounter(stored.id, verified.counter);
+      clearLoginFail(getRequestIp(ctx), user.username);
+      console.info(`[Auth] Passkey login success userId=${user.id} username=${maskIdentifier(user.username)} ip=${getRequestIp(ctx)}`);
+      return createLoginSession(ctx, user, input.mobile);
     }),
 
   twoFactorStatus: protectedProcedure.query(async ({ ctx }) => {
