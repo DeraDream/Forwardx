@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"sort"
@@ -142,7 +143,170 @@ func releaseSelfTest(testID int) {
 	selfTestInFlightMu.Unlock()
 }
 
+func diagnosticDNSLookup(target string) (int, []string, string, bool) {
+	host := strings.Trim(strings.TrimSpace(target), "[]")
+	if host == "" {
+		return 0, nil, "目标为空", false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return 0, []string{ip.String()}, "", true
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	addrs, err := net.DefaultResolver.LookupHost(ctx, host)
+	elapsed := int(time.Since(started).Milliseconds())
+	if err != nil {
+		return elapsed, nil, err.Error(), false
+	}
+	seen := map[string]bool{}
+	clean := make([]string, 0, len(addrs))
+	for _, addr := range addrs {
+		addr = strings.TrimSpace(addr)
+		if addr == "" || seen[addr] {
+			continue
+		}
+		seen[addr] = true
+		clean = append(clean, addr)
+		if len(clean) >= 8 {
+			break
+		}
+	}
+	if len(clean) == 0 {
+		return elapsed, nil, "未返回地址", false
+	}
+	return elapsed, clean, "", false
+}
+
+func diagnosticJitter(samples []int) int {
+	if len(samples) < 2 {
+		return 0
+	}
+	total := 0
+	for i := 1; i < len(samples); i++ {
+		delta := samples[i] - samples[i-1]
+		if delta < 0 {
+			delta = -delta
+		}
+		total += delta
+	}
+	return total / (len(samples) - 1)
+}
+
+func diagnosticAverage(samples []int) int {
+	if len(samples) == 0 {
+		return 0
+	}
+	total := 0
+	for _, sample := range samples {
+		total += sample
+	}
+	return total / len(samples)
+}
+
+func diagnosticPortInspection(t selfTest) map[string]any {
+	result := map[string]any{
+		"sourcePort":      t.SourcePort,
+		"sourceProtocol":  strings.TrimSpace(t.SourceProtocol),
+		"expectedRuleId":  t.ExpectedRuleID,
+		"expectedForwardType": strings.TrimSpace(t.ExpectedForwardType),
+	}
+	if t.SourcePort <= 0 {
+		result["available"] = false
+		return result
+	}
+
+	state := readLocalRuntimeStatePayload()
+	matches := make([]localRuntimeRuleState, 0)
+	var exact *localRuntimeRuleState
+	for i := range state.Rules {
+		item := state.Rules[i]
+		if item.Port != t.SourcePort {
+			continue
+		}
+		matches = append(matches, item)
+		if t.ExpectedRuleID > 0 && item.RuleID == t.ExpectedRuleID {
+			copy := item
+			exact = &copy
+		}
+	}
+	if exact == nil && t.ExpectedRuleID <= 0 && len(matches) == 1 {
+		copy := matches[0]
+		exact = &copy
+	}
+
+	result["available"] = true
+	result["managedRuleCount"] = len(matches)
+	result["runtimeReady"] = exact != nil && exact.Ready
+	if exact != nil {
+		result["actualRuleId"] = exact.RuleID
+		result["actualForwardType"] = exact.ForwardType
+		result["actualProtocol"] = exact.Protocol
+	}
+
+	conflictingRuleIDs := make([]int, 0)
+	for _, item := range matches {
+		if t.ExpectedRuleID > 0 && item.RuleID == t.ExpectedRuleID {
+			continue
+		}
+		if item.RuleID > 0 {
+			conflictingRuleIDs = append(conflictingRuleIDs, item.RuleID)
+		}
+	}
+	if len(conflictingRuleIDs) > 0 {
+		result["conflictingRuleIds"] = conflictingRuleIDs
+	}
+
+	snapshot := newRuntimeListenSnapshot()
+	protocols := runtimeProtocols(t.SourceProtocol)
+	ownerLines := make([]string, 0)
+	socketPresent := false
+	for _, proto := range protocols {
+		var lines []string
+		if normalizeRuntimeProtocol(proto) == "udp" {
+			lines = snapshot.udpPorts[t.SourcePort]
+		} else {
+			lines = snapshot.tcpPorts[t.SourcePort]
+		}
+		if len(lines) > 0 {
+			socketPresent = true
+		}
+		for _, line := range lines {
+			if len(ownerLines) >= 6 {
+				break
+			}
+			if len(line) > 320 {
+				line = line[:320]
+			}
+			ownerLines = append(ownerLines, line)
+		}
+	}
+	result["socketPresent"] = socketPresent
+	if len(ownerLines) > 0 {
+		result["listenerOwners"] = ownerLines
+	}
+
+	forwardType := strings.ToLower(strings.TrimSpace(t.ExpectedForwardType))
+	processBackend := forwardType == "gost" || forwardType == "realm" || forwardType == "socat" ||
+		forwardType == "nginx" || forwardType == "forwardx" ||
+		strings.Contains(forwardType, "tunnel")
+	portConflict := len(conflictingRuleIDs) > 0
+	if processBackend && exact == nil && socketPresent {
+		portConflict = true
+	}
+	result["portConflict"] = portConflict
+	return result
+}
+
 func handleSelfTest(cfg Config, t selfTest) {
+	diagnostic := strings.EqualFold(strings.TrimSpace(t.Kind), "diagnostic-hop")
+	dnsMs, dnsAddresses, dnsError, dnsSkipped := 0, []string(nil), "", false
+	var portInspection map[string]any
+	if diagnostic {
+		dnsMs, dnsAddresses, dnsError, dnsSkipped = diagnosticDNSLookup(t.TargetIP)
+		portInspection = diagnosticPortInspection(t)
+	}
+
 	method := strings.ToLower(strings.TrimSpace(t.Method))
 	if method == "" {
 		method = strings.ToLower(strings.TrimSpace(t.Protocol))
@@ -164,6 +328,21 @@ func handleSelfTest(cfg Config, t selfTest) {
 			"latencyMs":       latency,
 			"message":         msg,
 		}
+		if diagnostic {
+			payload["dnsMs"] = dnsMs
+			payload["dnsAddresses"] = dnsAddresses
+			payload["dnsError"] = dnsError
+			payload["dnsSkipped"] = dnsSkipped
+			payload["portInspection"] = portInspection
+			payload["latencySamples"] = []int{latency}
+			payload["sampleAttempts"] = 1
+			if reachable {
+				payload["sampleSuccesses"] = 1
+			} else {
+				payload["sampleSuccesses"] = 0
+			}
+			payload["isFinalTarget"] = t.IsFinalTarget
+		}
 		if err := post(cfg, "/api/agent/selftest-result", payload, &map[string]any{}); err != nil {
 			logSelfTestReportError(t.TestID, t.TargetIP, err)
 		}
@@ -171,6 +350,8 @@ func handleSelfTest(cfg Config, t selfTest) {
 	}
 
 	latency, reachable, resolvedTarget := 0, false, ""
+	latencySamples := []int{}
+	sampleAttempts := 0
 	minimumAttempts := selfTestTCPAttempts(t)
 	readinessWindow := selfTestTCPReadinessWindow(t)
 	startedAt := time.Now()
@@ -208,15 +389,18 @@ func handleSelfTest(cfg Config, t selfTest) {
 		}
 		if reachable {
 			latencies := []int{latency}
+			sampleAttempts = 1
 			sampleCount := selfTestTCPSampleCount(t)
-			for attempts := 1; len(latencies) < sampleCount && attempts < sampleCount; attempts++ {
+			for attempts := 1; attempts < sampleCount; attempts++ {
 				time.Sleep(180 * time.Millisecond)
+				sampleAttempts++
 				sample, ok, _ := tcpLatencyResolved(t.TargetIP, t.TargetPort, selfTestTCPAttemptTimeout)
 				if ok {
 					latencies = append(latencies, sample)
 				}
 			}
-			latency = medianLatency(latencies)
+			latencySamples = append(latencySamples, latencies...)
+			latency = medianLatency(append([]int(nil), latencies...))
 			break
 		}
 		if attempt+1 >= minimumAttempts && (readinessWindow <= 0 || time.Since(startedAt) >= readinessWindow) {
@@ -240,6 +424,28 @@ func handleSelfTest(cfg Config, t selfTest) {
 		"latencyMs":       latency,
 		"message":         msg,
 	}
+	if diagnostic {
+		if sampleAttempts == 0 {
+			sampleAttempts = selfTestTCPAttempts(t)
+		}
+		payload["latencySamples"] = latencySamples
+		payload["sampleAttempts"] = sampleAttempts
+		payload["sampleSuccesses"] = len(latencySamples)
+		payload["jitterMs"] = diagnosticJitter(latencySamples)
+		payload["averageLatencyMs"] = diagnosticAverage(latencySamples)
+		if len(latencySamples) > 0 {
+			sorted := append([]int(nil), latencySamples...)
+			sort.Ints(sorted)
+			payload["minLatencyMs"] = sorted[0]
+			payload["maxLatencyMs"] = sorted[len(sorted)-1]
+		}
+		payload["dnsMs"] = dnsMs
+		payload["dnsAddresses"] = dnsAddresses
+		payload["dnsError"] = dnsError
+		payload["dnsSkipped"] = dnsSkipped
+		payload["portInspection"] = portInspection
+		payload["isFinalTarget"] = t.IsFinalTarget
+	}
 	if resolvedTarget != "" {
 		payload["resolvedTargetIp"] = resolvedTarget
 	}
@@ -258,6 +464,16 @@ func selfTestTCPAttempts(t selfTest) int {
 }
 
 func selfTestTCPSampleCount(t selfTest) int {
+	if strings.EqualFold(strings.TrimSpace(t.Kind), "diagnostic-hop") {
+		count := t.SampleCount
+		if count <= 0 {
+			count = 5
+		}
+		if count > 8 {
+			count = 8
+		}
+		return count
+	}
 	if strings.EqualFold(strings.TrimSpace(t.Kind), "full-chain") {
 		return 3
 	}
