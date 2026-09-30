@@ -627,6 +627,103 @@ func profileChatGPTCheck(client *http.Client) map[string]any {
 	}
 }
 
+func profileClaudeCheck(client *http.Client) map[string]any {
+	started := time.Now()
+	req, err := http.NewRequest(http.MethodGet, "https://claude.ai/", nil)
+	if err != nil {
+		return map[string]any{"id": "claude", "name": "Claude", "status": "error", "message": err.Error()}
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125 Safari/537.36")
+	resp, err := client.Do(req)
+	if err != nil {
+		return map[string]any{"id": "claude", "name": "Claude", "status": "error", "message": err.Error()}
+	}
+	defer resp.Body.Close()
+	finalURL := ""
+	if resp.Request != nil && resp.Request.URL != nil {
+		finalURL = resp.Request.URL.String()
+	}
+	status := "unknown"
+	note := "Claude 区域状态未知"
+	if strings.HasPrefix(finalURL, "https://claude.ai/") {
+		status = "unlocked"
+		note = "Claude 可用"
+	} else if strings.Contains(finalURL, "anthropic.com/app-unavailable-in-region") {
+		status = "blocked"
+		note = "Claude 当前地区不可用"
+	}
+	return map[string]any{"id": "claude", "name": "Claude", "status": status, "httpStatus": resp.StatusCode, "latencyMs": time.Since(started).Milliseconds(), "note": note, "finalUrl": finalURL}
+}
+
+func profileGeminiCheck(client *http.Client) map[string]any {
+	started := time.Now()
+	code, body, err := profileReadRetry(client, "https://gemini.google.com/", nil, 2)
+	if err != nil {
+		return map[string]any{"id": "gemini", "name": "Gemini", "status": "error", "message": err.Error()}
+	}
+	available := strings.Contains(body, "45631641,null,true")
+	region := ""
+	regionPattern := regexp.MustCompile(`,2,1,200,"([A-Z]{3})"`)
+	if match := regionPattern.FindStringSubmatch(body); len(match) > 1 {
+		region = match[1]
+	}
+	status := "blocked"
+	note := "Gemini 当前地区不可用"
+	if available {
+		status = "unlocked"
+		note = "Gemini 可用"
+	}
+	return map[string]any{"id": "gemini", "name": "Gemini", "status": status, "region": region, "httpStatus": code, "latencyMs": time.Since(started).Milliseconds(), "note": note}
+}
+
+func profilePrimeVideoCheck(client *http.Client) map[string]any {
+	started := time.Now()
+	code, body, err := profileReadRetry(client, "https://www.primevideo.com/", nil, 2)
+	if err != nil {
+		return map[string]any{"id": "prime", "name": "Prime Video", "status": "error", "message": err.Error()}
+	}
+	lower := strings.ToLower(body)
+	region := ""
+	regionPattern := regexp.MustCompile(`"currentTerritory"\\s*:\\s*"([^"]+)"`)
+	if match := regionPattern.FindStringSubmatch(body); len(match) > 1 {
+		region = strings.ToUpper(match[1])
+	}
+	status := "unknown"
+	note := "Prime Video 区域状态未知"
+	if strings.Contains(lower, "isservicerestricted") {
+		status = "blocked"
+		note = "Prime Video 当前地区不可用"
+	} else if region != "" {
+		status = "unlocked"
+		note = "Prime Video 可用"
+	}
+	return map[string]any{"id": "prime", "name": "Prime Video", "status": status, "region": region, "httpStatus": code, "latencyMs": time.Since(started).Milliseconds(), "note": note}
+}
+
+func profileMaxCheck(client *http.Client) map[string]any {
+	started := time.Now()
+	code, body, err := profileReadRetry(client, "https://www.max.com/", nil, 2)
+	if err != nil {
+		return map[string]any{"id": "max", "name": "Max", "status": "error", "message": err.Error()}
+	}
+	region := ""
+	regionPattern := regexp.MustCompile(`countryCode=([A-Z]{2})`)
+	if match := regionPattern.FindStringSubmatch(body); len(match) > 1 {
+		region = match[1]
+	}
+	lower := strings.ToLower(body)
+	status := "unknown"
+	note := "Max 区域状态未知"
+	if strings.Contains(lower, "not available in your region") || strings.Contains(lower, "not available in your country") {
+		status = "blocked"
+		note = "Max 当前地区不可用"
+	} else if region != "" {
+		status = "unlocked"
+		note = "Max 可用"
+	}
+	return map[string]any{"id": "max", "name": "Max", "status": status, "region": region, "httpStatus": code, "latencyMs": time.Since(started).Milliseconds(), "note": note}
+}
+
 func profileYouTubeCheck(client *http.Client) map[string]any {
 	started := time.Now()
 	code, body, err := profileReadRetry(client, "https://www.youtube.com/premium", map[string]string{"Accept-Language": "en-US,en;q=0.9"}, 2)
@@ -656,7 +753,7 @@ func profileSpotifyCheck(client *http.Client) map[string]any {
 		"birth_day": {"11"}, "birth_month": {"11"}, "birth_year": {"2000"},
 		"collect_personal_info": {"undefined"}, "creation_flow": {""},
 		"creation_point": {"https://www.spotify.com/"}, "displayname": {"ForwardX"},
-		"gender": {"male"}, "iagree": {"1"}, "platform": {"www"}, "send-email": {"0"}, "thirdpartyemail": {"0"},
+		"gender": {"male"}, "iagree": {"1"}, "key": {"a1e486e2729f46d6bb368d6b2bcda326"}, "platform": {"www"}, "send-email": {"0"}, "thirdpartyemail": {"0"},
 	}
 	code, body, err := profilePostForm(client, "https://spclient.wg.spotify.com/signup/public/v1/account", values, map[string]string{"Accept": "application/json"})
 	if err != nil {
@@ -784,8 +881,16 @@ func profileAppCheck(client *http.Client, id, name, target string) map[string]an
 		return profileNetflixCheck(client)
 	case "chatgpt":
 		return profileChatGPTCheck(client)
+	case "claude":
+		return profileClaudeCheck(client)
+	case "gemini":
+		return profileGeminiCheck(client)
 	case "youtube":
 		return profileYouTubeCheck(client)
+	case "prime":
+		return profilePrimeVideoCheck(client)
+	case "max":
+		return profileMaxCheck(client)
 	case "spotify":
 		return profileSpotifyCheck(client)
 	case "steam":
