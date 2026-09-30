@@ -5,6 +5,7 @@ import DashboardLayout from "@/components/DashboardLayout";
 import { LatencyRating } from "@/components/LatencyRating";
 import { LinkQualityDialog, type LinkQualityTarget } from "@/components/observability/LinkQualityDialog";
 import { DiagnosticDialog, type DiagnosticTarget } from "@/components/diagnostics/DiagnosticDialog";
+import { HostNetworkProfileDialog } from "@/components/HostNetworkProfileDialog";
 import {
   LinkTestProbeView,
   parseLinkTestMessage,
@@ -140,6 +141,7 @@ import {
   Rows3,
   GitBranch,
   Globe,
+  Globe2,
   Gauge,
   RotateCcw,
   Server,
@@ -3319,6 +3321,7 @@ function RulesContent() {
   } | null>(null);
   const [qualityRule, setQualityRule] = useState<LinkQualityTarget | null>(null);
   const [diagnosticRule, setDiagnosticRule] = useState<DiagnosticTarget | null>(null);
+  const [networkProfileTarget, setNetworkProfileTarget] = useState<{ hostId: number; hostName: string } | null>(null);
 
   useEffect(() => {
     prefetchReactGlobe();
@@ -8026,16 +8029,31 @@ function RulesContent() {
     toast[copied ? "success" : "error"](copied ? `已复制入口端口: ${port}` : "复制失败，请手动复制");
   };
 
-  const copyLinkedLandingService = async (rule: any) => {
-    const serviceId = Number(rule?.targetLandingServiceId || 0);
-    if (!serviceId) return;
+  const resolveFinalLanding = async (rule: any) => {
+    try {
+      return await utils.networkProfile.resolveRuleLanding.fetch({ ruleId: Number(rule?.id || 0) });
+    } catch (error: any) {
+      toast.error(error?.message || "无法解析最终落地 SS");
+      return null;
+    }
+  };
+
+  const copyFinalLandingService = async (rule: any) => {
+    const resolved = await resolveFinalLanding(rule);
+    if (!resolved?.serviceId) return toast.error("当前规则最终目标没有可复制的 SS");
     const services = landingServicesQuery.data || await utils.landing.list.fetch();
-    const service = services.find((item: any) => Number(item.id) === serviceId);
+    const service = services.find((item: any) => Number(item.id) === Number(resolved.serviceId));
     const endpoint = String(service?.endpoint || service?.host?.exitIp || service?.host?.ip || "").trim();
     const link = endpoint && service?.password ? `ss://${btoa(unescape(encodeURIComponent(`${service.method}:${service.password}`))).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "")}@${endpoint}:${service.port}#${encodeURIComponent(service.name)}` : "";
-    if (!link) return toast.error("引用的 SS 链接不可用");
+    if (!link) return toast.error("最终 SS 配置不可用");
     const copied = await copyTextToClipboard(link);
-    toast[copied ? "success" : "error"](copied ? "SS 链接已复制" : "复制失败，请手动复制");
+    toast[copied ? "success" : "error"](copied ? "最终 SS 链接已复制" : "复制失败，请手动复制");
+  };
+
+  const openFinalLandingNetworkProfile = async (rule: any) => {
+    const resolved = await resolveFinalLanding(rule);
+    if (!resolved?.hostId) return toast.error("当前规则最终目标没有关联落地机");
+    setNetworkProfileTarget({ hostId: Number(resolved.hostId), hostName: String(resolved.hostName || "落地机") });
   };
 
   const renderResolvedStatusDot = (
@@ -8773,10 +8791,15 @@ function RulesContent() {
         >
           <Stethoscope className="h-3.5 w-3.5" />
         </Button>
-        {(ruleCategory === "local" || ruleCategory === "chain") && Number(rule.targetLandingServiceId) > 0 && (
-          <Button variant="ghost" size="icon" className="h-8 w-8" title="复制所引用的 SS 链接" onClick={() => void copyLinkedLandingService(rule)}>
-            <Copy className="h-3.5 w-3.5" />
-          </Button>
+        {(ruleCategory === "local" || ruleCategory === "chain") && (Number(rule.targetLandingServiceId) > 0 || Number(rule.targetRuleId) > 0) && (
+          <>
+            <Button variant="ghost" size="icon" className="h-8 w-8" title="复制最终 SS 链接" onClick={() => void copyFinalLandingService(rule)}>
+              <Copy className="h-3.5 w-3.5" />
+            </Button>
+            <Button variant="ghost" size="icon" className="h-8 w-8" title="最终落地机网络画像" onClick={() => void openFinalLandingNetworkProfile(rule)}>
+              <Globe2 className="h-3.5 w-3.5" />
+            </Button>
+          </>
         )}
         <Button
           variant="ghost"
@@ -10088,6 +10111,14 @@ function RulesContent() {
         open={!!diagnosticRule}
         onOpenChange={(open) => !open && setDiagnosticRule(null)}
       />
+      {networkProfileTarget && (
+        <HostNetworkProfileDialog
+          hostId={networkProfileTarget.hostId}
+          hostName={networkProfileTarget.hostName}
+          open
+          onOpenChange={(open) => !open && setNetworkProfileTarget(null)}
+        />
+      )}
 
       {selfTestRule && (
         <SelfTestDialog

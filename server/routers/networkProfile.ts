@@ -18,7 +18,42 @@ async function requireHost(hostId: number, user: any) {
   return host;
 }
 
+async function resolveFinalLandingForRule(ruleId: number, user: any, visited = new Set<number>()): Promise<any | null> {
+  const id = Number(ruleId || 0);
+  if (!Number.isInteger(id) || id <= 0 || visited.has(id)) return null;
+  visited.add(id);
+  const rule = await db.getForwardRuleById(id) as any;
+  if (!rule || rule.pendingDelete === true) return null;
+  if (String(user?.role) !== "admin" && Number(rule.userId) !== Number(user?.id)) throw new Error("无权查看此规则");
+
+  const serviceId = Number(rule.targetLandingServiceId || 0);
+  if (serviceId > 0) {
+    const service = await db.getLandingServiceById(serviceId, false) as any;
+    if (!service || service.isFullChainManaged || service.isExternal || Number(service.hostId || 0) <= 0) return null;
+    if (String(user?.role) !== "admin" && Number(service.userId) !== Number(user?.id)) throw new Error("无权查看该落地服务");
+    const host = await db.getHostById(Number(service.hostId)) as any;
+    if (!host) return null;
+    return {
+      ruleId: id,
+      serviceId: Number(service.id),
+      serviceName: String(service.name || `落地 SS #${service.id}`),
+      hostId: Number(host.id),
+      hostName: String(host.name || `主机 #${host.id}`),
+    };
+  }
+
+  const targetRuleId = Number(rule.targetRuleId || 0);
+  if (targetRuleId > 0) return resolveFinalLandingForRule(targetRuleId, user, visited);
+  return null;
+}
+
 export const networkProfileRouter = router({
+  resolveRuleLanding: protectedProcedure
+    .input(z.object({ ruleId: z.number().int().positive() }))
+    .query(async ({ input, ctx }) => {
+      return resolveFinalLandingForRule(input.ruleId, ctx.user);
+    }),
+
   status: protectedProcedure
     .input(z.object({ hostId: z.number().int().positive() }))
     .query(async ({ input, ctx }) => {
