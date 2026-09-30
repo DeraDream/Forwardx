@@ -415,7 +415,7 @@ function decorateSegmentsWithRuntimeRules(segments: DiagnosticSegment[], runtime
       sourceProtocol: expected ? normalizeDiagnosticProtocol(expected.protocol) : segment.sourceProtocol,
       expectedRuleId: Number(expected?.id || segment.expectedRuleId || 0) || undefined,
       expectedForwardType: String(expected?.forwardType || segment.expectedForwardType || "").trim() || undefined,
-      isFinalTarget: segment.isFinalTarget === true || index === segments.length - 1,
+      isFinalTarget: segment.isFinalTarget === true,
     };
   });
 }
@@ -697,6 +697,7 @@ async function tunnelSegments(tunnel: any, finalTarget?: { ip: string; port: num
         targetPort: finalTarget.port,
         method: "tcp",
         routeLabel: `${exitHost?.name || "出口"} -> ${finalTarget.ip}:${finalTarget.port}`,
+        isFinalTarget: true,
       });
     }
   }
@@ -786,6 +787,7 @@ async function diagnosticSegments(scope: "rule" | "tunnel" | "chain" | "full-cha
           targetPort: Number(probe.targetPort || 0),
           method: (probe.method === "ping" ? "ping" : "tcp") as "ping" | "tcp",
           routeLabel: String(probe.routeLabel || probe.hopLabel || "链路"),
+          isFinalTarget: probe.runtimeDependent === false,
         })).filter((item: DiagnosticSegment) => item.fromHostId > 0 && !!item.targetIp && (item.method === "ping" || item.targetPort > 0));
       }
 
@@ -800,6 +802,7 @@ async function diagnosticSegments(scope: "rule" | "tunnel" | "chain" | "full-cha
           targetPort: Number(rule.targetPort || 0),
           method: "tcp" as const,
           routeLabel: `${sourceHost?.name || "入口"} -> ${String(rule.targetIp || "目标")}:${Number(rule.targetPort || 0)}`,
+          isFinalTarget: true,
         };
       }));
     }
@@ -813,6 +816,7 @@ async function diagnosticSegments(scope: "rule" | "tunnel" | "chain" | "full-cha
           targetPort: Number(rule.targetPort),
           method: "tcp",
           routeLabel: `${sourceHost?.name || "入口"} -> ${rule.targetIp}:${rule.targetPort}`,
+          isFinalTarget: true,
         }]
       : [];
   }
@@ -876,6 +880,7 @@ async function diagnosticSegments(scope: "rule" | "tunnel" | "chain" | "full-cha
     }
     previousExitHostId = hostId;
   }
+  if (segments.length > 0) segments[segments.length - 1].isFinalTarget = true;
   return segments;
 }
 
