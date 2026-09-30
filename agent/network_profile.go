@@ -140,6 +140,7 @@ func profileAppCheck(client *http.Client, id, name, target string) map[string]an
 }
 
 func runNetworkProfile(cfg Config, request networkProfileRequest) {
+	startedAt := time.Now()
 	request.TaskID = strings.TrimSpace(request.TaskID)
 	request.Family = strings.ToLower(strings.TrimSpace(request.Family))
 	request.Mode = strings.ToLower(strings.TrimSpace(request.Mode))
@@ -237,7 +238,7 @@ func runNetworkProfile(cfg Config, request networkProfileRequest) {
 		TaskID: request.TaskID, Family: request.Family, Stage: "complete",
 		Status: "success", Data: map[string]any{
 			"ip": ip,
-			"durationSeconds": strconv.FormatFloat(time.Since(time.Now()).Seconds(), 'f', 1, 64),
+			"durationSeconds": strconv.FormatFloat(time.Since(startedAt).Seconds(), 'f', 1, 64),
 		}, Completed: true,
 	})
 }

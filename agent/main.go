@@ -4781,6 +4781,13 @@ func runAgentEventStream(cfg Config) error {
 					}
 				} else if msg.Type == "agent-selftest" {
 					go pullSelfTestsOnce(cfg)
+				} else if msg.Type == "agent-network-profile" {
+					var request networkProfileRequest
+					if err := json.Unmarshal(msg.Data, &request); err != nil {
+						logf("decode agent-network-profile payload: %v", err)
+					} else {
+						go runNetworkProfile(cfg, request)
+					}
 				} else if msg.Type == "agent-refresh" {
 					var refresh agentRefreshEvent
 					if err := json.Unmarshal(msg.Data, &refresh); err != nil {
