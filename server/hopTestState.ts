@@ -141,6 +141,19 @@ function remainingPathSegmentDetails(details: HopTestResult[], multiSource: bool
   }));
 }
 
+export function adjustHopTestDetailsForLatencyMode(
+  details: HopTestResult[],
+  latencyMode: HopTestLatencyMode,
+) {
+  if (latencyMode === "remaining-path") {
+    return remainingPathSegmentDetails(details, false);
+  }
+  if (latencyMode === "multi-source-remaining-path") {
+    return remainingPathSegmentDetails(details, true);
+  }
+  return details;
+}
+
 function remainingPathTotal(details: HopTestResult[], multiSource: boolean) {
   const initialIndexes = multiSource ? multiSourceInitialIndexes(details) : null;
   const candidates = initialIndexes
@@ -184,8 +197,8 @@ export function recordHopTestResult(
     : effectiveSuccessMode === "multi-source"
       ? multiSourceAggregateSuccess(rawDetails)
       : rawSuccessfulDetails.length === rawDetails.length;
-  const details = aggregateSuccess && (options.latencyMode === "remaining-path" || multiSourceRemainingPath)
-    ? remainingPathSegmentDetails(rawDetails, multiSourceRemainingPath)
+  const details = aggregateSuccess
+    ? adjustHopTestDetailsForLatencyMode(rawDetails, options.latencyMode || "sum")
     : rawDetails;
   const successfulDetails = details.filter((value) => value.success);
   const verifiedAggregateSuccess = effectiveSuccessMode === "any"
