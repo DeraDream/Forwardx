@@ -43,3 +43,22 @@ func TestNetworkProfilePatterns(t *testing.T) {
 		t.Fatalf("steam currency parse failed: %#v", match)
 	}
 }
+
+func TestProfileShortASNName(t *testing.T) {
+	cases := []struct {
+		asn  int64
+		raw  string
+		want string
+	}{
+		{174, "COGENT-174 - Cogent Communications", "Cogent"},
+		{701, "UUNET - MCI Communications Services, Inc.", "Verizon"},
+		{1299, "TWELVE99 - Arelion Sweden AB", "Arelion"},
+		{216211, "CYBERVERSE-BACKBONE - Cyberverse LLC", "Cyberverse"},
+		{213845, "Cylix Cylix Pte. Ltd.", "Cylix"},
+	}
+	for _, tc := range cases {
+		if got := profileShortASNName(tc.asn, tc.raw); got != tc.want {
+			t.Fatalf("profileShortASNName(%d, %q)=%q want=%q", tc.asn, tc.raw, got, tc.want)
+		}
+	}
+}
