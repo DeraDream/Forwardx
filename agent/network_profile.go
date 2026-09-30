@@ -39,7 +39,6 @@ func profileHTTPClient(family string, timeout time.Duration) *http.Client {
 	}
 	dialer := &net.Dialer{Timeout: 4 * time.Second, KeepAlive: 20 * time.Second}
 	transport := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
 		DialContext: func(ctx context.Context, _ string, address string) (net.Conn, error) {
 			return dialer.DialContext(ctx, network, address)
 		},
@@ -91,26 +90,158 @@ func detectProfileIP(client *http.Client, family string) (string, error) {
 	return ip, nil
 }
 
-func profileIdentity(client *http.Client, ip string) (map[string]any, error) {
-	var payload map[string]any
-	if err := profileGetJSON(client, "https://api.ipapi.is/?q="+url.QueryEscape(ip), &payload); err != nil {
-		return nil, err
+func profileMap(value any) map[string]any {
+	if value == nil {
+		return nil
 	}
-	result := map[string]any{
-		"ip": ip,
-		"company": payload["company"],
-		"asn": payload["asn"],
-		"city": payload["city"],
-		"region": payload["region"],
-		"country": payload["country"],
-		"timezone": payload["timezone"],
+	result, _ := value.(map[string]any)
+	return result
+}
+
+func profileString(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case json.Number:
+		return typed.String()
+	case float64:
+		if typed == float64(int64(typed)) {
+			return strconv.FormatInt(int64(typed), 10)
+		}
+		return strconv.FormatFloat(typed, 'f', -1, 64)
+	case int:
+		return strconv.Itoa(typed)
+	case int64:
+		return strconv.FormatInt(typed, 10)
+	case nil:
+		return ""
+	default:
+		return strings.TrimSpace(fmt.Sprint(typed))
 	}
-	for _, key := range []string{"is_datacenter", "is_vpn", "is_proxy", "is_tor", "is_abuser", "datacenter"} {
-		if value, ok := payload[key]; ok {
-			result[key] = value
+}
+
+func profileNumber(value any) (float64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		return typed, true
+	case float32:
+		return float64(typed), true
+	case int:
+		return float64(typed), true
+	case int64:
+		return float64(typed), true
+	case json.Number:
+		number, err := typed.Float64()
+		return number, err == nil
+	case string:
+		number, err := strconv.ParseFloat(strings.TrimSpace(typed), 64)
+		return number, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func profileBool(value any) (bool, bool) {
+	switch typed := value.(type) {
+	case bool:
+		return typed, true
+	case string:
+		switch strings.ToLower(strings.TrimSpace(typed)) {
+		case "true", "yes", "1":
+			return true, true
+		case "false", "no", "0":
+			return false, true
 		}
 	}
+	return false, false
+}
+
+func profileIdentity(client *http.Client, ip string) (map[string]any, error) {
+	result := map[string]any{"ip": ip}
+	var primaryErr error
+
+	var who map[string]any
+	if err := profileGetJSON(client, "https://ipwho.is/"+url.PathEscape(ip), &who); err == nil {
+		success, hasSuccess := profileBool(who["success"])
+		if !hasSuccess || success {
+			connection := profileMap(who["connection"])
+			timezone := profileMap(who["timezone"])
+			flag := profileMap(who["flag"])
+			asnNumber := int64(0)
+			if connection != nil {
+				asnNumber = profileASNNumber(connection["asn"])
+			}
+			org := ""
+			isp := ""
+			domain := ""
+			if connection != nil {
+				org = profileString(connection["org"])
+				isp = profileString(connection["isp"])
+				domain = profileString(connection["domain"])
+			}
+			asnLabel := ""
+			if asnNumber > 0 {
+				asnLabel = fmt.Sprintf("AS%d", asnNumber)
+				if org != "" {
+					asnLabel += " " + org
+				}
+			}
+			result["asn"] = asnLabel
+			result["asnNumber"] = asnNumber
+			result["company"] = firstNonEmpty(org, isp)
+			result["isp"] = isp
+			result["domain"] = domain
+			result["city"] = profileString(who["city"])
+			result["region"] = profileString(who["region"])
+			result["country"] = profileString(who["country"])
+			result["countryCode"] = profileString(who["country_code"])
+			result["continent"] = profileString(who["continent"])
+			result["timezone"] = profileString(timezone["id"])
+			result["flag"] = profileString(flag["emoji"])
+			result["identityProvider"] = "ipwho.is"
+		} else {
+			primaryErr = fmt.Errorf("ipwho.is lookup failed")
+		}
+	} else {
+		primaryErr = err
+	}
+
+	var ipapi map[string]any
+	if err := profileGetJSON(client, "https://api.ipapi.is/?q="+url.QueryEscape(ip), &ipapi); err == nil {
+		for _, key := range []string{"is_datacenter", "is_vpn", "is_proxy", "is_tor", "is_abuser"} {
+			if value, ok := ipapi[key]; ok {
+				if _, valid := profileBool(value); valid {
+					result[key] = value
+				}
+			}
+		}
+		if current := profileString(result["company"]); current == "" {
+			if company := profileString(ipapi["company"]); company != "" && !strings.HasPrefix(company, "map[") {
+				result["company"] = company
+			}
+		}
+		if current := profileString(result["asn"]); current == "" {
+			if asn := profileString(ipapi["asn"]); asn != "" && !strings.HasPrefix(asn, "map[") {
+				result["asn"] = asn
+				result["asnNumber"] = profileASNNumber(asn)
+			}
+		}
+		result["classificationProvider"] = "ipapi.is"
+	}
+
+	if profileString(result["asn"]) == "" && primaryErr != nil {
+		return nil, primaryErr
+	}
 	return result, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func profileASNNumber(value any) int64 {
@@ -128,6 +259,139 @@ func profileASNNumber(value any) int64 {
 		return 0
 	}
 	return asn
+}
+
+func profileRiskLevel(score float64) string {
+	switch {
+	case score <= 25:
+		return "low"
+	case score <= 50:
+		return "medium"
+	case score <= 75:
+		return "high"
+	default:
+		return "very_high"
+	}
+}
+
+func profileProxyRisk(client *http.Client, ip string) (map[string]any, error) {
+	var payload map[string]any
+	endpoint := "https://proxycheck.io/v2/" + url.PathEscape(ip) + "?vpn=1&asn=1&risk=1&days=7"
+	if err := profileGetJSON(client, endpoint, &payload); err != nil {
+		return nil, err
+	}
+	if !strings.EqualFold(profileString(payload["status"]), "ok") {
+		return nil, fmt.Errorf("proxycheck.io status=%s", profileString(payload["status"]))
+	}
+	item := profileMap(payload[ip])
+	if item == nil {
+		return nil, fmt.Errorf("proxycheck.io returned no IP record")
+	}
+	score, hasScore := profileNumber(item["risk"])
+	proxy := strings.EqualFold(profileString(item["proxy"]), "yes")
+	networkType := profileString(item["type"])
+	lowerType := strings.ToLower(networkType)
+	result := map[string]any{
+		"provider": "proxycheck.io",
+		"score": nil,
+		"level": "unknown",
+		"isProxy": proxy,
+		"isVPN": strings.Contains(lowerType, "vpn"),
+		"isTor": strings.Contains(lowerType, "tor"),
+		"isDatacenter": strings.Contains(lowerType, "hosting") || strings.Contains(lowerType, "server") || strings.Contains(lowerType, "datacenter"),
+		"networkType": networkType,
+		"providerName": profileString(item["provider"]),
+		"organisation": profileString(item["organisation"]),
+		"asn": profileString(item["asn"]),
+		"country": profileString(item["country"]),
+		"city": profileString(item["city"]),
+	}
+	if hasScore {
+		result["score"] = score
+		result["level"] = profileRiskLevel(score)
+	}
+	if lastSeen := profileString(item["last seen human"]); lastSeen != "" {
+		result["lastSeen"] = lastSeen
+	}
+	return result, nil
+}
+
+func profileRouting(client *http.Client, ip string, asnValue any) (map[string]any, error) {
+	result := map[string]any{"routingProvider": "RIPEstat"}
+	var networkInfo struct {
+		Data map[string]any `json:"data"`
+	}
+	if err := profileGetJSON(client, "https://stat.ripe.net/data/network-info/data.json?sourceapp=forwardx&resource="+url.QueryEscape(ip), &networkInfo); err != nil {
+		return nil, err
+	}
+	prefix := profileString(networkInfo.Data["prefix"])
+	result["prefix"] = prefix
+	asn := profileASNNumber(asnValue)
+	if asn <= 0 {
+		switch values := networkInfo.Data["asns"].(type) {
+		case []any:
+			if len(values) > 0 {
+				asn = profileASNNumber(values[0])
+			}
+		case []string:
+			if len(values) > 0 {
+				asn = profileASNNumber(values[0])
+			}
+		case string:
+			asn = profileASNNumber(values)
+		}
+	}
+	if asn > 0 {
+		result["asn"] = asn
+		var neighbourResp struct {
+			Data map[string]any `json:"data"`
+		}
+		if err := profileGetJSON(client, "https://stat.ripe.net/data/asn-neighbours/data.json?sourceapp=forwardx&resource=AS"+strconv.FormatInt(asn, 10), &neighbourResp); err == nil {
+			counts := profileMap(neighbourResp.Data["neighbour_counts"])
+			if counts != nil {
+				result["neighbourUnique"] = counts["unique"]
+				result["neighbourLeft"] = counts["left"]
+				result["neighbourRight"] = counts["right"]
+			}
+		}
+		if prefix != "" {
+			var rpkiResp struct {
+				Data map[string]any `json:"data"`
+			}
+			rpkiURL := "https://stat.ripe.net/data/rpki-validation/data.json?sourceapp=forwardx&resource=" + strconv.FormatInt(asn, 10) + "&prefix=" + url.QueryEscape(prefix)
+			if err := profileGetJSON(client, rpkiURL, &rpkiResp); err == nil {
+				result["rpki"] = profileString(rpkiResp.Data["status"])
+				result["rpkiDescription"] = profileString(rpkiResp.Data["description"])
+			}
+		}
+	}
+	return result, nil
+}
+
+func profileNetwork(client *http.Client, ip string, asnValue any) (map[string]any, error) {
+	result := map[string]any{}
+	var errorsFound []string
+	if peering, err := profilePeering(client, asnValue); err == nil {
+		for key, value := range peering {
+			result[key] = value
+		}
+	} else {
+		errorsFound = append(errorsFound, "PeeringDB: "+err.Error())
+	}
+	if routing, err := profileRouting(client, ip, asnValue); err == nil {
+		for key, value := range routing {
+			result[key] = value
+		}
+	} else {
+		errorsFound = append(errorsFound, "RIPEstat: "+err.Error())
+	}
+	if len(result) == 0 {
+		return nil, fmt.Errorf("%s", strings.Join(errorsFound, "; "))
+	}
+	if len(errorsFound) > 0 {
+		result["warnings"] = errorsFound
+	}
+	return result, nil
 }
 
 func profilePeering(client *http.Client, asnValue any) (map[string]any, error) {
@@ -196,8 +460,8 @@ func profilePeering(client *http.Client, asnValue any) (map[string]any, error) {
 const networkProfileBodyLimit = 2 * 1024 * 1024
 
 var netflixRegionPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`"requestCountry"\\s*:\\s*\\{[^}]*"id"\\s*:\\s*"([A-Za-z]{2})"`),
-	regexp.MustCompile(`"requestCountry"\\s*:\\s*"([A-Za-z]{2})"`),
+	regexp.MustCompile(`"requestCountry"\s*:\s*\{[^}]*"id"\s*:\s*"([A-Za-z]{2})"`),
+	regexp.MustCompile(`"requestCountry"\s*:\s*"([A-Za-z]{2})"`),
 }
 
 func profileRead(client *http.Client, rawURL string, headers map[string]string) (int, string, error) {
@@ -222,6 +486,52 @@ func profileRead(client *http.Client, rawURL string, headers map[string]string) 
 	return resp.StatusCode, string(raw), nil
 }
 
+func profileReadRetry(client *http.Client, rawURL string, headers map[string]string, attempts int) (int, string, error) {
+	if attempts < 1 {
+		attempts = 1
+	}
+	var code int
+	var body string
+	var err error
+	for attempt := 0; attempt < attempts; attempt++ {
+		code, body, err = profileRead(client, rawURL, headers)
+		if err == nil {
+			return code, body, nil
+		}
+		if attempt+1 < attempts {
+			time.Sleep(time.Duration(attempt+1) * 150 * time.Millisecond)
+		}
+	}
+	return code, body, err
+}
+
+func profilePostForm(client *http.Client, rawURL string, values url.Values, headers map[string]string) (int, string, error) {
+	req, err := http.NewRequest(http.MethodPost, rawURL, strings.NewReader(values.Encode()))
+	if err != nil {
+		return 0, "", err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125 Safari/537.36")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, "", err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, networkProfileBodyLimit))
+	if err != nil {
+		return resp.StatusCode, "", err
+	}
+	return resp.StatusCode, string(raw), nil
+}
+
+var youtubeRegionPattern = regexp.MustCompile(`"INNERTUBE_CONTEXT_GL"\s*:\s*"([^"]+)"`)
+var steamCurrencyPattern = regexp.MustCompile(`"priceCurrency"\s*:\s*"([^"]+)"`)
+var googlePlayRegionPattern = regexp.MustCompile(`<div class="yVZQTb">([^<]+)`)
+
 func netflixRegion(body string) string {
 	for _, pattern := range netflixRegionPatterns {
 		if match := pattern.FindStringSubmatch(body); len(match) > 1 {
@@ -241,7 +551,7 @@ func netflixPlayable(body string) bool {
 
 func profileNetflixCheck(client *http.Client) map[string]any {
 	started := time.Now()
-	originalCode, originalBody, originalErr := profileRead(client, "https://www.netflix.com/title/81280792", nil)
+	originalCode, originalBody, originalErr := profileReadRetry(client, "https://www.netflix.com/title/81280792", nil, 2)
 	if originalErr != nil {
 		return map[string]any{"id": "netflix", "name": "Netflix", "status": "error", "message": originalErr.Error()}
 	}
@@ -254,7 +564,7 @@ func profileNetflixCheck(client *http.Client) map[string]any {
 			"note": "Netflix 测试标题不可用",
 		}
 	}
-	regionalCode, regionalBody, regionalErr := profileRead(client, "https://www.netflix.com/title/70143836", nil)
+	regionalCode, regionalBody, regionalErr := profileReadRetry(client, "https://www.netflix.com/title/70143836", nil, 2)
 	if region == "" {
 		region = netflixRegion(regionalBody)
 	}
@@ -316,9 +626,238 @@ func profileChatGPTCheck(client *http.Client) map[string]any {
 	}
 }
 
+func profileClaudeCheck(client *http.Client) map[string]any {
+	started := time.Now()
+	req, err := http.NewRequest(http.MethodGet, "https://claude.ai/", nil)
+	if err != nil {
+		return map[string]any{"id": "claude", "name": "Claude", "status": "error", "message": err.Error()}
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125 Safari/537.36")
+	resp, err := client.Do(req)
+	if err != nil {
+		return map[string]any{"id": "claude", "name": "Claude", "status": "error", "message": err.Error()}
+	}
+	defer resp.Body.Close()
+	finalURL := ""
+	if resp.Request != nil && resp.Request.URL != nil {
+		finalURL = resp.Request.URL.String()
+	}
+	status := "unknown"
+	note := "Claude 区域状态未知"
+	if strings.HasPrefix(finalURL, "https://claude.ai/") {
+		status = "unlocked"
+		note = "Claude 可用"
+	} else if strings.Contains(finalURL, "anthropic.com/app-unavailable-in-region") {
+		status = "blocked"
+		note = "Claude 当前地区不可用"
+	}
+	return map[string]any{"id": "claude", "name": "Claude", "status": status, "httpStatus": resp.StatusCode, "latencyMs": time.Since(started).Milliseconds(), "note": note, "finalUrl": finalURL}
+}
+
+func profileGeminiCheck(client *http.Client) map[string]any {
+	started := time.Now()
+	code, body, err := profileReadRetry(client, "https://gemini.google.com/", nil, 2)
+	if err != nil {
+		return map[string]any{"id": "gemini", "name": "Gemini", "status": "error", "message": err.Error()}
+	}
+	available := strings.Contains(body, "45631641,null,true")
+	region := ""
+	regionPattern := regexp.MustCompile(`,2,1,200,"([A-Z]{3})"`)
+	if match := regionPattern.FindStringSubmatch(body); len(match) > 1 {
+		region = match[1]
+	}
+	status := "blocked"
+	note := "Gemini 当前地区不可用"
+	if available {
+		status = "unlocked"
+		note = "Gemini 可用"
+	}
+	return map[string]any{"id": "gemini", "name": "Gemini", "status": status, "region": region, "httpStatus": code, "latencyMs": time.Since(started).Milliseconds(), "note": note}
+}
+
+func profilePrimeVideoCheck(client *http.Client) map[string]any {
+	started := time.Now()
+	code, body, err := profileReadRetry(client, "https://www.primevideo.com/", nil, 2)
+	if err != nil {
+		return map[string]any{"id": "prime", "name": "Prime Video", "status": "error", "message": err.Error()}
+	}
+	lower := strings.ToLower(body)
+	region := ""
+	regionPattern := regexp.MustCompile(`"currentTerritory"\s*:\s*"([^"]+)"`)
+	if match := regionPattern.FindStringSubmatch(body); len(match) > 1 {
+		region = strings.ToUpper(match[1])
+	}
+	status := "unknown"
+	note := "Prime Video 区域状态未知"
+	if strings.Contains(lower, "isservicerestricted") {
+		status = "blocked"
+		note = "Prime Video 当前地区不可用"
+	} else if region != "" {
+		status = "unlocked"
+		note = "Prime Video 可用"
+	}
+	return map[string]any{"id": "prime", "name": "Prime Video", "status": status, "region": region, "httpStatus": code, "latencyMs": time.Since(started).Milliseconds(), "note": note}
+}
+
+func profileMaxCheck(client *http.Client) map[string]any {
+	started := time.Now()
+	code, body, err := profileReadRetry(client, "https://www.max.com/", nil, 2)
+	if err != nil {
+		return map[string]any{"id": "max", "name": "Max", "status": "error", "message": err.Error()}
+	}
+	region := ""
+	regionPattern := regexp.MustCompile(`countryCode=([A-Z]{2})`)
+	if match := regionPattern.FindStringSubmatch(body); len(match) > 1 {
+		region = match[1]
+	}
+	lower := strings.ToLower(body)
+	status := "unknown"
+	note := "Max 区域状态未知"
+	if strings.Contains(lower, "not available in your region") || strings.Contains(lower, "not available in your country") {
+		status = "blocked"
+		note = "Max 当前地区不可用"
+	} else if region != "" {
+		status = "unlocked"
+		note = "Max 可用"
+	}
+	return map[string]any{"id": "max", "name": "Max", "status": status, "region": region, "httpStatus": code, "latencyMs": time.Since(started).Milliseconds(), "note": note}
+}
+
+func profileYouTubeCheck(client *http.Client) map[string]any {
+	started := time.Now()
+	code, body, err := profileReadRetry(client, "https://www.youtube.com/premium", map[string]string{"Accept-Language": "en-US,en;q=0.9"}, 2)
+	if err != nil {
+		return map[string]any{"id": "youtube", "name": "YouTube Premium", "status": "error", "message": err.Error()}
+	}
+	region := ""
+	if match := youtubeRegionPattern.FindStringSubmatch(body); len(match) > 1 {
+		region = strings.ToUpper(match[1])
+	}
+	lower := strings.ToLower(body)
+	status := "unknown"
+	note := "无法确认 Premium 可用状态"
+	if strings.Contains(lower, "premium is not available in your country") || strings.Contains(lower, "www.google.cn") {
+		status = "blocked"
+		note = "YouTube Premium 当前地区不可用"
+	} else if strings.Contains(lower, "ad-free") || strings.Contains(lower, "youtube premium") {
+		status = "unlocked"
+		note = "YouTube Premium 页面确认可用"
+	}
+	return map[string]any{"id": "youtube", "name": "YouTube Premium", "status": status, "region": region, "httpStatus": code, "latencyMs": time.Since(started).Milliseconds(), "note": note}
+}
+
+func profileSpotifyCheck(client *http.Client) map[string]any {
+	started := time.Now()
+	values := url.Values{
+		"birth_day": {"11"}, "birth_month": {"11"}, "birth_year": {"2000"},
+		"collect_personal_info": {"undefined"}, "creation_flow": {""},
+		"creation_point": {"https://www.spotify.com/"}, "displayname": {"ForwardX"},
+		"gender": {"male"}, "iagree": {"1"}, "key": {"a1e486e2729f46d6bb368d6b2bcda326"}, "platform": {"www"}, "send-email": {"0"}, "thirdpartyemail": {"0"},
+	}
+	code, body, err := profilePostForm(client, "https://spclient.wg.spotify.com/signup/public/v1/account", values, map[string]string{"Accept": "application/json"})
+	if err != nil {
+		return map[string]any{"id": "spotify", "name": "Spotify", "status": "error", "message": err.Error()}
+	}
+	var payload map[string]any
+	if json.Unmarshal([]byte(body), &payload) != nil {
+		return map[string]any{"id": "spotify", "name": "Spotify", "status": "unknown", "httpStatus": code, "latencyMs": time.Since(started).Milliseconds(), "note": "Spotify 返回格式无法识别"}
+	}
+	statusCode := int64(0)
+	if number, ok := profileNumber(payload["status"]); ok {
+		statusCode = int64(number)
+	}
+	region := strings.ToUpper(profileString(payload["country"]))
+	launched, hasLaunched := profileBool(payload["is_country_launched"])
+	status := "unknown"
+	note := "Spotify 注册区域状态未知"
+	if statusCode == 320 || statusCode == 120 || (hasLaunched && !launched) {
+		status = "blocked"
+		note = "Spotify 当前地区不可注册"
+	} else if statusCode == 311 && (!hasLaunched || launched) {
+		status = "unlocked"
+		note = "Spotify 注册可用"
+	}
+	return map[string]any{"id": "spotify", "name": "Spotify", "status": status, "region": region, "httpStatus": code, "latencyMs": time.Since(started).Milliseconds(), "note": note}
+}
+
+func profileSteamCheck(client *http.Client) map[string]any {
+	started := time.Now()
+	code, body, err := profileReadRetry(client, "https://store.steampowered.com/app/761830", nil, 2)
+	if err != nil {
+		return map[string]any{"id": "steam", "name": "Steam", "status": "error", "message": err.Error()}
+	}
+	currency := ""
+	if match := steamCurrencyPattern.FindStringSubmatch(body); len(match) > 1 {
+		currency = strings.ToUpper(match[1])
+	}
+	status := "unlocked"
+	note := "Steam 商店可用"
+	if currency == "" {
+		status = "unknown"
+		note = "Steam 商店可达，但未识别币种"
+	}
+	return map[string]any{"id": "steam", "name": "Steam", "status": status, "region": currency, "httpStatus": code, "latencyMs": time.Since(started).Milliseconds(), "note": note}
+}
+
+func profileAppleRegionCheck(client *http.Client) map[string]any {
+	started := time.Now()
+	code, body, err := profileReadRetry(client, "https://gspe1-ssl.ls.apple.com/pep/gcc", nil, 2)
+	if err != nil {
+		return map[string]any{"id": "apple", "name": "Apple Region", "status": "error", "message": err.Error()}
+	}
+	region := strings.ToUpper(strings.TrimSpace(body))
+	status := "unknown"
+	if len(region) == 2 {
+		status = "unlocked"
+	}
+	return map[string]any{"id": "apple", "name": "Apple Region", "status": status, "region": region, "httpStatus": code, "latencyMs": time.Since(started).Milliseconds(), "note": "Apple 出口地区"}
+}
+
+func profileGooglePlayCheck(client *http.Client) map[string]any {
+	started := time.Now()
+	code, body, err := profileReadRetry(client, "https://play.google.com/", map[string]string{"Accept-Language": "en-US,en;q=0.9"}, 2)
+	if err != nil {
+		return map[string]any{"id": "googleplay", "name": "Google Play", "status": "error", "message": err.Error()}
+	}
+	region := ""
+	if match := googlePlayRegionPattern.FindStringSubmatch(body); len(match) > 1 {
+		region = strings.TrimSpace(match[1])
+	}
+	status := "unknown"
+	if region != "" {
+		status = "unlocked"
+	}
+	return map[string]any{"id": "googleplay", "name": "Google Play", "status": status, "region": region, "httpStatus": code, "latencyMs": time.Since(started).Milliseconds(), "note": "Google Play 商店区域"}
+}
+
+func profileBilibiliHKMCTWCheck(client *http.Client) map[string]any {
+	started := time.Now()
+	target := "https://api.bilibili.com/pgc/player/web/playurl?avid=18281381&cid=29892777&qn=0&type=&otype=json&ep_id=183799&fourk=1&fnver=0&fnval=16&module=bangumi"
+	code, body, err := profileReadRetry(client, target, nil, 2)
+	if err != nil {
+		return map[string]any{"id": "bilibili_hmt", "name": "Bilibili 港澳台", "status": "error", "message": err.Error()}
+	}
+	var payload map[string]any
+	_ = json.Unmarshal([]byte(body), &payload)
+	resultCode := int64(-99999)
+	if number, ok := profileNumber(payload["code"]); ok {
+		resultCode = int64(number)
+	}
+	status := "unknown"
+	note := "返回状态无法识别"
+	if resultCode == 0 {
+		status = "unlocked"
+		note = "港澳台限定内容可播放"
+	} else if resultCode == -10403 {
+		status = "blocked"
+		note = "港澳台限定内容不可播放"
+	}
+	return map[string]any{"id": "bilibili_hmt", "name": "Bilibili 港澳台", "status": status, "httpStatus": code, "latencyMs": time.Since(started).Milliseconds(), "note": note}
+}
+
 func profileGenericAppCheck(client *http.Client, id, name, target string) map[string]any {
 	started := time.Now()
-	code, _, err := profileRead(client, target, nil)
+	code, _, err := profileReadRetry(client, target, nil, 2)
 	if err != nil {
 		return map[string]any{"id": id, "name": name, "status": "error", "message": err.Error()}
 	}
@@ -341,6 +880,26 @@ func profileAppCheck(client *http.Client, id, name, target string) map[string]an
 		return profileNetflixCheck(client)
 	case "chatgpt":
 		return profileChatGPTCheck(client)
+	case "claude":
+		return profileClaudeCheck(client)
+	case "gemini":
+		return profileGeminiCheck(client)
+	case "youtube":
+		return profileYouTubeCheck(client)
+	case "prime":
+		return profilePrimeVideoCheck(client)
+	case "max":
+		return profileMaxCheck(client)
+	case "spotify":
+		return profileSpotifyCheck(client)
+	case "steam":
+		return profileSteamCheck(client)
+	case "apple":
+		return profileAppleRegionCheck(client)
+	case "googleplay":
+		return profileGooglePlayCheck(client)
+	case "bilibili_hmt":
+		return profileBilibiliHKMCTWCheck(client)
 	default:
 		return profileGenericAppCheck(client, id, name, target)
 	}
@@ -382,24 +941,34 @@ func runNetworkProfile(cfg Config, request networkProfileRequest) {
 	}
 
 	report("network", "running", nil, "")
-	network, networkErr := profilePeering(client, identity["asn"])
+	asnValue := identity["asnNumber"]
+	if profileASNNumber(asnValue) <= 0 {
+		asnValue = identity["asn"]
+	}
+	network, networkErr := profileNetwork(client, ip, asnValue)
 	if networkErr != nil {
-		report("network", "error", map[string]any{"asn": identity["asn"], "provider": "PeeringDB"}, networkErr.Error())
+		report("network", "error", map[string]any{"asn": profileASNNumber(asnValue)}, networkErr.Error())
 	} else {
 		report("network", "success", network, "")
 	}
 
-	risk := map[string]any{
-		"score": nil,
-		"level": "unknown",
-		"isDatacenter": identity["is_datacenter"],
-		"isVPN": identity["is_vpn"],
-		"isProxy": identity["is_proxy"],
-		"isTor": identity["is_tor"],
-		"isAbuser": identity["is_abuser"],
-		"provider": "ipapi.is",
+	report("risk", "running", nil, "")
+	risk, riskErr := profileProxyRisk(client, ip)
+	if riskErr != nil {
+		risk = map[string]any{
+			"score": nil,
+			"level": "unknown",
+			"isDatacenter": identity["is_datacenter"],
+			"isVPN": identity["is_vpn"],
+			"isProxy": identity["is_proxy"],
+			"isTor": identity["is_tor"],
+			"isAbuser": identity["is_abuser"],
+			"provider": "ipapi.is",
+		}
+		report("risk", "success", risk, "proxycheck.io 不可用，已回退基础风险字段："+riskErr.Error())
+	} else {
+		report("risk", "success", risk, "")
 	}
-	report("risk", "success", risk, "未配置风险数据源密钥时仅展示可获得字段")
 
 	apps := []struct{ id, name, target string }{
 		{"chatgpt", "ChatGPT", "https://chatgpt.com/"},
@@ -419,6 +988,9 @@ func runNetworkProfile(cfg Config, request networkProfileRequest) {
 			struct{ id, name, target string }{"grok", "Grok", "https://grok.com/"},
 			struct{ id, name, target string }{"perplexity", "Perplexity", "https://www.perplexity.ai/"},
 			struct{ id, name, target string }{"steam", "Steam", "https://store.steampowered.com/"},
+			struct{ id, name, target string }{"apple", "Apple Region", "https://gspe1-ssl.ls.apple.com/pep/gcc"},
+			struct{ id, name, target string }{"googleplay", "Google Play", "https://play.google.com/"},
+			struct{ id, name, target string }{"bilibili_hmt", "Bilibili 港澳台", "https://api.bilibili.com/"},
 		)
 	}
 
