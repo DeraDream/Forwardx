@@ -33,6 +33,7 @@ export const AGENT_TUNNEL_PATHS = new Set([
   "/api/agent/rule-status",
   "/api/agent/rule-status-batch",
   "/api/agent/network-profile-report",
+  "/api/agent/network-profile-risk-proxy",
 ]);
 
 const AGENT_AUTH_FAILURE_LOG_INTERVAL_MS = 5 * 60 * 1000;
