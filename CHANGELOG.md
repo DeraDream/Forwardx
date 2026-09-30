@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.3.384] - 2026-09-30
+
+### 网络画像稳定性、原生/广播与互联 ASN 展示
+
+- 风险数据库请求增加浏览器 UA、重试与错峰并发，降低 ProxyCheck / Scamalytics / IPQS / ipapi / AbuseIPDB / IP2Location 偶发超时或限流导致只返回单库结果的问题；单库失败继续保留其他数据源结果。
+- IP / ASN 区新增“原生 IP / 广播 IP”判定，参考 IPQuality 的思路比较实际使用地区与注册地区；同时保留 Residential / VPN / Hosting 等使用类型，避免两类概念混淆。
+- RIPEstat ASN 邻居从单纯数量扩展为最多 16 个互联 ASN，并补齐 ASN 名称；UI 改成“上方 ASN、下方名称”的彩色边框卡片。
+- 风险评分 / 风险因子区移动到应用解锁区上方，先看 IP 质量再看应用解锁。
+- 通用应用遇到反爬 403/451 时改为“仅可达”而非“未知”；Max、Prime Video、Steam 在地区字段无法解析但站点可访问时也降级为“仅可达”，减少无意义的未知状态。
+- Panel / APK Release 升级至 `2.3.384`；Agent 升级至 `2.2.215`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.3.383] - 2026-09-30
 
 ### 网络画像准确性与多库风险画像

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -74,13 +75,48 @@ func profileGetJSON(client *http.Client, rawURL string, out any) error {
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
+func profileGetJSONRetry(client *http.Client, rawURL string, out any, attempts int) error {
+	if attempts < 1 {
+		attempts = 1
+	}
+	var lastErr error
+	for attempt := 0; attempt < attempts; attempt++ {
+		req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125 Safari/537.36")
+		req.Header.Set("Accept", "application/json,text/plain,*/*")
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+		} else {
+			func() {
+				defer resp.Body.Close()
+				if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+					lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
+					return
+				}
+				lastErr = json.NewDecoder(resp.Body).Decode(out)
+			}()
+			if lastErr == nil {
+				return nil
+			}
+		}
+		if attempt+1 < attempts {
+			time.Sleep(time.Duration(attempt+1) * 350 * time.Millisecond)
+		}
+	}
+	return lastErr
+}
+
 func detectProfileIP(client *http.Client, family string) (string, error) {
 	endpoint := "https://api4.ipify.org?format=json"
 	if strings.EqualFold(family, "ipv6") {
 		endpoint = "https://api6.ipify.org?format=json"
 	}
 	var payload struct{ IP string `json:"ip"` }
-	if err := profileGetJSON(client, endpoint, &payload); err != nil {
+	if err := profileGetJSONRetry(client, endpoint, &payload, 3); err != nil {
 		return "", err
 	}
 	ip := strings.TrimSpace(payload.IP)
@@ -229,6 +265,30 @@ func profileIdentity(client *http.Client, ip string) (map[string]any, error) {
 		result["classificationProvider"] = "ipapi.is"
 	}
 
+	var ipinfo map[string]any
+	if err := profileGetJSONRetry(client, "https://ipinfo.io/widget/demo/"+url.PathEscape(ip), &ipinfo, 2); err == nil {
+		data := profileMap(ipinfo["data"])
+		if data != nil {
+			actual := strings.ToUpper(profileString(data["country"]))
+			abuse := profileMap(data["abuse"])
+			registered := strings.ToUpper(profileString(abuse["country"]))
+			result["registeredCountryCode"] = registered
+			if actual == "" {
+				actual = strings.ToUpper(profileString(result["countryCode"]))
+			}
+			if actual != "" && registered != "" {
+				if actual == registered {
+					result["ipNature"] = "native"
+				} else {
+					result["ipNature"] = "broadcast"
+				}
+			}
+		}
+	}
+	if profileString(result["ipNature"]) == "" {
+		result["ipNature"] = "unknown"
+	}
+
 	if profileString(result["asn"]) == "" && primaryErr != nil {
 		return nil, primaryErr
 	}
@@ -308,7 +368,7 @@ func profileScorePtr(value any) *float64 {
 func profileRiskFromCheckPlace(client *http.Client, ip, db string) (map[string]any, error) {
 	var payload map[string]any
 	endpoint := "https://ipinfo.check.place/" + url.PathEscape(ip) + "?db=" + url.QueryEscape(db)
-	if err := profileGetJSON(client, endpoint, &payload); err != nil {
+	if err := profileGetJSONRetry(client, endpoint, &payload, 3); err != nil {
 		return nil, err
 	}
 	return payload, nil
@@ -318,7 +378,7 @@ func profileProxyCheckSource(client *http.Client, ip string) profileRiskSource {
 	source := profileRiskSource{Name: "ProxyCheck"}
 	var payload map[string]any
 	endpoint := "https://proxycheck.io/v2/" + url.PathEscape(ip) + "?vpn=1&asn=1&risk=1&days=7"
-	if err := profileGetJSON(client, endpoint, &payload); err != nil {
+	if err := profileGetJSONRetry(client, endpoint, &payload, 3); err != nil {
 		source.Error = err.Error()
 		return source
 	}
@@ -498,6 +558,11 @@ func profileRisk(client *http.Client, ip string) map[string]any {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			if index > 0 {
+				// check.place-backed databases are more reliable when requests are not fired
+				// as a same-millisecond burst from one VPS address.
+				time.Sleep(time.Duration(index-1) * 220 * time.Millisecond)
+			}
 			sources[index] = checks[index]()
 		}()
 	}
@@ -538,6 +603,64 @@ func profileRisk(client *http.Client, ip string) map[string]any {
 	}
 }
 
+func profileASNName(client *http.Client, asn int64) string {
+	if asn <= 0 {
+		return ""
+	}
+	var overview struct {
+		Data map[string]any `json:"data"`
+	}
+	endpoint := "https://stat.ripe.net/data/as-overview/data.json?sourceapp=forwardx&resource=AS" + strconv.FormatInt(asn, 10)
+	if err := profileGetJSONRetry(client, endpoint, &overview, 2); err != nil {
+		return ""
+	}
+	return firstNonEmpty(profileString(overview.Data["holder"]), profileString(overview.Data["announced"]))
+}
+
+func profileNeighbourList(client *http.Client, raw any) []map[string]any {
+	items, ok := raw.([]any)
+	if !ok || len(items) == 0 {
+		return nil
+	}
+	type candidate struct {
+		asn int64
+		relation string
+		power float64
+	}
+	candidates := make([]candidate, 0, len(items))
+	seen := map[int64]bool{}
+	for _, item := range items {
+		row := profileMap(item)
+		asn := profileASNNumber(row["asn"])
+		if asn <= 0 || seen[asn] {
+			continue
+		}
+		seen[asn] = true
+		power, _ := profileNumber(row["power"])
+		candidates = append(candidates, candidate{asn: asn, relation: profileString(row["type"]), power: power})
+	}
+	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].power > candidates[j].power })
+	if len(candidates) > 16 {
+		candidates = candidates[:16]
+	}
+	results := make([]map[string]any, len(candidates))
+	sem := make(chan struct{}, 4)
+	var wg sync.WaitGroup
+	for index, item := range candidates {
+		index, item := index, item
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			name := profileASNName(client, item.asn)
+			<-sem
+			results[index] = map[string]any{"asn": item.asn, "name": name, "relation": item.relation, "power": item.power}
+		}()
+	}
+	wg.Wait()
+	return results
+}
+
 func profileRouting(client *http.Client, ip string, asnValue any) (map[string]any, error) {
 	result := map[string]any{"routingProvider": "RIPEstat"}
 	var networkInfo struct {
@@ -568,12 +691,15 @@ func profileRouting(client *http.Client, ip string, asnValue any) (map[string]an
 		var neighbourResp struct {
 			Data map[string]any `json:"data"`
 		}
-		if err := profileGetJSON(client, "https://stat.ripe.net/data/asn-neighbours/data.json?sourceapp=forwardx&resource=AS"+strconv.FormatInt(asn, 10), &neighbourResp); err == nil {
+		if err := profileGetJSONRetry(client, "https://stat.ripe.net/data/asn-neighbours/data.json?sourceapp=forwardx&resource=AS"+strconv.FormatInt(asn, 10), &neighbourResp, 2); err == nil {
 			counts := profileMap(neighbourResp.Data["neighbour_counts"])
 			if counts != nil {
 				result["neighbourUnique"] = counts["unique"]
 				result["neighbourLeft"] = counts["left"]
 				result["neighbourRight"] = counts["right"]
+			}
+			if neighbours := profileNeighbourList(client, neighbourResp.Data["neighbours"]); len(neighbours) > 0 {
+				result["neighbours"] = neighbours
 			}
 		}
 		if prefix != "" {
@@ -915,8 +1041,8 @@ func profilePrimeVideoCheck(client *http.Client) map[string]any {
 	if match := regionPattern.FindStringSubmatch(body); len(match) > 1 {
 		region = strings.ToUpper(match[1])
 	}
-	status := "unknown"
-	note := "Prime Video 区域状态未知"
+	status := "reachable"
+	note := "Prime Video 可达，未识别明确地区"
 	if strings.Contains(lower, "isservicerestricted") {
 		status = "blocked"
 		note = "Prime Video 当前地区不可用"
@@ -939,8 +1065,8 @@ func profileMaxCheck(client *http.Client) map[string]any {
 		region = match[1]
 	}
 	lower := strings.ToLower(body)
-	status := "unknown"
-	note := "Max 区域状态未知"
+	status := "reachable"
+	note := "Max 站点可达，未识别明确地区"
 	if strings.Contains(lower, "not available in your region") || strings.Contains(lower, "not available in your country") {
 		status = "blocked"
 		note = "Max 当前地区不可用"
@@ -1021,7 +1147,7 @@ func profileSteamCheck(client *http.Client) map[string]any {
 	status := "unlocked"
 	note := "Steam 商店可用"
 	if currency == "" {
-		status = "unknown"
+		status = "reachable"
 		note = "Steam 商店可达，但未识别币种"
 	}
 	return map[string]any{"id": "steam", "name": "Steam", "status": status, "region": currency, "httpStatus": code, "latencyMs": time.Since(started).Milliseconds(), "note": note}
@@ -1141,11 +1267,11 @@ func profileGenericAppCheck(client *http.Client, id, name, target string) map[st
 	status := "reachable"
 	note := "仅确认官方站点可达，不代表区域完整解锁"
 	if code == http.StatusForbidden || code == http.StatusUnavailableForLegalReasons {
-		status = "unknown"
-		note = "站点拒绝自动探测，不能据此判定为地区屏蔽"
+		status = "reachable"
+		note = "站点可达，但拒绝自动化探测；不代表地区解锁"
 	} else if code >= 500 {
-		status = "unknown"
-		note = "站点响应异常，无法判定解锁状态"
+		status = "error"
+		note = "站点响应异常，无法完成探测"
 	}
 	return map[string]any{
 		"id": id, "name": name, "status": status, "httpStatus": code,
