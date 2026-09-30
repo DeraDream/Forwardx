@@ -2586,6 +2586,11 @@ type selfTest struct {
 	RuleID               int    `json:"ruleId"`
 	ForwardType          string `json:"forwardType"`
 	SourcePort           int    `json:"sourcePort"`
+	SourceProtocol       string `json:"sourceProtocol,omitempty"`
+	ExpectedRuleID       int    `json:"expectedRuleId,omitempty"`
+	ExpectedForwardType  string `json:"expectedForwardType,omitempty"`
+	SampleCount          int    `json:"sampleCount,omitempty"`
+	IsFinalTarget        bool   `json:"isFinalTarget,omitempty"`
 	Protocol             string `json:"protocol"`
 	Method               string `json:"method"`
 	TargetIP             string `json:"targetIp"`
