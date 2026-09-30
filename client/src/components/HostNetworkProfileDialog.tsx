@@ -10,17 +10,31 @@ import { toast } from "sonner";
 type Family = "ipv4" | "ipv6";
 
 function statusBadge(status: string) {
-  if (status === "native") return <Badge className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-300">原生</Badge>;
-  if (status === "unlocked") return <Badge className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-300">解锁</Badge>;
-  if (status === "reachable") return <Badge className="bg-sky-500/10 text-sky-700 dark:text-sky-300">可达</Badge>;
-  if (status === "originals_only") return <Badge className="bg-amber-500/10 text-amber-700 dark:text-amber-300">仅自制剧</Badge>;
-  if (status === "app_only") return <Badge className="bg-amber-500/10 text-amber-700 dark:text-amber-300">仅 App</Badge>;
-  if (status === "web_only") return <Badge className="bg-amber-500/10 text-amber-700 dark:text-amber-300">仅 Web</Badge>;
-  if (status === "partial") return <Badge className="bg-amber-500/10 text-amber-700 dark:text-amber-300">部分</Badge>;
-  if (status === "blocked") return <Badge variant="destructive">失败</Badge>;
-  if (status === "unsupported") return <Badge variant="secondary">不支持</Badge>;
-  if (status === "error") return <Badge variant="outline">错误</Badge>;
-  return <Badge variant="secondary">待确认</Badge>;
+  if (status === "native") return <Badge className="border-emerald-200 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">原生</Badge>;
+  if (status === "unlocked") return <Badge className="border-emerald-200 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">解锁</Badge>;
+  if (status === "reachable") return <Badge className="border-sky-200 bg-sky-500/15 text-sky-700 dark:text-sky-300">仅可达</Badge>;
+  if (status === "originals_only") return <Badge className="border-amber-200 bg-amber-500/15 text-amber-700 dark:text-amber-300">仅自制剧</Badge>;
+  if (status === "app_only") return <Badge className="border-amber-200 bg-amber-500/15 text-amber-700 dark:text-amber-300">仅 App</Badge>;
+  if (status === "web_only") return <Badge className="border-amber-200 bg-amber-500/15 text-amber-700 dark:text-amber-300">仅 Web</Badge>;
+  if (status === "partial") return <Badge className="border-amber-200 bg-amber-500/15 text-amber-700 dark:text-amber-300">部分</Badge>;
+  if (status === "blocked") return <Badge className="border-red-200 bg-red-500/15 text-red-700 dark:text-red-300">屏蔽</Badge>;
+  if (status === "unsupported") return <Badge className="bg-slate-500/10 text-slate-600">不支持</Badge>;
+  if (status === "error") return <Badge className="border-red-200 bg-red-500/10 text-red-700">检测错误</Badge>;
+  return <Badge className="border-amber-200 bg-amber-500/10 text-amber-700">未知</Badge>;
+}
+
+function statusCardClass(status: string) {
+  if (status === "unlocked" || status === "native") return "border-emerald-200/80 bg-emerald-500/5";
+  if (status === "reachable") return "border-sky-200/80 bg-sky-500/5";
+  if (["originals_only", "app_only", "web_only", "partial", "unknown"].includes(status)) return "border-amber-200/80 bg-amber-500/5";
+  if (status === "blocked" || status === "error") return "border-red-200/80 bg-red-500/5";
+  return "bg-background/60";
+}
+
+function riskValue(value: unknown) {
+  if (value === true) return <span className="font-semibold text-red-600 dark:text-red-400">是</span>;
+  if (value === false) return <span className="font-semibold text-emerald-600 dark:text-emerald-400">否</span>;
+  return <span className="text-muted-foreground">—</span>;
 }
 
 function riskPercent(data: any): number | null {
@@ -68,6 +82,7 @@ export function HostNetworkProfileDialog({
   const risk = data.risk || {};
   const apps = useMemo(() => Object.values(data.apps || {}) as any[], [data.apps]);
   const riskScore = riskPercent(risk);
+  const riskSources = Array.isArray(risk.sources) ? risk.sources : [];
   const steps = current?.steps || {};
   const completed = Object.values(steps).filter((item: any) => ["success", "error", "skip"].includes(item?.status)).length;
   const total = Math.max(5, Object.keys(steps).length);
@@ -109,20 +124,20 @@ export function HostNetworkProfileDialog({
         ) : (
           <div className="space-y-4">
             <div className="grid gap-3 sm:grid-cols-2">
-              <div className="rounded-lg border p-3">
-                <div className="mb-2 flex items-center gap-2 text-sm font-medium"><Wifi className="h-4 w-4" />IP / ASN</div>
+              <div className="rounded-lg border border-sky-200/70 bg-sky-500/[0.035] p-3">
+                <div className="mb-2 flex items-center gap-2 text-sm font-medium text-sky-700 dark:text-sky-300"><Wifi className="h-4 w-4" />IP / ASN</div>
                 <div className="space-y-1 text-xs">
-                  <div className="font-mono text-sm">{detectedIp || "检测中..."}</div>
-                  <div>{identity.asn || "ASN 待检测"}</div>
-                  <div>{identity.company || identity.isp || "运营商待检测"}</div>
-                  <div>{[identity.flag, identity.city, identity.region, identity.country].filter(Boolean).join(" · ") || "地区待检测"}</div>
-                  <div className="text-muted-foreground">IP 类型：{networkType || "待检测"}{identity.domain ? ` · ${identity.domain}` : ""}</div>
+                  <div className="font-mono text-sm font-semibold text-sky-700 dark:text-sky-300">{detectedIp || "检测中..."}</div>
+                  <div><span className="text-muted-foreground">ASN：</span><span className="font-medium text-violet-700 dark:text-violet-300">{identity.asn || "待检测"}</span></div>
+                  <div><span className="text-muted-foreground">运营商：</span><span className="font-medium text-indigo-700 dark:text-indigo-300">{identity.company || identity.isp || "待检测"}</span></div>
+                  <div><span className="text-muted-foreground">地区：</span><span className="font-medium text-emerald-700 dark:text-emerald-300">{[identity.flag, identity.city, identity.region, identity.country].filter(Boolean).join(" · ") || "待检测"}</span></div>
+                  <div><span className="text-muted-foreground">IP 类型：</span><span className="font-medium text-amber-700 dark:text-amber-300">{networkType || "待检测"}</span>{identity.domain ? <span className="text-muted-foreground"> · {identity.domain}</span> : null}</div>
                 </div>
               </div>
-              <div className="rounded-lg border p-3">
-                <div className="mb-2 flex items-center gap-2 text-sm font-medium"><ShieldCheck className="h-4 w-4" />IP 风险</div>
+              <div className="rounded-lg border border-amber-200/70 bg-amber-500/[0.035] p-3">
+                <div className="mb-2 flex items-center gap-2 text-sm font-medium text-amber-700 dark:text-amber-300"><ShieldCheck className="h-4 w-4" />IP 风险</div>
                 <div className="mb-2 flex items-center justify-between text-xs"><span>综合风险</span><span>{riskScore === null ? "暂无评分" : `${riskScore}/100 · ${riskLevelText[String(risk.level || "unknown")] || risk.level}`}</span></div>
-                <Progress value={riskScore ?? 0} />
+                <Progress value={riskScore ?? 0} className={riskScore == null ? "" : riskScore < 25 ? "[&>div]:bg-emerald-500" : riskScore < 60 ? "[&>div]:bg-amber-500" : "[&>div]:bg-red-500"} />
                 <div className="mt-2 flex flex-wrap gap-1">
                   {risk.isDatacenter === true && <Badge variant="secondary">机房</Badge>}
                   {risk.isVPN === true && <Badge variant="secondary">VPN</Badge>}
@@ -131,18 +146,17 @@ export function HostNetworkProfileDialog({
                   {risk.isAbuser === true && <Badge variant="destructive">滥用记录</Badge>}
                   {networkType && <Badge variant="outline">{networkType}</Badge>}
                 </div>
-                <div className="mt-2 text-[11px] text-muted-foreground">
-                  数据源：{risk.provider || "待检测"}{risk.providerName ? ` · ${risk.providerName}` : ""}{risk.lastSeen ? ` · 最近发现 ${risk.lastSeen}` : ""}
-                </div>
-                {riskScore === null && <div className="mt-1 text-xs text-muted-foreground">风险评分源暂未返回，已保留可用的代理/机房判定。</div>}
+                <div className="mt-2 text-[11px] text-muted-foreground">数据源：{risk.provider === "multi-source" ? "多库综合" : risk.provider || "待检测"}</div>
+                {riskScore === null && <div className="mt-1 text-xs text-muted-foreground">暂无可用评分，但仍会展示各数据库风险因子。</div>}
               </div>
             </div>
 
-            <div className="rounded-lg border p-3">
-              <div className="mb-3 flex items-center justify-between"><div className="text-sm font-medium">应用解锁 / 可达性</div><span className="text-xs text-muted-foreground">{apps.length ? `${apps.length} 项已返回` : "等待结果"}</span></div>
+            <div className="rounded-lg border border-violet-200/60 bg-violet-500/[0.025] p-3">
+              <div className="mb-1 flex items-center justify-between"><div className="text-sm font-medium text-violet-700 dark:text-violet-300">应用解锁 / 可达性</div><span className="text-xs text-muted-foreground">{apps.length ? `${apps.length} 项已返回` : "等待结果"}</span></div>
+              <div className="mb-3 text-[11px] text-muted-foreground">“解锁”=已通过地区/内容判定；“仅可达”只代表站点能打开，两者不是一个意思；“未知”表示服务拒绝自动探测或页面格式无法可靠判定。</div>
               <div className="grid gap-2 sm:grid-cols-2 md:grid-cols-3">
                 {apps.map((app: any) => (
-                  <div key={app.id} className="flex min-h-14 items-center justify-between gap-2 rounded-md border bg-background/60 px-2.5 py-2">
+                  <div key={app.id} className={`flex min-h-14 items-center justify-between gap-2 rounded-md border px-2.5 py-2 ${statusCardClass(String(app.status || "unknown"))}`}>
                     <div className="min-w-0"><div className="truncate text-sm font-medium">{app.name || app.id}</div><div className="truncate text-[10px] text-muted-foreground" title={app.note || app.message || ""}>{app.region ? `${app.region}${app.latencyMs != null ? ` · ${app.latencyMs} ms` : ""}` : (app.latencyMs != null ? `${app.latencyMs} ms` : app.message || app.note || "")}</div></div>
                     {statusBadge(String(app.status || "unknown"))}
                   </div>
@@ -151,8 +165,37 @@ export function HostNetworkProfileDialog({
               </div>
             </div>
 
-            <div className="rounded-lg border p-3">
-              <div className="mb-2 text-sm font-medium">网络 / IXP</div>
+            {riskSources.length > 0 && (
+              <div className="rounded-lg border border-rose-200/60 bg-rose-500/[0.02] p-3">
+                <div className="mb-2 flex items-center justify-between">
+                  <div className="text-sm font-medium text-rose-700 dark:text-rose-300">风险评分 / 风险因子</div>
+                  <span className="text-[11px] text-muted-foreground">{riskSources.filter((item: any) => !item.error).length}/{riskSources.length} 数据源可用</span>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[620px] text-[11px]">
+                    <thead className="text-muted-foreground"><tr className="border-b">
+                      <th className="py-1.5 text-left font-medium">数据库</th><th className="text-left font-medium">地区</th><th className="text-left font-medium">评分</th>
+                      <th className="text-center font-medium">代理</th><th className="text-center font-medium">Tor</th><th className="text-center font-medium">VPN</th>
+                      <th className="text-center font-medium">服务器</th><th className="text-center font-medium">滥用</th><th className="text-center font-medium">机器人</th>
+                    </tr></thead>
+                    <tbody>
+                      {riskSources.map((source: any) => (
+                        <tr key={source.name} className="border-b last:border-0">
+                          <td className="py-1.5 font-medium text-cyan-700 dark:text-cyan-300">{source.name}</td>
+                          <td className="text-emerald-700 dark:text-emerald-300">{source.country || "—"}</td>
+                          <td>{source.score != null ? <span className={Number(source.score) >= 60 ? "font-semibold text-red-600" : Number(source.score) >= 25 ? "font-semibold text-amber-600" : "font-semibold text-emerald-600"}>{Math.round(Number(source.score))}</span> : source.error ? <span className="text-muted-foreground">不可用</span> : "—"}</td>
+                          <td className="text-center">{riskValue(source.isProxy)}</td><td className="text-center">{riskValue(source.isTor)}</td><td className="text-center">{riskValue(source.isVPN)}</td>
+                          <td className="text-center">{riskValue(source.isDatacenter)}</td><td className="text-center">{riskValue(source.isAbuser)}</td><td className="text-center">{riskValue(source.isBot)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            <div className="rounded-lg border border-cyan-200/60 bg-cyan-500/[0.025] p-3">
+              <div className="mb-2 text-sm font-medium text-cyan-700 dark:text-cyan-300">网络 / IXP</div>
               <div className="grid gap-1 text-xs sm:grid-cols-2">
                 <div>ASN：{data.network?.asn || identity.asnNumber || identity.asn || "待检测"}</div>
                 <div>网络名称：{data.network?.name || identity.company || "待检测"}</div>
