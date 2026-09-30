@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -111,31 +113,156 @@ func profileIdentity(client *http.Client, ip string) (map[string]any, error) {
 	return result, nil
 }
 
-func profileAppCheck(client *http.Client, id, name, target string) map[string]any {
-	started := time.Now()
-	req, err := http.NewRequest(http.MethodGet, target, nil)
+const networkProfileBodyLimit = 2 * 1024 * 1024
+
+var netflixRegionPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`"requestCountry"\\s*:\\s*\\{[^}]*"id"\\s*:\\s*"([A-Za-z]{2})"`),
+	regexp.MustCompile(`"requestCountry"\\s*:\\s*"([A-Za-z]{2})"`),
+}
+
+func profileRead(client *http.Client, rawURL string, headers map[string]string) (int, string, error) {
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
 	if err != nil {
-		return map[string]any{"id": id, "name": name, "status": "error", "message": err.Error()}
+		return 0, "", err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 ForwardX-NetworkProfile")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125 Safari/537.36")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return map[string]any{"id": id, "name": name, "status": "error", "message": err.Error()}
+		return 0, "", err
 	}
 	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, networkProfileBodyLimit))
+	if err != nil {
+		return resp.StatusCode, "", err
+	}
+	return resp.StatusCode, string(raw), nil
+}
+
+func netflixRegion(body string) string {
+	for _, pattern := range netflixRegionPatterns {
+		if match := pattern.FindStringSubmatch(body); len(match) > 1 {
+			return strings.ToUpper(match[1])
+		}
+	}
+	return ""
+}
+
+func netflixPlayable(body string) bool {
+	lower := strings.ToLower(body)
+	if strings.Contains(lower, "page-404") || strings.Contains(lower, "nsez-403") || strings.Contains(lower, "not available") {
+		return false
+	}
+	return strings.Contains(lower, "og:video") || strings.Contains(lower, "netflix.reactcontext")
+}
+
+func profileNetflixCheck(client *http.Client) map[string]any {
+	started := time.Now()
+	originalCode, originalBody, originalErr := profileRead(client, "https://www.netflix.com/title/81280792", nil)
+	if originalErr != nil {
+		return map[string]any{"id": "netflix", "name": "Netflix", "status": "error", "message": originalErr.Error()}
+	}
+	region := netflixRegion(originalBody)
+	originalOK := originalCode >= 200 && originalCode < 400 && netflixPlayable(originalBody)
+	if !originalOK {
+		return map[string]any{
+			"id": "netflix", "name": "Netflix", "status": "blocked", "region": region,
+			"httpStatus": originalCode, "latencyMs": time.Since(started).Milliseconds(),
+			"note": "Netflix 测试标题不可用",
+		}
+	}
+	regionalCode, regionalBody, regionalErr := profileRead(client, "https://www.netflix.com/title/70143836", nil)
+	if region == "" {
+		region = netflixRegion(regionalBody)
+	}
+	if regionalErr == nil && regionalCode >= 200 && regionalCode < 400 && netflixPlayable(regionalBody) {
+		return map[string]any{
+			"id": "netflix", "name": "Netflix", "status": "unlocked", "region": region,
+			"httpStatus": regionalCode, "latencyMs": time.Since(started).Milliseconds(),
+			"note": "完整片库测试通过",
+		}
+	}
+	return map[string]any{
+		"id": "netflix", "name": "Netflix", "status": "originals_only", "region": region,
+		"httpStatus": regionalCode, "latencyMs": time.Since(started).Milliseconds(),
+		"note": "仅 Netflix Originals",
+	}
+}
+
+func profileChatGPTCheck(client *http.Client) map[string]any {
+	started := time.Now()
+	headers := map[string]string{
+		"Accept": "application/json, text/plain, */*",
+		"Authorization": "Bearer null",
+		"Origin": "https://platform.openai.com",
+		"Referer": "https://platform.openai.com/",
+	}
+	apiCode, apiBody, apiErr := profileRead(client, "https://api.openai.com/compliance/cookie_requirements", headers)
+	unsupported := strings.Contains(strings.ToLower(apiBody), "unsupported_country")
+	traceCode, traceBody, _ := profileRead(client, "https://chatgpt.com/cdn-cgi/trace", nil)
+	region := ""
+	for _, line := range strings.Split(traceBody, "\n") {
+		if strings.HasPrefix(line, "loc=") {
+			region = strings.ToUpper(strings.TrimSpace(strings.TrimPrefix(line, "loc=")))
+			break
+		}
+	}
+	iosCode, iosBody, iosErr := profileRead(client, "https://ios.chat.openai.com/", nil)
+	iosBlocked := iosErr != nil || strings.Contains(strings.ToLower(iosBody), "vpn")
+	status := "unlocked"
+	note := "Web / App 检测通过"
+	if unsupported {
+		if !iosBlocked {
+			status = "app_only"
+			note = "Web/API 地区受限，仅 App 探测可用"
+		} else {
+			status = "blocked"
+			note = "OpenAI 返回 unsupported_country"
+		}
+	} else if apiErr != nil || apiCode == 0 {
+		status = "unknown"
+		note = "OpenAI 合规接口检测失败"
+	} else if iosBlocked {
+		status = "web_only"
+		note = "Web/API 可用，App 探测受限"
+	}
+	return map[string]any{
+		"id": "chatgpt", "name": "ChatGPT", "status": status, "region": region,
+		"httpStatus": apiCode, "iosHttpStatus": iosCode, "traceHttpStatus": traceCode,
+		"latencyMs": time.Since(started).Milliseconds(), "note": note,
+	}
+}
+
+func profileGenericAppCheck(client *http.Client, id, name, target string) map[string]any {
+	started := time.Now()
+	code, _, err := profileRead(client, target, nil)
+	if err != nil {
+		return map[string]any{"id": id, "name": name, "status": "error", "message": err.Error()}
+	}
 	status := "reachable"
-	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnavailableForLegalReasons {
+	if code == http.StatusForbidden || code == http.StatusUnavailableForLegalReasons {
 		status = "blocked"
-	} else if resp.StatusCode >= 500 {
+	} else if code >= 500 {
 		status = "unknown"
 	}
 	return map[string]any{
-		"id": id,
-		"name": name,
-		"status": status,
-		"httpStatus": resp.StatusCode,
+		"id": id, "name": name, "status": status, "httpStatus": code,
 		"latencyMs": time.Since(started).Milliseconds(),
-		"note": "基础可达性结果；地区/原生/仅 App 判定将在对应 checker 中继续细化",
+		"note": "当前为官方站点可达性检测，未把可达误标为完整解锁",
+	}
+}
+
+func profileAppCheck(client *http.Client, id, name, target string) map[string]any {
+	switch id {
+	case "netflix":
+		return profileNetflixCheck(client)
+	case "chatgpt":
+		return profileChatGPTCheck(client)
+	default:
+		return profileGenericAppCheck(client, id, name, target)
 	}
 }
 
