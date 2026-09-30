@@ -12,7 +12,7 @@ import { adjustHopTestDetailsForLatencyMode, type HopTestLatencyMode, type HopTe
 import { latestConfigRevision } from "../configAudit";
 import { getAgentLocalRuntimeStateSnapshot } from "../agentHeartbeatRoute";
 
-const DIAGNOSTIC_AGENT_VERSION = "2.2.209";
+const DIAGNOSTIC_AGENT_VERSION = "2.2.210";
 
 type DiagnosticStatus = "pass" | "warn" | "fail" | "skip";
 type DiagnosticCheck = {
@@ -887,7 +887,9 @@ export const diagnosticsRouter = router({
     }))
     .mutation(async ({ input, ctx }) => {
       const resource = await ensureAccess(input.scope, input.id, ctx.user);
-      const segments = await diagnosticSegments(input.scope, resource);
+      const runtimeRules = await runtimeRulesForResource(input.scope, resource);
+      const rawSegments = await diagnosticSegments(input.scope, resource);
+      const segments = decorateSegmentsWithRuntimeRules(rawSegments, runtimeRules);
       if (segments.length === 0) throw new Error("当前资源没有可执行的实时诊断链路");
       const latencyMode = await diagnosticLatencyMode(input.scope, resource, segments);
       const sourceHostIds = Array.from(new Set(segments.map((segment) => Number(segment.fromHostId)).filter((id) => id > 0)));
@@ -917,6 +919,12 @@ export const diagnosticsRouter = router({
             targetPort: segment.targetPort,
             method: segment.method,
             latencyMode,
+            sourcePort: Number(segment.sourcePort || 0) || 0,
+            sourceProtocol: segment.sourceProtocol || "both",
+            expectedRuleId: Number(segment.expectedRuleId || 0) || 0,
+            expectedForwardType: segment.expectedForwardType || "",
+            sampleCount: 5,
+            isFinalTarget: segment.isFinalTarget === true,
             hopLabel: `${index + 1}/${segments.length}`,
             routeLabel: segment.routeLabel,
           }),
@@ -939,6 +947,10 @@ export const diagnosticsRouter = router({
           targetIp: segment.targetIp,
           targetPort: segment.targetPort,
           method: segment.method,
+          sourcePort: segment.sourcePort || 0,
+          expectedRuleId: segment.expectedRuleId || 0,
+          expectedForwardType: segment.expectedForwardType || "",
+          isFinalTarget: segment.isFinalTarget === true,
         })),
       };
     }),
@@ -1014,6 +1026,8 @@ export const diagnosticsRouter = router({
     }))
     .query(async ({ input, ctx }) => {
       const resource = await ensureAccess(input.scope, input.id, ctx.user);
+      const runtimeRules = await runtimeRulesForResource(input.scope, resource);
+      const templates = await diagnosticTemplates(input.scope, resource);
       const checks: DiagnosticCheck[] = [];
       let nodes: DiagnosticNode[] = [];
       let title = String(resource?.name || `资源 #${input.id}`);
@@ -1190,6 +1204,14 @@ export const diagnosticsRouter = router({
         ));
       }
 
+      const managedHostIds = Array.from(new Set([
+        ...nodes.map((node) => Number(node.hostId || 0)),
+        ...runtimeRules.map((rule) => Number(rule?.hostId || 0)),
+      ].filter((id) => id > 0)));
+      checks.push(...await configSyncChecks(managedHostIds));
+      checks.push(...await runtimeReadinessChecks(input.scope, resource, runtimeRules, managedHostIds));
+      checks.push(...await portConflictChecks(runtimeRules));
+      checks.push(...await templateIntegrityChecks(templates));
       checks.push(...agentChecks(nodes));
 
       const failed = checks.filter((item) => item.status === "fail").length;
