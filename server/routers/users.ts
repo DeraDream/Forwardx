@@ -165,9 +165,36 @@ export const usersRouter = router({
       .mutation(async ({ input, ctx }) => {
         if (input.userId === ctx.user.id) throw new Error("不能删除当前登录账户");
         await db.deleteUserPermissions(input.userId);
+        await db.resetUserPasskeys(input.userId);
         clearLinkAccessScopeCache();
         await db.deleteUser(input.userId);
         console.info(`[Users] Deleted user userId=${input.userId} ${actorLabel(ctx)}`);
+        return { success: true };
+      }),
+    passkeyStatus: adminProcedure
+      .input(z.object({ userId: z.number() }))
+      .query(async ({ input }) => {
+        const target = await db.getUserById(input.userId);
+        if (!target) throw new Error("用户不存在");
+        const count = await db.countUserPasskeys(input.userId);
+        return { enabled: !!(target as any).passkeyEnabled, credentialCount: count };
+      }),
+    setPasskeyEnabled: adminProcedure
+      .input(z.object({ userId: z.number(), enabled: z.boolean() }))
+      .mutation(async ({ input, ctx }) => {
+        const target = await db.getUserById(input.userId);
+        if (!target) throw new Error("用户不存在");
+        await db.setUserPasskeyEnabled(input.userId, input.enabled);
+        console.info(`[Users] Passkey ${input.enabled ? "enabled" : "disabled"} userId=${input.userId} ${actorLabel(ctx)}`);
+        return { success: true };
+      }),
+    resetPasskeys: adminProcedure
+      .input(z.object({ userId: z.number() }))
+      .mutation(async ({ input, ctx }) => {
+        const target = await db.getUserById(input.userId);
+        if (!target) throw new Error("用户不存在");
+        await db.resetUserPasskeys(input.userId);
+        console.info(`[Users] Passkeys reset userId=${input.userId} ${actorLabel(ctx)}`);
         return { success: true };
       }),
     removeTwoFactor: adminProcedure
