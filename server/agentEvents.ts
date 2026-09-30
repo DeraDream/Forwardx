@@ -340,6 +340,20 @@ export function pushAgentSelfTest(hostId: number, diagnosticId: string) {
   });
 }
 
+export function pushAgentNetworkProfile(
+  hostId: number,
+  input: { taskId: string; family: "ipv4" | "ipv6"; mode: "quick" | "full" },
+) {
+  const id = Number(hostId);
+  if (!Number.isFinite(id) || id <= 0) return false;
+  return sendAgentEvent(id, "agent-network-profile", {
+    taskId: String(input.taskId || ""),
+    family: input.family,
+    mode: input.mode,
+    requestedAt: new Date().toISOString(),
+  });
+}
+
 export function pushAgentUpgrade(hostId: number, targetVersion: string | null, panelUrl: string, releaseVersion?: string | null) {
   invalidateAgentStableHeartbeatPlan(hostId);
   return sendAgentEvent(hostId, "agent-upgrade", {

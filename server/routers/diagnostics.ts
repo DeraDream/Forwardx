@@ -12,7 +12,7 @@ import { adjustHopTestDetailsForLatencyMode, type HopTestLatencyMode, type HopTe
 import { latestConfigRevision } from "../configAudit";
 import { getAgentLocalRuntimeStateSnapshot } from "../agentHeartbeatRoute";
 
-const DIAGNOSTIC_AGENT_VERSION = "2.2.210";
+const DIAGNOSTIC_AGENT_VERSION = "2.2.211";
 
 type DiagnosticStatus = "pass" | "warn" | "fail" | "skip";
 type DiagnosticCheck = {
@@ -458,6 +458,19 @@ async function runtimeReadinessChecks(
     const snapshot = getAgentLocalRuntimeStateSnapshot(hostId);
     const fresh = !!snapshot && now - Number(snapshot.updatedAt || 0) <= 120_000;
     const expected = runtimeRules.filter((rule) => Number(rule?.hostId || 0) === hostId);
+    const agentVersion = host?.agentVersion ? String(host.agentVersion) : null;
+    const versionReady = isAgentVersionAtLeast(agentVersion, DIAGNOSTIC_AGENT_VERSION);
+
+    if (!versionReady) {
+      checks.push(check(
+        `runtime-real-${hostId}`,
+        `真实运行状态 · ${host?.name || "主机 #" + hostId}`,
+        "warn",
+        "Agent 版本过旧，无法确认实时运行状态",
+        `${agentVersion ? "当前 Agent " + agentVersion : "未上报 Agent 版本"} · 最低要求 ${DIAGNOSTIC_AGENT_VERSION}`,
+      ));
+      continue;
+    }
 
     if (!snapshot || !fresh) {
       checks.push(check(

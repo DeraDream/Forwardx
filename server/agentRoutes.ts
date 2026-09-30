@@ -24,6 +24,7 @@ import { normalizeAgentText } from "./agentInputValidation";
 import { mergeAgentReportedAddress } from "./agentAddressState";
 import { registerAgentStatusRoutes } from "./agentStatusRoutes";
 import { registerAgentSelfTestRoutes } from "./agentSelfTestRoutes";
+import { registerAgentNetworkProfileRoutes } from "./agentNetworkProfileRoutes";
 import { registerAgentReportRoutes } from "./agentReportRoutes";
 import { invalidateAgentDesiredStateCache, registerAgentHeartbeatRoute } from "./agentHeartbeatRoute";
 import { handleHostAddressChanged, refreshAgentsAffectedByHostAddress } from "./hostAddressRuntime";
@@ -445,6 +446,7 @@ agentApiRouter.post("/api/agent/register", async (req: Request, res: Response) =
 registerAgentHeartbeatRoute(agentApiRouter);
 registerAgentStatusRoutes(agentApiRouter);
 registerAgentSelfTestRoutes(agentApiRouter);
+registerAgentNetworkProfileRoutes(agentApiRouter);
 registerAgentReportRoutes(agentApiRouter);
 
 agentApiRouter.post("/api/agent/migration-rollback", async (req: Request, res: Response) => {
