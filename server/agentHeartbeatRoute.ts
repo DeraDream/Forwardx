@@ -710,6 +710,18 @@ function normalizeAgentLocalRuntimeState(input: any): AgentLocalRuntimeState | n
   return { rules, tunnels, services };
 }
 
+export function getAgentLocalRuntimeStateSnapshot(hostId: number) {
+  const id = Number(hostId);
+  if (!Number.isFinite(id) || id <= 0) return null;
+  const cached = agentLocalRuntimeStateCache.get(id);
+  if (!cached) return null;
+  return {
+    signature: cached.signature,
+    state: cached.state,
+    updatedAt: cached.updatedAt,
+  };
+}
+
 function resolveAgentLocalRuntimeState(hostId: number, signature: string, reported: AgentLocalRuntimeState | null) {
   const id = Number(hostId);
   if (!Number.isFinite(id) || id <= 0) return { state: null as AgentLocalRuntimeState | null, requestLocalState: false };
