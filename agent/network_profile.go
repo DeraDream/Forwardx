@@ -113,6 +113,86 @@ func profileIdentity(client *http.Client, ip string) (map[string]any, error) {
 	return result, nil
 }
 
+func profileASNNumber(value any) int64 {
+	text := strings.TrimSpace(fmt.Sprint(value))
+	if text == "" {
+		return 0
+	}
+	fields := strings.Fields(text)
+	if len(fields) == 0 {
+		return 0
+	}
+	first := strings.TrimPrefix(strings.ToUpper(fields[0]), "AS")
+	asn, _ := strconv.ParseInt(first, 10, 64)
+	if asn <= 0 {
+		return 0
+	}
+	return asn
+}
+
+func profilePeering(client *http.Client, asnValue any) (map[string]any, error) {
+	asn := profileASNNumber(asnValue)
+	if asn <= 0 {
+		return nil, fmt.Errorf("ASN unavailable")
+	}
+	var networkResp struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := profileGetJSON(client, "https://www.peeringdb.com/api/net?asn="+strconv.FormatInt(asn, 10), &networkResp); err != nil {
+		return nil, err
+	}
+	if len(networkResp.Data) == 0 {
+		return map[string]any{"asn": asn, "registered": false, "provider": "PeeringDB"}, nil
+	}
+	network := networkResp.Data[0]
+	netID := int64(0)
+	switch value := network["id"].(type) {
+	case float64:
+		netID = int64(value)
+	case int64:
+		netID = value
+	case json.Number:
+		netID, _ = value.Int64()
+	}
+	result := map[string]any{
+		"asn": asn,
+		"registered": true,
+		"provider": "PeeringDB",
+		"name": network["name"],
+		"aka": network["aka"],
+		"website": network["website"],
+		"infoType": network["info_type"],
+		"policyGeneral": network["policy_general"],
+		"ixCount": network["ix_count"],
+		"facilityCount": network["fac_count"],
+	}
+	if netID <= 0 {
+		return result, nil
+	}
+
+	var ixResp struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := profileGetJSON(client, "https://www.peeringdb.com/api/ix?net="+strconv.FormatInt(netID, 10)+"&limit=100", &ixResp); err == nil {
+		ixps := make([]map[string]any, 0, len(ixResp.Data))
+		for _, ix := range ixResp.Data {
+			if len(ixps) >= 50 {
+				break
+			}
+			ixps = append(ixps, map[string]any{
+				"id": ix["id"],
+				"name": ix["name"],
+				"nameLong": ix["name_long"],
+				"city": ix["city"],
+				"country": ix["country"],
+				"region": ix["region_continent"],
+			})
+		}
+		result["ixp"] = ixps
+	}
+	return result, nil
+}
+
 const networkProfileBodyLimit = 2 * 1024 * 1024
 
 var netflixRegionPatterns = []*regexp.Regexp{
@@ -301,11 +381,13 @@ func runNetworkProfile(cfg Config, request networkProfileRequest) {
 		report("identity", "success", identity, "")
 	}
 
-	report("network", "success", map[string]any{
-		"asn": identity["asn"],
-		"peeringSource": "PeeringDB",
-		"status": "queued-for-enrichment",
-	}, "ASN/IXP 详细信息由 Panel 根据 ASN 继续补全")
+	report("network", "running", nil, "")
+	network, networkErr := profilePeering(client, identity["asn"])
+	if networkErr != nil {
+		report("network", "error", map[string]any{"asn": identity["asn"], "provider": "PeeringDB"}, networkErr.Error())
+	} else {
+		report("network", "success", network, "")
+	}
 
 	risk := map[string]any{
 		"score": nil,
