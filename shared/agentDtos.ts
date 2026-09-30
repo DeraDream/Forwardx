@@ -118,6 +118,7 @@ export type SelfTestMeta =
       targetIp?: string;
       targetPort?: number;
       method?: "tcp" | "ping";
+      latencyMode?: "sum" | "remaining-path" | "multi-source-remaining-path";
       hopLabel?: string;
       routeLabel?: string;
       batchId?: string;
