@@ -93,6 +93,20 @@ export function HostNetworkProfileDialog({
   const riskLevelText: Record<string, string> = { low: "低", medium: "中等", high: "高", very_high: "极高", unknown: "未知" };
   const networkType = risk.networkType || (risk.isDatacenter === true ? "Hosting / Datacenter" : "");
   const rpkiText: Record<string, string> = { valid: "有效", invalid_asn: "ASN 不匹配", invalid_length: "前缀长度无效", unknown: "未配置 ROA" };
+  const neighbours = Array.isArray(data.network?.neighbours) ? data.network.neighbours : [];
+  const ipNatureText: Record<string, string> = { native: "原生 IP", broadcast: "广播 IP", unknown: "待确认" };
+  const relationClass = (relation: string, index: number) => {
+    const value = String(relation || "").toLowerCase();
+    if (value.includes("left")) return "border-sky-300 bg-sky-500/10 text-sky-700 dark:text-sky-300";
+    if (value.includes("right")) return "border-emerald-300 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
+    const palette = [
+      "border-violet-300 bg-violet-500/10 text-violet-700 dark:text-violet-300",
+      "border-amber-300 bg-amber-500/10 text-amber-700 dark:text-amber-300",
+      "border-cyan-300 bg-cyan-500/10 text-cyan-700 dark:text-cyan-300",
+      "border-rose-300 bg-rose-500/10 text-rose-700 dark:text-rose-300",
+    ];
+    return palette[index % palette.length];
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -131,7 +145,8 @@ export function HostNetworkProfileDialog({
                   <div><span className="text-muted-foreground">ASN：</span><span className="font-medium text-violet-700 dark:text-violet-300">{identity.asn || "待检测"}</span></div>
                   <div><span className="text-muted-foreground">运营商：</span><span className="font-medium text-indigo-700 dark:text-indigo-300">{identity.company || identity.isp || "待检测"}</span></div>
                   <div><span className="text-muted-foreground">地区：</span><span className="font-medium text-emerald-700 dark:text-emerald-300">{[identity.flag, identity.city, identity.region, identity.country].filter(Boolean).join(" · ") || "待检测"}</span></div>
-                  <div><span className="text-muted-foreground">IP 类型：</span><span className="font-medium text-amber-700 dark:text-amber-300">{networkType || "待检测"}</span>{identity.domain ? <span className="text-muted-foreground"> · {identity.domain}</span> : null}</div>
+                  <div><span className="text-muted-foreground">IP 属性：</span><span className={identity.ipNature === "broadcast" ? "font-semibold text-red-600 dark:text-red-400" : identity.ipNature === "native" ? "font-semibold text-emerald-600 dark:text-emerald-400" : "font-medium text-amber-700 dark:text-amber-300"}>{ipNatureText[String(identity.ipNature || "unknown")] || "待确认"}</span></div>
+                  <div><span className="text-muted-foreground">使用类型：</span><span className="font-medium text-amber-700 dark:text-amber-300">{networkType || "待检测"}</span>{identity.domain ? <span className="text-muted-foreground"> · {identity.domain}</span> : null}</div>
                 </div>
               </div>
               <div className="rounded-lg border border-amber-200/70 bg-amber-500/[0.035] p-3">
@@ -148,20 +163,6 @@ export function HostNetworkProfileDialog({
                 </div>
                 <div className="mt-2 text-[11px] text-muted-foreground">数据源：{risk.provider === "multi-source" ? "多库综合" : risk.provider || "待检测"}</div>
                 {riskScore === null && <div className="mt-1 text-xs text-muted-foreground">暂无可用评分，但仍会展示各数据库风险因子。</div>}
-              </div>
-            </div>
-
-            <div className="rounded-lg border border-violet-200/60 bg-violet-500/[0.025] p-3">
-              <div className="mb-1 flex items-center justify-between"><div className="text-sm font-medium text-violet-700 dark:text-violet-300">应用解锁 / 可达性</div><span className="text-xs text-muted-foreground">{apps.length ? `${apps.length} 项已返回` : "等待结果"}</span></div>
-              <div className="mb-3 text-[11px] text-muted-foreground">“解锁”=已通过地区/内容判定；“仅可达”只代表站点能打开，两者不是一个意思；“未知”表示服务拒绝自动探测或页面格式无法可靠判定。</div>
-              <div className="grid gap-2 sm:grid-cols-2 md:grid-cols-3">
-                {apps.map((app: any) => (
-                  <div key={app.id} className={`flex min-h-14 items-center justify-between gap-2 rounded-md border px-2.5 py-2 ${statusCardClass(String(app.status || "unknown"))}`}>
-                    <div className="min-w-0"><div className="truncate text-sm font-medium">{app.name || app.id}</div><div className="truncate text-[10px] text-muted-foreground" title={app.note || app.message || ""}>{app.region ? `${app.region}${app.latencyMs != null ? ` · ${app.latencyMs} ms` : ""}` : (app.latencyMs != null ? `${app.latencyMs} ms` : app.message || app.note || "")}</div></div>
-                    {statusBadge(String(app.status || "unknown"))}
-                  </div>
-                ))}
-                {apps.length === 0 && <div className="col-span-full py-5 text-center text-xs text-muted-foreground">检测开始后会逐项显示，不需要等待全部完成。</div>}
               </div>
             </div>
 
@@ -183,7 +184,7 @@ export function HostNetworkProfileDialog({
                         <tr key={source.name} className="border-b last:border-0">
                           <td className="py-1.5 font-medium text-cyan-700 dark:text-cyan-300">{source.name}</td>
                           <td className="text-emerald-700 dark:text-emerald-300">{source.country || "—"}</td>
-                          <td>{source.score != null ? <span className={Number(source.score) >= 60 ? "font-semibold text-red-600" : Number(source.score) >= 25 ? "font-semibold text-amber-600" : "font-semibold text-emerald-600"}>{Math.round(Number(source.score))}</span> : source.error ? <span className="text-muted-foreground">不可用</span> : "—"}</td>
+                          <td>{source.score != null ? <span className={Number(source.score) >= 60 ? "font-semibold text-red-600" : Number(source.score) >= 25 ? "font-semibold text-amber-600" : "font-semibold text-emerald-600"}>{Math.round(Number(source.score))}</span> : source.error ? <span className="text-amber-600" title={source.error}>暂不可用</span> : "—"}</td>
                           <td className="text-center">{riskValue(source.isProxy)}</td><td className="text-center">{riskValue(source.isTor)}</td><td className="text-center">{riskValue(source.isVPN)}</td>
                           <td className="text-center">{riskValue(source.isDatacenter)}</td><td className="text-center">{riskValue(source.isAbuser)}</td><td className="text-center">{riskValue(source.isBot)}</td>
                         </tr>
@@ -194,6 +195,21 @@ export function HostNetworkProfileDialog({
               </div>
             )}
 
+
+            <div className="rounded-lg border border-violet-200/60 bg-violet-500/[0.025] p-3">
+              <div className="mb-1 flex items-center justify-between"><div className="text-sm font-medium text-violet-700 dark:text-violet-300">应用解锁 / 可达性</div><span className="text-xs text-muted-foreground">{apps.length ? `${apps.length} 项已返回` : "等待结果"}</span></div>
+              <div className="mb-3 text-[11px] text-muted-foreground">“解锁”=已通过地区/内容判定；“仅可达”只代表站点能打开，两者不是一个意思；“未知”表示服务拒绝自动探测或页面格式无法可靠判定。</div>
+              <div className="grid gap-2 sm:grid-cols-2 md:grid-cols-3">
+                {apps.map((app: any) => (
+                  <div key={app.id} className={`flex min-h-14 items-center justify-between gap-2 rounded-md border px-2.5 py-2 ${statusCardClass(String(app.status || "unknown"))}`}>
+                    <div className="min-w-0"><div className="truncate text-sm font-medium">{app.name || app.id}</div><div className="truncate text-[10px] text-muted-foreground" title={app.note || app.message || ""}>{app.region ? `${app.region}${app.latencyMs != null ? ` · ${app.latencyMs} ms` : ""}` : (app.latencyMs != null ? `${app.latencyMs} ms` : app.message || app.note || "")}</div></div>
+                    {statusBadge(String(app.status || "unknown"))}
+                  </div>
+                ))}
+                {apps.length === 0 && <div className="col-span-full py-5 text-center text-xs text-muted-foreground">检测开始后会逐项显示，不需要等待全部完成。</div>}
+              </div>
+            </div>
+
             <div className="rounded-lg border border-cyan-200/60 bg-cyan-500/[0.025] p-3">
               <div className="mb-2 text-sm font-medium text-cyan-700 dark:text-cyan-300">网络 / IXP</div>
               <div className="grid gap-1 text-xs sm:grid-cols-2">
@@ -201,6 +217,19 @@ export function HostNetworkProfileDialog({
                 <div>网络名称：{data.network?.name || identity.company || "待检测"}</div>
                 <div>Prefix：{data.network?.prefix || "待检测"}</div>
                 <div>RPKI：{data.network?.rpki ? (rpkiText[String(data.network.rpki)] || data.network.rpki) : "待检测"}</div>
+                <div className="sm:col-span-2">
+                  <div className="mb-1.5 text-muted-foreground">互联网互联 ASN：</div>
+                  {neighbours.length > 0 ? (
+                    <div className="flex flex-wrap gap-1.5">
+                      {neighbours.map((item: any, index: number) => (
+                        <div key={`${item.asn}-${index}`} className={`min-w-[78px] rounded-md border px-2 py-1 text-center leading-tight ${relationClass(item.relation, index)}`}>
+                          <div className="text-[11px] font-semibold">AS{item.asn}</div>
+                          <div className="max-w-[110px] truncate text-[10px]" title={item.name || ""}>{item.name || "未知网络"}</div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : <span className="text-muted-foreground">待检测</span>}
+                </div>
                 <div className="sm:col-span-2">IXP：{ixpNames.length ? ixpNames.join(" · ") : data.network?.registered === false ? "PeeringDB 未登记" : "待检测"}</div>
                 <div>交换点 / 机房：{data.network?.ixCount ?? "—"} / {data.network?.facilityCount ?? "—"}</div>
                 <div>AS 邻居：{data.network?.neighbourUnique ?? "—"}（左 {data.network?.neighbourLeft ?? "—"} / 右 {data.network?.neighbourRight ?? "—"}）</div>
