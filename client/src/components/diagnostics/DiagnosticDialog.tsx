@@ -115,7 +115,46 @@ function ProbeRow({ row, index }: { row: any; index: number }) {
           </span>
         </div>
         {detail ? <div className="mt-1 break-words text-xs text-muted-foreground">{detail}</div> : null}
-        {parsed?.resolvedTargetIp ? <div className="mt-1 text-[11px] text-muted-foreground">解析到 {parsed.resolvedTargetIp}</div> : null}
+        {success && Number(row?.sampleAttempts || 0) > 0 ? (
+          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+            <span>Min {row?.minLatencyMs ?? "—"} ms</span>
+            <span>Avg {row?.averageLatencyMs ?? "—"} ms</span>
+            <span>Max {row?.maxLatencyMs ?? "—"} ms</span>
+            <span>Jitter {row?.jitterMs ?? "—"} ms</span>
+            <span>{row?.sampleSuccesses ?? 0}/{row?.sampleAttempts ?? 0} 成功</span>
+          </div>
+        ) : null}
+        {row?.dnsSkipped !== true && (Number(row?.dnsMs || 0) > 0 || row?.dnsError || (row?.dnsAddresses || []).length > 0) ? (
+          <div className="mt-1 text-[11px] text-muted-foreground">
+            DNS {row?.dnsError ? <span className="text-destructive">{row.dnsError}</span> : (
+              <>
+                {row?.dnsMs != null ? <span>{row.dnsMs} ms</span> : null}
+                {(row?.dnsAddresses || []).length > 0 ? <span> · {(row.dnsAddresses || []).join(", ")}</span> : null}
+              </>
+            )}
+          </div>
+        ) : parsed?.resolvedTargetIp ? (
+          <div className="mt-1 text-[11px] text-muted-foreground">解析到 {parsed.resolvedTargetIp}</div>
+        ) : null}
+        {row?.portInspection?.available ? (
+          <div className="mt-1 flex flex-wrap gap-1.5 text-[10px]">
+            {Number(row.portInspection.sourcePort || 0) > 0 ? (
+              <Badge variant="outline" className={row.portInspection.runtimeReady ? "h-5 border-emerald-500/30 text-emerald-600" : "h-5 border-amber-500/30 text-amber-600"}>
+                {row.portInspection.runtimeReady ? "运行项就绪" : "运行项未确认"} · {row.portInspection.sourcePort}
+              </Badge>
+            ) : null}
+            {row.portInspection.portConflict ? (
+              <Badge variant="outline" className="h-5 border-destructive/30 text-destructive">端口冲突</Badge>
+            ) : Number(row.portInspection.sourcePort || 0) > 0 ? (
+              <Badge variant="outline" className="h-5 border-emerald-500/30 text-emerald-600">无冲突</Badge>
+            ) : null}
+          </div>
+        ) : null}
+        {(row?.issues || []).map((issue: any, issueIndex: number) => (
+          <div key={issueIndex} className={issue.severity === "fail" ? "mt-1 text-[11px] text-destructive" : "mt-1 text-[11px] text-amber-600"}>
+            {issue.message}
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -173,14 +212,20 @@ export function DiagnosticDialog({
   const livePending = testIds.length > 0 && (rows.length < testIds.length || rows.some((row: any) => ["pending", "running"].includes(String(row.status))));
   const liveFailed = rows.filter((row: any) => ["failed", "timeout"].includes(String(row.status)));
   const livePassed = rows.filter((row: any) => String(row.status) === "success");
+  const liveIssueFailures = rows.flatMap((row: any) => row?.issues || []).filter((issue: any) => issue?.severity === "fail");
+  const liveIssueWarnings = rows.flatMap((row: any) => row?.issues || []).filter((issue: any) => issue?.severity === "warn");
+  const liveHealthy = rows.filter((row: any) =>
+    String(row.status) === "success" && !(row?.issues || []).some((issue: any) => issue?.severity === "fail")
+  );
+  const finalTargetRow = rows.find((row: any) => row?.isFinalTarget === true) || null;
 
   const preflight = planQuery.data?.summary;
   const overall = useMemo(() => {
-    if (preflight?.failed || liveFailed.length > 0) return "fail" as const;
-    if (preflight?.warnings) return "warn" as const;
+    if (preflight?.failed || liveFailed.length > 0 || liveIssueFailures.length > 0) return "fail" as const;
+    if (preflight?.warnings || liveIssueWarnings.length > 0) return "warn" as const;
     if (testIds.length > 0 && !livePending && livePassed.length === testIds.length) return "pass" as const;
     return preflight?.status || "warn";
-  }, [liveFailed.length, livePassed.length, livePending, preflight, testIds.length]);
+  }, [liveFailed.length, liveIssueFailures.length, liveIssueWarnings.length, livePassed.length, livePending, preflight, testIds.length]);
 
   const failure = liveFailed[0];
   let failureMeta: any = null;
@@ -230,7 +275,7 @@ export function DiagnosticDialog({
             </div>
             <div className="rounded-lg border border-border/45 bg-card/55 p-3">
               <div className="text-xs text-muted-foreground">实时通过</div>
-              <div className="mt-1 text-xl font-semibold">{livePassed.length}/{testIds.length || "—"}</div>
+              <div className="mt-1 text-xl font-semibold">{liveHealthy.length}/{testIds.length || "—"}</div>
             </div>
             <div className="rounded-lg border border-border/45 bg-card/55 p-3">
               <div className="text-xs text-muted-foreground">耗时</div>
@@ -290,6 +335,28 @@ export function DiagnosticDialog({
               </div>
             )}
           </div>
+
+          {finalTargetRow ? (
+            <div className="rounded-xl border border-border/45 bg-card/35 p-3">
+              <div className="mb-3 flex items-center gap-2">
+                <CheckCircle2 className={String(finalTargetRow.status) === "success" ? "h-4 w-4 text-emerald-500" : "h-4 w-4 text-destructive"} />
+                <span className="text-sm font-semibold">最终目标检查</span>
+              </div>
+              <div className="rounded-lg border border-border/45 bg-background/55 px-3 py-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-sm font-medium">{finalTargetRow.routeLabel || "最终目标"}</span>
+                  <Badge variant="outline" className={String(finalTargetRow.status) === "success" ? "border-emerald-500/30 text-emerald-600" : "border-destructive/30 text-destructive"}>
+                    {String(finalTargetRow.status) === "success" ? "业务端口可达" : "业务端口不可达"}
+                  </Badge>
+                </div>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  {String(finalTargetRow.status) === "success"
+                    ? `TCP/探测成功 · ${finalTargetRow.latencyMs ?? "—"} ms`
+                    : "最后一跳未通过，请优先检查落地服务和目标端口"}
+                </div>
+              </div>
+            </div>
+          ) : null}
 
           <div className="rounded-xl border border-border/45 bg-card/35 p-3">
             <div className="mb-3 text-sm font-semibold">诊断路径</div>
