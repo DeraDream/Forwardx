@@ -1118,7 +1118,7 @@ func profileBGPTools(client *http.Client, ip string) map[string]any {
 	}
 	prefix := profileString(result["prefix"])
 	if prefix != "" {
-		ixCode, ixBody, ixErr := profileReadRetry(client, "https://bgp.tools/ixp-rs-route/"+url.PathEscape(prefix), nil, 2)
+		ixCode, ixBody, ixErr := profileReadRetry(client, "https://bgp.tools/ixp-rs-route/"+prefix, nil, 2)
 		if ixErr == nil && ixCode >= 200 && ixCode < 300 {
 			if ixCount := profileHTMLTableRowCount(ixBody, "upstreamTable"); ixCount >= 0 {
 				result["bgpToolsIXPCount"] = ixCount
