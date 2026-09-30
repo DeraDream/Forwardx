@@ -4,8 +4,13 @@ import * as db from "../db";
 import { pushAgentSelfTest } from "../agentEvents";
 import { isAgentVersionAtLeast } from "../agentRouteUtils";
 import { summarizeForwardGroupRuntime } from "../forwardGroupRuntimeStatus";
-import { getForwardGroupChildRulesForTemplate } from "../repositories/forwardRuleRepository";
+import {
+  getForwardGroupChildRulesForTemplate,
+  getForwardGroupTemplateRules,
+} from "../repositories/forwardRuleRepository";
 import { adjustHopTestDetailsForLatencyMode, type HopTestLatencyMode, type HopTestResult } from "../hopTestState";
+import { latestConfigRevision } from "../configAudit";
+import { getAgentLocalRuntimeStateSnapshot } from "../agentHeartbeatRoute";
 
 const DIAGNOSTIC_AGENT_VERSION = "2.2.209";
 
@@ -312,6 +317,11 @@ type DiagnosticSegment = {
   targetPort: number;
   method: "tcp" | "ping";
   routeLabel: string;
+  sourcePort?: number;
+  sourceProtocol?: "tcp" | "udp" | "both";
+  expectedRuleId?: number;
+  expectedForwardType?: string;
+  isFinalTarget?: boolean;
 };
 
 async function hostTarget(hostId: number) {
