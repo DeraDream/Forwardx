@@ -31,6 +31,7 @@ import {
 import QRCode from "qrcode";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { createPasskeyCredential } from "@/lib/passkey";
 
 const DISPLAY_NAME_MAX_LENGTH = 24;
 
@@ -56,6 +57,8 @@ function ProfileContent() {
   const [twoFactorSetupTick, setTwoFactorSetupTick] = useState(Date.now());
   const [twoFactorPassword, setTwoFactorPassword] = useState("");
   const [twoFactorCode, setTwoFactorCode] = useState("");
+  const [passkeyPassword, setPasskeyPassword] = useState("");
+  const [passkeyBusy, setPasskeyBusy] = useState(false);
   const [checkingMobileUpdate, setCheckingMobileUpdate] = useState(false);
   const [mobileUpdateInfo, setMobileUpdateInfo] = useState<MobileAppUpdateResult | null>(null);
 
@@ -78,6 +81,11 @@ function ProfileContent() {
     retry: false,
   });
   const { data: twoFactorStatus } = trpc.auth.twoFactorStatus.useQuery(undefined, {
+    enabled: !!user,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+  const { data: passkeyStatus } = trpc.auth.passkeyStatus.useQuery(undefined, {
     enabled: !!user,
     refetchOnWindowFocus: false,
     retry: false,
@@ -160,6 +168,63 @@ function ProfileContent() {
     },
     onError: (error) => toast.error(error.message || "解绑 Telegram 失败"),
   });
+
+
+  const beginPasskeyRegistrationMutation = trpc.auth.beginPasskeyRegistration.useMutation();
+  const finishPasskeyRegistrationMutation = trpc.auth.finishPasskeyRegistration.useMutation();
+  const setPasskeyEnabledMutation = trpc.auth.setPasskeyEnabled.useMutation();
+  const resetPasskeysMutation = trpc.auth.resetPasskeys.useMutation();
+
+  const refreshPasskeyStatus = async () => {
+    await Promise.all([
+      utils.auth.passkeyStatus.invalidate(),
+      utils.auth.me.invalidate(),
+      utils.users.list.invalidate(),
+    ]);
+  };
+
+  const handleAddPasskey = async () => {
+    if (!passkeyPassword.trim()) return toast.error("请输入当前密码");
+    setPasskeyBusy(true);
+    try {
+      const options = await beginPasskeyRegistrationMutation.mutateAsync({ password: passkeyPassword });
+      const credential = await createPasskeyCredential(options);
+      await finishPasskeyRegistrationMutation.mutateAsync({ credential });
+      setPasskeyPassword("");
+      await refreshPasskeyStatus();
+      toast.success("Passkey 已添加，可在登录页直接使用");
+    } catch (error: any) {
+      if (error?.name !== "NotAllowedError") toast.error(error?.message || "添加 Passkey 失败");
+    } finally {
+      setPasskeyBusy(false);
+    }
+  };
+
+  const handleTogglePasskey = async () => {
+    if (!passkeyPassword.trim()) return toast.error("请输入当前密码");
+    const enabled = !passkeyStatus?.enabled;
+    try {
+      await setPasskeyEnabledMutation.mutateAsync({ enabled, password: passkeyPassword });
+      setPasskeyPassword("");
+      await refreshPasskeyStatus();
+      toast.success(enabled ? "Passkey 登录已开启" : "Passkey 登录已关闭");
+    } catch (error: any) {
+      toast.error(error?.message || "Passkey 设置失败");
+    }
+  };
+
+  const handleResetPasskeys = async () => {
+    if (!passkeyPassword.trim()) return toast.error("请输入当前密码");
+    if (!window.confirm("确认重置全部 Passkey？重置后所有已保存的 Passkey 都无法再登录，需要重新绑定。")) return;
+    try {
+      await resetPasskeysMutation.mutateAsync({ password: passkeyPassword });
+      setPasskeyPassword("");
+      await refreshPasskeyStatus();
+      toast.success("Passkey 已全部重置");
+    } catch (error: any) {
+      toast.error(error?.message || "重置 Passkey 失败");
+    }
+  };
 
   const beginTwoFactorSetupMutation = trpc.auth.beginTwoFactorSetup.useMutation({
     onSuccess: (data) => {
@@ -705,6 +770,102 @@ function ProfileContent() {
           </CardContent>
         </Card>
       </div>
+
+
+      <Card className="border-border/50 bg-card/70">
+        <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <KeyRound className="h-4 w-4 text-primary" />
+              Passkey
+            </CardTitle>
+            <CardDescription>使用设备密钥、系统钥匙串或 Bitwarden 等密码管理器免密码登录。</CardDescription>
+          </div>
+          <Badge variant={passkeyStatus?.enabled ? "default" : "outline"} className="w-fit">
+            {passkeyStatus?.enabled ? "已启用" : "未启用"}
+          </Badge>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {!passkeyStatus?.globalEnabled ? (
+            <div className="flex items-start gap-2 rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm text-primary">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>管理员尚未启用 Passkey 功能。</span>
+            </div>
+          ) : (
+            <>
+              {passkeyStatus?.credentials?.length ? (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="font-medium">已绑定 Passkey</span>
+                    <Badge variant="outline">{passkeyStatus.credentials.length} 个</Badge>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {passkeyStatus.credentials.map((item: any, index: number) => (
+                      <div key={item.credentialId} className="rounded-lg border border-border/40 bg-muted/20 p-3 text-xs">
+                        <div className="font-medium">Passkey {index + 1}</div>
+                        <div className="mt-1 truncate font-mono text-muted-foreground" title={item.credentialId}>
+                          {String(item.credentialId).slice(0, 18)}…
+                        </div>
+                        <div className="mt-1 text-muted-foreground">
+                          {item.authenticatorAttachment === "platform" ? "本机/系统密钥" : item.authenticatorAttachment === "cross-platform" ? "外部/密码管理器" : "Passkey"}
+                          {item.transports?.length ? " · " + item.transports.join("/") : ""}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-lg border border-dashed border-border/60 bg-muted/10 p-3 text-sm text-muted-foreground">
+                  尚未绑定 Passkey。添加后可通过浏览器、手机系统或 Bitwarden 等密码管理器直接登录。
+                </div>
+              )}
+
+              <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+                <div className="space-y-2">
+                  <Label htmlFor="profile-passkey-password">当前密码</Label>
+                  <Input
+                    id="profile-passkey-password"
+                    type="password"
+                    value={passkeyPassword}
+                    onChange={(event) => setPasskeyPassword(event.target.value)}
+                    placeholder="添加、启停或重置 Passkey 时验证"
+                  />
+                </div>
+                <div className="flex flex-wrap items-end gap-2">
+                  <Button
+                    type="button"
+                    onClick={() => void handleAddPasskey()}
+                    disabled={passkeyBusy || beginPasskeyRegistrationMutation.isPending || finishPasskeyRegistrationMutation.isPending}
+                  >
+                    {passkeyBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <KeyRound className="mr-2 h-4 w-4" />}
+                    {passkeyStatus?.credentials?.length ? "新增 Passkey" : "开启并添加 Passkey"}
+                  </Button>
+                  {!!passkeyStatus?.credentials?.length && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => void handleTogglePasskey()}
+                      disabled={setPasskeyEnabledMutation.isPending}
+                    >
+                      {passkeyStatus?.enabled ? "关闭 Passkey 登录" : "重新开启 Passkey 登录"}
+                    </Button>
+                  )}
+                  {!!passkeyStatus?.credentials?.length && (
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      onClick={() => void handleResetPasskeys()}
+                      disabled={resetPasskeysMutation.isPending}
+                    >
+                      重置全部 Passkey
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+        </CardContent>
+      </Card>
 
       {mobileAuth.isNative && (
         <Card className="border-border/50 bg-card/70">
