@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.3.377] - 2026-09-30
+
+### 一键诊断增强：配置、运行、DNS、稳定性与最终目标
+
+- 新增 Panel / Agent 配置同步一致性检查：对比面板配置 revision、Agent 已接收 revision、已应用 revision 与接收/应用哈希，识别配置尚未应用或应用哈希不一致。
+- 新增真实运行状态检查：复用 Agent 本地运行快照；iptables / nftables 校验真实内核转发规则，GOST / Nginx / Realm / Socat / ForwardX 等进程型后端校验实际运行监听与 readiness。
+- 新增端口冲突检查：同时检查面板托管规则与 Agent 本地运行状态；实时诊断还会检查目标源端口的系统监听，并在发现其他托管规则或异常监听占用时标记冲突。
+- 新增逐跳 DNS 诊断：域名由实际发起该跳连接的 Agent 本机解析，返回解析耗时、解析地址和错误；IP 字面量自动跳过 DNS 查询。
+- 实时 TCP / Ping 探测升级为默认 5 次稳定性采样，展示 Min / Avg / Max、Jitter 与成功次数；iptables / nftables 剩余路径模式继续复用原有差分算法，避免把累计链路耗时误认为单跳时延。
+- 新增托管子规则完整性检查：核对应生成/实际生成数量、重复托管子规则与模板/转发组关系，并继续使用项目既有运行汇总模型判断实际监听。
+- 新增“最终目标检查”区域，明确展示最后业务目标/落地服务端口是否真实可达，不再把中转监听口与最终业务端口混为一谈。
+- Agent 诊断任务继续使用独立 `agent-selftest` 通道，只执行读取、DNS、监听状态采集和 TCP/Ping 探测；不会刷新 desired-state、修改规则、重启服务、修改防火墙或触发切链。
+- Agent Release 升级至 `2.2.210`；Panel / APK Release 升级至 `2.3.377`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+- 完整 CI 已覆盖 Panel TypeScript/build/tests、Agent Go tests/vet，并新增诊断 DNS、采样与抖动相关回归测试。
+
 ## [2.3.376] - 2026-09-30
 
 ### 一键诊断延迟与运行状态修正
