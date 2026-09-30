@@ -62,3 +62,24 @@ func TestProfileShortASNName(t *testing.T) {
 		}
 	}
 }
+
+
+func TestProfileIPNature(t *testing.T) {
+	cases := []struct {
+		actual     string
+		registered string
+		want       string
+	}{
+		{"SG", "SG", "native"},
+		{"sg", "SG", "native"},
+		{"SG", "US", "broadcast"},
+		{"", "SG", "unknown"},
+		{"SG", "", "unknown"},
+		{"Singapore", "SG", "unknown"},
+	}
+	for _, tc := range cases {
+		if got := profileIPNature(tc.actual, tc.registered); got != tc.want {
+			t.Fatalf("profileIPNature(%q, %q)=%q want=%q", tc.actual, tc.registered, got, tc.want)
+		}
+	}
+}

@@ -173,7 +173,7 @@ export function HostNetworkProfileDialog({
                         <tr key={source.name} className="border-b last:border-0">
                           <td className="py-1.5 font-medium text-cyan-700 dark:text-cyan-300">{source.name}</td>
                           <td className="text-emerald-700 dark:text-emerald-300">{source.country || "—"}</td>
-                          <td>{source.score != null ? <span className={Number(source.score) >= 60 ? "font-semibold text-red-600" : Number(source.score) >= 25 ? "font-semibold text-amber-600" : "font-semibold text-emerald-600"}>{Math.round(Number(source.score))}</span> : source.error ? <span className="text-amber-600" title={source.error}>暂不可用</span> : "—"}</td>
+                          <td>{source.score != null ? <span className={Number(source.score) >= 60 ? "font-semibold text-red-600" : Number(source.score) >= 25 ? "font-semibold text-amber-600" : "font-semibold text-emerald-600"}>{Math.round(Number(source.score))}</span> : source.error ? <div className="max-w-[150px]" title={source.error}><div className="text-amber-600">暂不可用</div><div className="truncate text-[9px] text-muted-foreground">{source.error}</div></div> : "—"}</td>
                           <td className="text-center">{riskValue(source.isProxy)}</td><td className="text-center">{riskValue(source.isTor)}</td><td className="text-center">{riskValue(source.isVPN)}</td>
                           <td className="text-center">{riskValue(source.isDatacenter)}</td><td className="text-center">{riskValue(source.isAbuser)}</td><td className="text-center">{riskValue(source.isBot)}</td>
                         </tr>

@@ -110,6 +110,35 @@ func profileGetJSONRetry(client *http.Client, rawURL string, out any, attempts i
 	return lastErr
 }
 
+func profilePanelRiskProxy(cfg Config, ip, provider string) (map[string]any, error) {
+	var response struct {
+		Success bool           `json:"success"`
+		Payload map[string]any `json:"payload"`
+		Error   string         `json:"error"`
+	}
+	err := post(cfg, "/api/agent/network-profile-risk-proxy", map[string]any{
+		"ip": strings.TrimSpace(ip), "provider": strings.TrimSpace(provider),
+	}, &response)
+	if err != nil { return nil, err }
+	if !response.Success || response.Payload == nil {
+		message := strings.TrimSpace(response.Error)
+		if message == "" { message = "empty panel proxy response" }
+		return nil, fmt.Errorf("%s", message)
+	}
+	return response.Payload, nil
+}
+
+func profileGetJSONWithPanelFallback(cfg Config, client *http.Client, rawURL, ip, provider string) (map[string]any, error) {
+	var payload map[string]any
+	directErr := profileGetJSONRetry(client, rawURL, &payload, 2)
+	if directErr == nil && payload != nil { return payload, nil }
+	panelPayload, panelErr := profilePanelRiskProxy(cfg, ip, provider)
+	if panelErr == nil && panelPayload != nil { return panelPayload, nil }
+	if directErr == nil { directErr = fmt.Errorf("empty direct response") }
+	if panelErr == nil { panelErr = fmt.Errorf("empty panel proxy response") }
+	return nil, fmt.Errorf("direct %v; panel fallback %v", directErr, panelErr)
+}
+
 func detectProfileIP(client *http.Client, family string) (string, error) {
 	endpoint := "https://api4.ipify.org?format=json"
 	if strings.EqualFold(family, "ipv6") {
@@ -192,7 +221,7 @@ func profileBool(value any) (bool, bool) {
 	return false, false
 }
 
-func profileIdentity(client *http.Client, ip string) (map[string]any, error) {
+func profileIdentity(cfg Config, client *http.Client, ip string) (map[string]any, error) {
 	result := map[string]any{"ip": ip}
 	var primaryErr error
 
@@ -265,26 +294,28 @@ func profileIdentity(client *http.Client, ip string) (map[string]any, error) {
 		result["classificationProvider"] = "ipapi.is"
 	}
 
-	var ipinfo map[string]any
-	if err := profileGetJSONRetry(client, "https://ipinfo.io/widget/demo/"+url.PathEscape(ip), &ipinfo, 2); err == nil {
-		data := profileMap(ipinfo["data"])
-		if data != nil {
-			actual := strings.ToUpper(profileString(data["country"]))
-			abuse := profileMap(data["abuse"])
-			registered := strings.ToUpper(profileString(abuse["country"]))
-			result["registeredCountryCode"] = registered
-			if actual == "" {
-				actual = strings.ToUpper(profileString(result["countryCode"]))
-			}
-			if actual != "" && registered != "" {
-				if actual == registered {
-					result["ipNature"] = "native"
-				} else {
-					result["ipNature"] = "broadcast"
-				}
-			}
-		}
+	var maxmindPayload map[string]any
+	maxmindURL := "https://ipinfo.check.place/" + url.PathEscape(ip) + "?lang=en"
+	if payload, err := profileGetJSONWithPanelFallback(cfg, client, maxmindURL, ip, "maxmind"); err == nil {
+		maxmindPayload = payload
 	}
+	if maxmindPayload != nil {
+		country := profileMap(maxmindPayload["Country"])
+		registered := profileMap(country["RegisteredCountry"])
+		actualCode := strings.ToUpper(profileString(country["IsoCode"]))
+		if actualCode == "" {
+			city := profileMap(maxmindPayload["City"])
+			cityCountry := profileMap(city["Country"])
+			actualCode = strings.ToUpper(profileString(cityCountry["IsoCode"]))
+		}
+		if actualCode == "" { actualCode = strings.ToUpper(profileString(result["countryCode"])) }
+		registeredCode := strings.ToUpper(profileString(registered["IsoCode"]))
+		result["actualCountryCode"] = actualCode
+		result["registeredCountryCode"] = registeredCode
+		result["ipNature"] = profileIPNature(actualCode, registeredCode)
+		result["ipNatureProvider"] = "MaxMind"
+	}
+
 	if profileString(result["ipNature"]) == "" {
 		result["ipNature"] = "unknown"
 	}
@@ -293,6 +324,14 @@ func profileIdentity(client *http.Client, ip string) (map[string]any, error) {
 		return nil, primaryErr
 	}
 	return result, nil
+}
+
+func profileIPNature(actualCountryCode, registeredCountryCode string) string {
+	actual := strings.ToUpper(strings.TrimSpace(actualCountryCode))
+	registered := strings.ToUpper(strings.TrimSpace(registeredCountryCode))
+	if len(actual) != 2 || len(registered) != 2 { return "unknown" }
+	if actual == registered { return "native" }
+	return "broadcast"
 }
 
 func firstNonEmpty(values ...string) string {
@@ -365,20 +404,16 @@ func profileScorePtr(value any) *float64 {
 	return nil
 }
 
-func profileRiskFromCheckPlace(client *http.Client, ip, db string) (map[string]any, error) {
-	var payload map[string]any
+func profileRiskFromCheckPlace(cfg Config, client *http.Client, ip, db string) (map[string]any, error) {
 	endpoint := "https://ipinfo.check.place/" + url.PathEscape(ip) + "?db=" + url.QueryEscape(db)
-	if err := profileGetJSONRetry(client, endpoint, &payload, 3); err != nil {
-		return nil, err
-	}
-	return payload, nil
+	return profileGetJSONWithPanelFallback(cfg, client, endpoint, ip, db)
 }
 
-func profileProxyCheckSource(client *http.Client, ip string) profileRiskSource {
+func profileProxyCheckSource(cfg Config, client *http.Client, ip string) profileRiskSource {
 	source := profileRiskSource{Name: "ProxyCheck"}
-	var payload map[string]any
 	endpoint := "https://proxycheck.io/v2/" + url.PathEscape(ip) + "?vpn=1&asn=1&risk=1&days=7"
-	if err := profileGetJSONRetry(client, endpoint, &payload, 3); err != nil {
+	payload, err := profileGetJSONWithPanelFallback(cfg, client, endpoint, ip, "proxycheck")
+	if err != nil {
 		source.Error = err.Error()
 		return source
 	}
@@ -406,9 +441,9 @@ func profileProxyCheckSource(client *http.Client, ip string) profileRiskSource {
 	return source
 }
 
-func profileScamalyticsSource(client *http.Client, ip string) profileRiskSource {
+func profileScamalyticsSource(cfg Config, client *http.Client, ip string) profileRiskSource {
 	source := profileRiskSource{Name: "Scamalytics"}
-	payload, err := profileRiskFromCheckPlace(client, ip, "scamalytics")
+	payload, err := profileRiskFromCheckPlace(cfg, client, ip, "scamalytics")
 	if err != nil {
 		source.Error = err.Error()
 		return source
@@ -432,9 +467,9 @@ func profileScamalyticsSource(client *http.Client, ip string) profileRiskSource 
 	return source
 }
 
-func profileIPQSSource(client *http.Client, ip string) profileRiskSource {
+func profileIPQSSource(cfg Config, client *http.Client, ip string) profileRiskSource {
 	source := profileRiskSource{Name: "IPQS"}
-	payload, err := profileRiskFromCheckPlace(client, ip, "ipqualityscore")
+	payload, err := profileRiskFromCheckPlace(cfg, client, ip, "ipqualityscore")
 	if err != nil {
 		source.Error = err.Error()
 		return source
@@ -452,9 +487,9 @@ func profileIPQSSource(client *http.Client, ip string) profileRiskSource {
 	return source
 }
 
-func profileIPAPISource(client *http.Client, ip string) profileRiskSource {
+func profileIPAPISource(cfg Config, client *http.Client, ip string) profileRiskSource {
 	source := profileRiskSource{Name: "ipapi"}
-	payload, err := profileRiskFromCheckPlace(client, ip, "ipapi")
+	payload, err := profileRiskFromCheckPlace(cfg, client, ip, "ipapi")
 	if err != nil {
 		source.Error = err.Error()
 		return source
@@ -485,9 +520,9 @@ func profileIPAPISource(client *http.Client, ip string) profileRiskSource {
 	return source
 }
 
-func profileAbuseIPDBSource(client *http.Client, ip string) profileRiskSource {
+func profileAbuseIPDBSource(cfg Config, client *http.Client, ip string) profileRiskSource {
 	source := profileRiskSource{Name: "AbuseIPDB"}
-	payload, err := profileRiskFromCheckPlace(client, ip, "abuseipdb")
+	payload, err := profileRiskFromCheckPlace(cfg, client, ip, "abuseipdb")
 	if err != nil {
 		source.Error = err.Error()
 		return source
@@ -504,9 +539,9 @@ func profileAbuseIPDBSource(client *http.Client, ip string) profileRiskSource {
 	return source
 }
 
-func profileIP2LocationSource(client *http.Client, ip string) profileRiskSource {
+func profileIP2LocationSource(cfg Config, client *http.Client, ip string) profileRiskSource {
 	source := profileRiskSource{Name: "IP2Location"}
-	payload, err := profileRiskFromCheckPlace(client, ip, "ip2location")
+	payload, err := profileRiskFromCheckPlace(cfg, client, ip, "ip2location")
 	if err != nil {
 		source.Error = err.Error()
 		return source
@@ -542,16 +577,16 @@ func profileRiskAnyTrue(sources []profileRiskSource, selector func(profileRiskSo
 	return nil
 }
 
-func profileRisk(client *http.Client, ip string) map[string]any {
+func profileRisk(cfg Config, client *http.Client, ip string) map[string]any {
 	sources := make([]profileRiskSource, 6)
 	var wg sync.WaitGroup
 	checks := []func() profileRiskSource{
-		func() profileRiskSource { return profileProxyCheckSource(client, ip) },
-		func() profileRiskSource { return profileScamalyticsSource(client, ip) },
-		func() profileRiskSource { return profileIPQSSource(client, ip) },
-		func() profileRiskSource { return profileIPAPISource(client, ip) },
-		func() profileRiskSource { return profileAbuseIPDBSource(client, ip) },
-		func() profileRiskSource { return profileIP2LocationSource(client, ip) },
+		func() profileRiskSource { return profileProxyCheckSource(cfg, client, ip) },
+		func() profileRiskSource { return profileScamalyticsSource(cfg, client, ip) },
+		func() profileRiskSource { return profileIPQSSource(cfg, client, ip) },
+		func() profileRiskSource { return profileIPAPISource(cfg, client, ip) },
+		func() profileRiskSource { return profileAbuseIPDBSource(cfg, client, ip) },
+		func() profileRiskSource { return profileIP2LocationSource(cfg, client, ip) },
 	}
 	for index := range checks {
 		index := index
@@ -1429,7 +1464,7 @@ func runNetworkProfile(cfg Config, request networkProfileRequest) {
 	report("ip", "success", map[string]any{"address": ip, "family": request.Family}, "")
 
 	report("identity", "running", nil, "")
-	identity, identityErr := profileIdentity(client, ip)
+	identity, identityErr := profileIdentity(cfg, client, ip)
 	if identityErr != nil {
 		report("identity", "error", nil, identityErr.Error())
 	} else {
@@ -1449,7 +1484,7 @@ func runNetworkProfile(cfg Config, request networkProfileRequest) {
 	}
 
 	report("risk", "running", nil, "")
-	risk := profileRisk(client, ip)
+	risk := profileRisk(cfg, client, ip)
 	if risk["isDatacenter"] == nil {
 		risk["isDatacenter"] = identity["is_datacenter"]
 	}

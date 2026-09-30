@@ -1,3 +1,4 @@
+import net from "node:net";
 import type { Router, Request, Response } from "express";
 import { getAgentHostFromRequest } from "./agentAuth";
 import { reportHostNetworkProfile } from "./hostNetworkProfileState";
@@ -7,7 +8,108 @@ function familyOf(value: unknown): "ipv4" | "ipv6" | null {
   return text === "ipv4" || text === "ipv6" ? text : null;
 }
 
+const NETWORK_PROFILE_PROXY_TIMEOUT_MS = 9_000;
+const NETWORK_PROFILE_PROXY_CACHE_MS = 10 * 60_000;
+const NETWORK_PROFILE_PROXY_CACHE_LIMIT = 2_048;
+const NETWORK_PROFILE_PROXY_PROVIDERS = new Set([
+  "maxmind",
+  "proxycheck",
+  "scamalytics",
+  "ipqualityscore",
+  "ipapi",
+  "abuseipdb",
+  "ip2location",
+]);
+
+type NetworkProfileProxyCacheEntry = {
+  expiresAt: number;
+  payload: Record<string, unknown>;
+};
+
+const networkProfileProxyCache = new Map<string, NetworkProfileProxyCacheEntry>();
+
+function networkProfileProxyUrl(ip: string, provider: string) {
+  const escapedIp = encodeURIComponent(ip);
+  if (provider === "maxmind") {
+    return `https://ipinfo.check.place/${escapedIp}?lang=en`;
+  }
+  if (provider === "proxycheck") {
+    return `https://proxycheck.io/v2/${escapedIp}?vpn=1&asn=1&risk=1&days=7`;
+  }
+  return `https://ipinfo.check.place/${escapedIp}?db=${encodeURIComponent(provider)}`;
+}
+
+function pruneNetworkProfileProxyCache(now = Date.now()) {
+  for (const [key, entry] of networkProfileProxyCache) {
+    if (entry.expiresAt <= now) networkProfileProxyCache.delete(key);
+  }
+  while (networkProfileProxyCache.size > NETWORK_PROFILE_PROXY_CACHE_LIMIT) {
+    const oldest = networkProfileProxyCache.keys().next().value;
+    if (!oldest) break;
+    networkProfileProxyCache.delete(oldest);
+  }
+}
+
+async function fetchNetworkProfileProxyPayload(ip: string, provider: string) {
+  const cacheKey = `${provider}:${ip.toLowerCase()}`;
+  const cached = networkProfileProxyCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.payload;
+
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), NETWORK_PROFILE_PROXY_TIMEOUT_MS);
+    try {
+      const response = await fetch(networkProfileProxyUrl(ip, provider), {
+        cache: "no-store",
+        headers: {
+          Accept: "application/json,text/plain,*/*",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125 Safari/537.36",
+        },
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const payload = await response.json() as Record<string, unknown>;
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+        throw new Error("invalid JSON payload");
+      }
+      networkProfileProxyCache.set(cacheKey, {
+        expiresAt: Date.now() + NETWORK_PROFILE_PROXY_CACHE_MS,
+        payload,
+      });
+      pruneNetworkProfileProxyCache();
+      return payload;
+    } catch (error) {
+      lastError = error;
+      if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 350));
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError || "risk proxy request failed"));
+}
+
 export function registerAgentNetworkProfileRoutes(router: Router) {
+  router.post("/api/agent/network-profile-risk-proxy", async (req: Request, res: Response) => {
+    try {
+      const host = await getAgentHostFromRequest(req);
+      if (!host) {
+        res.status(401).json({ error: "Invalid token" });
+        return;
+      }
+      const ip = String(req.body?.ip || "").trim();
+      const provider = String(req.body?.provider || "").trim().toLowerCase();
+      if (!net.isIP(ip) || !NETWORK_PROFILE_PROXY_PROVIDERS.has(provider)) {
+        res.status(400).json({ error: "Invalid network profile risk proxy request" });
+        return;
+      }
+      const payload = await fetchNetworkProfileProxyPayload(ip, provider);
+      res.json({ success: true, payload });
+    } catch (error) {
+      res.status(502).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
   router.post("/api/agent/network-profile-report", async (req: Request, res: Response) => {
     try {
       const host = await getAgentHostFromRequest(req);
