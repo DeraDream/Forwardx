@@ -880,6 +880,70 @@ func profileIP99FallbackSource(client *http.Client, ip string) profileRiskSource
 	return source
 }
 
+var profileHTMLTagPattern = regexp.MustCompile(`(?s)<[^>]+>`)
+
+func profileCleanHTMLText(value string) string {
+	value = profileHTMLTagPattern.ReplaceAllString(value, " ")
+	value = html.UnescapeString(value)
+	return strings.Join(strings.Fields(value), " ")
+}
+
+func profileIP2LocationDemoField(body, field string) string {
+	pattern := regexp.MustCompile(`(?is)aria-label=["']` + regexp.QuoteMeta(field) + `["'][^>]*>.*?</th>\s*<td[^>]*>(.*?)</td>`)
+	match := pattern.FindStringSubmatch(body)
+	if len(match) < 2 {
+		return ""
+	}
+	return profileCleanHTMLText(match[1])
+}
+
+func profileIP2LocationDemoSource(client *http.Client, ip string) profileRiskSource {
+	source := profileRiskSource{Name: "IP2Location"}
+	code, body, err := profileReadRetry(client, "https://www.ip2location.com/demo/"+url.PathEscape(ip), map[string]string{
+		"Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+	}, 2)
+	if err != nil {
+		source.Error = err.Error()
+		return source
+	}
+	if code < 200 || code >= 300 {
+		source.Error = fmt.Sprintf("IP2Location demo HTTP %d", code)
+		return source
+	}
+
+	source.NetworkType = profileIP2LocationDemoField(body, "usageType")
+	source.CompanyType = profileIP2LocationDemoField(body, "asUsageType")
+	fraudText := profileIP2LocationDemoField(body, "px_fraudScore")
+	if fields := strings.Fields(fraudText); len(fields) > 0 {
+		if score := profileScorePtr(fields[0]); score != nil {
+			source.Score = score
+		switch {
+		case *score < 33:
+			source.Level = "low"
+		case *score < 66:
+			source.Level = "medium"
+		default:
+			source.Level = "high"
+			}
+		}
+	}
+	proxyType := strings.ToUpper(profileIP2LocationDemoField(body, "px_proxyType"))
+	if proxyType != "" && proxyType != "-" && proxyType != "NOT DETECTED" {
+		value := true
+		source.IsProxy = &value
+	} else if proxyType == "-" || strings.Contains(proxyType, "NOT DETECTED") {
+		value := false
+		source.IsProxy = &value
+	}
+	if match := regexp.MustCompile(`(?i)<title>[^<]*\[([A-Z]{2})\]</title>`).FindStringSubmatch(body); len(match) > 1 {
+		source.Country = strings.ToUpper(match[1])
+	}
+	if !profileRiskSourceHasUsefulData(source) {
+		source.Error = "IP2Location demo data unavailable"
+	}
+	return source
+}
+
 func profileIP2LocationDirectSource(client *http.Client, ip string) profileRiskSource {
 	source := profileRiskSource{Name: "IP2Location"}
 	var payload map[string]any
@@ -1475,10 +1539,16 @@ func profileRisk(cfg Config, client *http.Client, ip string) map[string]any {
 		}
 	}
 
-	// IP2Location: query the provider's keyless endpoint first, then fill fields
-	// reserved for higher plans from the same fallback feeds.
+	// IP2Location: if check.place is blocked, scrape the provider's public demo
+	// first because it exposes Usage Type / AS Usage Type / Fraud Score without
+	// an API key. The keyless JSON endpoint and generic public feeds are only
+	// later fallbacks.
 	if strings.TrimSpace(sources[8].Error) != "" || !profileRiskSourceHasUsefulData(sources[8]) ||
 		sources[8].NetworkType == "" || sources[8].CompanyType == "" || sources[8].Score == nil {
+		demo := profileIP2LocationDemoSource(client, ip)
+		if profileRiskSourceHasUsefulData(demo) {
+			profileMergeRiskSourceFallback(&sources[8], demo, "IP2Location Demo")
+		}
 		direct := profileIP2LocationDirectSource(client, ip)
 		if profileRiskSourceHasUsefulData(direct) {
 			profileMergeRiskSourceFallback(&sources[8], direct, "IP2Location.io")

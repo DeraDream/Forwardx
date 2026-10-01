@@ -23,6 +23,7 @@ services:
       POSTGRES_DATABASE: ${POSTGRES_DATABASE:-}
       POSTGRES_SSL: ${POSTGRES_SSL:-false}
       JWT_SECRET: ${JWT_SECRET:-change-me-to-a-random-string}
+      ABUSEIPDB_API_KEY: ${ABUSEIPDB_API_KEY:-}
     volumes:
       - forwardx-data:/data
     logging:
