@@ -303,7 +303,6 @@ func profileIPNatureFromEvidence(actualEvidence, registeredEvidence []profileCou
 	// with the registered/abuse country from the same database family.
 	type pair struct{ actual, registered, label string }
 	pairs := []pair{
-		{profileEvidenceCountry(actualEvidence, "MaxMind GeoIP"), profileEvidenceCountry(registeredEvidence, "MaxMind RegisteredCountry"), "MaxMind"},
 		{profileEvidenceCountry(actualEvidence, "IPinfo GeoIP"), profileEvidenceCountry(registeredEvidence, "IPinfo Abuse Country"), "IPinfo"},
 	}
 	for _, item := range pairs {
@@ -472,89 +471,6 @@ func profileIdentity(cfg Config, client *http.Client, ip string) (map[string]any
 		result["ipinfoBasic"] = ipinfoBasic
 	}
 
-	var maxmindPayload map[string]any
-	maxmindURL := "https://ipinfo.check.place/" + url.PathEscape(ip) + "?lang=en"
-	if payload, err := profileGetJSONWithPanelFallback(cfg, client, maxmindURL, ip, "maxmind"); err == nil {
-		maxmindPayload = payload
-	}
-	if maxmindPayload != nil {
-		asnInfo := profileMap(maxmindPayload["ASN"])
-		country := profileMap(maxmindPayload["Country"])
-		registered := profileMap(country["RegisteredCountry"])
-		city := profileMap(maxmindPayload["City"])
-		cityCountry := profileMap(city["Country"])
-		cityContinent := profileMap(city["Continent"])
-		cityLocation := profileMap(city["Location"])
-		traits := profileMap(maxmindPayload["Traits"])
-		if traits == nil {
-			traits = profileMap(maxmindPayload["traits"])
-		}
-		maxmindUserType := firstNonEmpty(
-			profileString(traits["UserType"]),
-			profileString(traits["user_type"]),
-			profileString(maxmindPayload["UserType"]),
-			profileString(maxmindPayload["user_type"]),
-		)
-		maxmindConnectionType := firstNonEmpty(
-			profileString(traits["ConnectionType"]),
-			profileString(traits["connection_type"]),
-			profileString(maxmindPayload["ConnectionType"]),
-			profileString(maxmindPayload["connection_type"]),
-		)
-		subdivisionName := ""
-		subdivisionCode := ""
-		if subdivisions, ok := city["Subdivisions"].([]any); ok && len(subdivisions) > 0 {
-			subdivision := profileMap(subdivisions[0])
-			subdivisionName = profileString(subdivision["Name"])
-			subdivisionCode = profileString(subdivision["IsoCode"])
-		}
-		actualCode := profileCountryCode(country["IsoCode"])
-		if actualCode == "" {
-			actualCode = profileCountryCode(cityCountry["IsoCode"])
-		}
-		if actualCode == "" {
-			actualCode = profileCountryCode(result["countryCode"])
-		}
-		actualEvidence = profileAddCountryEvidence(actualEvidence, "MaxMind GeoIP", actualCode)
-		registeredEvidence = profileAddCountryEvidence(registeredEvidence, "MaxMind RegisteredCountry", registered["IsoCode"])
-
-		maxmind := map[string]any{
-			"asn": profileASNNumber(asnInfo["AutonomousSystemNumber"]),
-			"organization": profileString(asnInfo["AutonomousSystemOrganization"]),
-			"city": profileString(city["Name"]),
-			"postalCode": profileString(city["PostalCode"]),
-			"latitude": city["Latitude"],
-			"longitude": city["Longitude"],
-			"accuracyRadius": city["AccuracyRadius"],
-			"continentCode": profileString(cityContinent["Code"]),
-			"continent": profileString(cityContinent["Name"]),
-			"countryCode": profileString(cityCountry["IsoCode"]),
-			"country": profileString(cityCountry["Name"]),
-			"registeredCountryCode": profileString(registered["IsoCode"]),
-			"registeredCountry": profileString(registered["Name"]),
-			"timezone": profileString(cityLocation["TimeZone"]),
-			"subdivisionCode": subdivisionCode,
-			"subdivision": subdivisionName,
-			"userType": maxmindUserType,
-			"connectionType": maxmindConnectionType,
-		}
-		result["maxmind"] = maxmind
-		// Prefer MaxMind basic fields for the detailed basic-information section,
-		// but keep ipwho.is as fallback so the card remains useful if check.place
-		// is missing individual fields.
-		if profileString(maxmind["organization"]) != "" {
-			result["maxmindOrganization"] = maxmind["organization"]
-		}
-		if profileString(maxmind["city"]) != "" {
-			result["maxmindCity"] = maxmind["city"]
-		}
-		if profileString(maxmind["timezone"]) != "" {
-			result["maxmindTimezone"] = maxmind["timezone"]
-		}
-		if profileASNNumber(maxmind["asn"]) > 0 || profileCountryCode(maxmind["countryCode"]) != "" || profileString(maxmind["city"]) != "" {
-			result["basicProvider"] = "MaxMind"
-		}
-	}
 	if profileString(result["basicProvider"]) == "" && len(ipinfoBasic) > 0 {
 		result["basicProvider"] = "IPinfo"
 		// IPQuality itself falls back to IPinfo when MaxMind is unavailable.
