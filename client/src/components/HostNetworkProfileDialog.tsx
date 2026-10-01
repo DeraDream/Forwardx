@@ -506,7 +506,7 @@ export function HostNetworkProfileDialog({
                               ) : (
                                 <div><span className="inline-block w-11 text-muted-foreground">地区</span><span className={appRegionClass(region, baseCountry, status)}>{region || "—"}</span></div>
                               )}
-                              <div className="flex items-center"><span className="inline-block w-11 shrink-0 text-muted-foreground">方式</span>{unlockMethodBadge(app.unlockMethod)}</div>
+                              {app.unlockMethod ? <div className="flex items-center"><span className="inline-block w-11 shrink-0 text-muted-foreground">方式</span>{unlockMethodBadge(app.unlockMethod)}</div> : null}
                             </div>
                           </div>
                         );
