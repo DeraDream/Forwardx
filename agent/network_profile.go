@@ -2637,7 +2637,15 @@ func profileRunRRCFunction(functionName, family, category, group string, timeout
 
 func profileRunRRCStreams(family, actualCountry string, full bool) ([]map[string]any, []string) {
 	items := make([]map[string]any, 0, 48)
-	warnings := make([]string, 0, 2)
+	warnings := make([]string, 0, 4)
+	if _, err := exec.LookPath("jq"); err != nil {
+		warnings = append(warnings, "系统未安装 jq，部分 RegionRestrictionCheck 项目可能无法解析")
+	}
+	if _, err := exec.LookPath("python"); err != nil {
+		if _, py3Err := exec.LookPath("python3"); py3Err != nil {
+			warnings = append(warnings, "系统未安装 python/python3，部分 RegionRestrictionCheck 项目可能无法解析")
+		}
+	}
 	global, err := profileRunRRCFunction("Global_UnlockTest", family, "global", "跨国平台", 90*time.Second)
 	if err != nil {
 		warnings = append(warnings, err.Error())
