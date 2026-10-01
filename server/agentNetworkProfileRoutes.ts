@@ -146,6 +146,17 @@ export function registerAgentNetworkProfileRoutes(router: Router) {
         res.status(400).json({ error: "Invalid network profile risk proxy request" });
         return;
       }
+      // Optional paid providers should report a structured “not configured”
+      // result instead of HTTP 502. The Agent can then surface the exact reason
+      // and, for DB-IP, continue with its public-demo fallback.
+      if (provider === "maxmind-insights" && (!ENV.maxMindAccountId.trim() || !ENV.maxMindLicenseKey.trim())) {
+        res.json({ success: false, error: "MaxMind Insights credentials are not configured" });
+        return;
+      }
+      if (provider === "dbip" && !ENV.dbIpApiKey.trim()) {
+        res.json({ success: false, error: "DB-IP API key is not configured" });
+        return;
+      }
       const payload = await fetchNetworkProfileProxyPayload(ip, provider);
       res.json({ success: true, payload });
     } catch (error) {
