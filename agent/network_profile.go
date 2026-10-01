@@ -473,7 +473,7 @@ func profileIdentity(cfg Config, client *http.Client, ip string) (map[string]any
 
 	if profileString(result["basicProvider"]) == "" && len(ipinfoBasic) > 0 {
 		result["basicProvider"] = "IPinfo"
-		// IPQuality itself falls back to IPinfo when MaxMind is unavailable.
+		// Keep IPinfo as the detailed basic-information source when available.
 		if profileASNNumber(result["asnNumber"]) <= 0 && profileASNNumber(ipinfoBasic["asn"]) > 0 {
 			result["asnNumber"] = profileASNNumber(ipinfoBasic["asn"])
 		}
@@ -497,8 +497,8 @@ func profileIdentity(cfg Config, client *http.Client, ip string) (map[string]any
 		}
 	}
 
-	// RDAP is queried even when MaxMind is available. A single provider matching
-	// the detected geography is no longer enough to label an address as native.
+	// RDAP is queried independently so one geolocation provider alone is not
+	// enough evidence to label an address as native.
 	var rdap map[string]any
 	if err := profileGetJSONRetry(client, "https://rdap.org/ip/"+url.PathEscape(ip), &rdap, 2); err == nil {
 		registeredEvidence = profileAddCountryEvidence(registeredEvidence, "RDAP", rdap["country"])
@@ -1086,31 +1086,6 @@ func profileIPRegistrySource(client *http.Client, ip string) profileRiskSource {
 	}
 	return source
 }
-
-func profilePostRaw(client *http.Client, rawURL, contentType, body string, headers map[string]string) (int, string, error) {
-	req, err := http.NewRequest(http.MethodPost, rawURL, strings.NewReader(body))
-	if err != nil {
-		return 0, "", err
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36")
-	req.Header.Set("Accept", "application/json,text/plain,*/*")
-	req.Header.Set("Content-Type", contentType)
-	for key, value := range headers {
-		req.Header.Set(key, value)
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return 0, "", err
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, networkProfileBodyLimit))
-	if err != nil {
-		return resp.StatusCode, "", err
-	}
-	return resp.StatusCode, string(raw), nil
-}
-
-var profileDBIPKeyPattern = regexp.MustCompile(`data-api-key=["']([^"']+)["']`)
 
 func profileAbuseIPDBSource(cfg Config, client *http.Client, ip string) profileRiskSource {
 	source := profileRiskSource{Name: "AbuseIPDB"}
