@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.3.399] - 2026-10-01
+
+### 网络画像 API 配置与 Agent 升级状态修复
+
+- IP 类型属性移除 MaxMind 与 DB-IP，固定使用 IPinfo、ipregistry、ipapi.is、IP2Location；清理 Agent、Panel 代理和旧基础信息链路中的 MaxMind / DB-IP 运行时代码。
+- ipapi.is 改为仅在「系统设置 → 网络画像 API」保存 API Key 后调用；使用 Panel 服务端代理，Key 不下发给 Agent，也不暴露给浏览器，并通过 POST body 调用避免 Key 出现在请求 URL。
+- AbuseIPDB API Key 同样迁移到「系统设置 → 网络画像 API」；未配置时不调用官方接口。系统设置仅回传是否已配置与掩码，不回传真实 Key。
+- 新增「Agent 批量升级」系统设置：可配置每批并发数量（1-100，默认 5）与批次间隔（1-300 秒，默认 15 秒）；主机批量升级按保存的策略分批下发。
+- 修复 Agent 升级状态误判：旧逻辑在 10 分钟 stale pending 被清理后可能仅因 `agentUpgradeRequested` 消失就提示“升级成功”；现在必须确认当前 Agent 版本达到原目标版本才提示成功，否则达到超时条件后明确提示升级超时并显示当前/目标版本。
+- 批量升级完成提示会显示本次实际使用的每批数量与间隔，便于核对下发策略。
+- 完整 CI 已验证 Panel TypeScript / Server tests / build / docs，以及 Agent / FXP 的 Go tests 与 vet。
+- Panel / APK Release 升级至 `2.3.399`；本次网络画像检测逻辑确实修改了 Agent，因此 Agent 升级至 `2.2.228`；ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.3.398] - 2026-10-01
 
 ### BGP 预览回退为自适应并新增全屏查看
