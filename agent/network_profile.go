@@ -224,6 +224,104 @@ func profileBool(value any) (bool, bool) {
 
 var profileBGPCountryPattern = regexp.MustCompile(`(?i)country:\s*(?:&nbsp;|\s)*([A-Z]{2})`)
 
+type profileCountryEvidence struct {
+	Provider string `json:"provider"`
+	Country  string `json:"country"`
+}
+
+func profileCountryCode(value any) string {
+	code := strings.ToUpper(strings.TrimSpace(profileString(value)))
+	if len(code) != 2 {
+		return ""
+	}
+	for _, ch := range code {
+		if ch < 'A' || ch > 'Z' {
+			return ""
+		}
+	}
+	return code
+}
+
+func profileAddCountryEvidence(items []profileCountryEvidence, provider string, value any) []profileCountryEvidence {
+	country := profileCountryCode(value)
+	provider = strings.TrimSpace(provider)
+	if country == "" || provider == "" {
+		return items
+	}
+	for _, item := range items {
+		if strings.EqualFold(item.Provider, provider) && item.Country == country {
+			return items
+		}
+	}
+	return append(items, profileCountryEvidence{Provider: provider, Country: country})
+}
+
+func profileCountryConsensus(items []profileCountryEvidence) string {
+	if len(items) == 0 {
+		return ""
+	}
+	counts := map[string]int{}
+	order := make([]string, 0, len(items))
+	for _, item := range items {
+		country := profileCountryCode(item.Country)
+		if country == "" {
+			continue
+		}
+		if _, exists := counts[country]; !exists {
+			order = append(order, country)
+		}
+		counts[country]++
+	}
+	best := ""
+	bestCount := 0
+	for _, country := range order {
+		if counts[country] > bestCount {
+			best = country
+			bestCount = counts[country]
+		}
+	}
+	return best
+}
+
+func profileIPNatureFromEvidence(actualEvidence, registeredEvidence []profileCountryEvidence) (nature, actualCountry, registeredCountry, reason string) {
+	actualCountry = profileCountryConsensus(actualEvidence)
+	registeredCountry = profileCountryConsensus(registeredEvidence)
+	if actualCountry == "" || len(registeredEvidence) == 0 {
+		return "unknown", actualCountry, registeredCountry, "地理位置或注册地址证据不足"
+	}
+	matches := 0
+	mismatches := 0
+	for _, item := range registeredEvidence {
+		country := profileCountryCode(item.Country)
+		if country == "" {
+			continue
+		}
+		if country == actualCountry {
+			matches++
+		} else {
+			mismatches++
+		}
+	}
+	if matches >= 2 && mismatches == 0 {
+		return "native", actualCountry, registeredCountry, fmt.Sprintf("%d 个注册来源与实际地区一致", matches)
+	}
+	if mismatches >= 2 && mismatches > matches {
+		return "broadcast", actualCountry, registeredCountry, fmt.Sprintf("%d 个注册来源与实际地区不一致", mismatches)
+	}
+	if mismatches > 0 {
+		return "unknown", actualCountry, registeredCountry, fmt.Sprintf("注册地址证据存在冲突（匹配 %d / 不匹配 %d）", matches, mismatches)
+	}
+	return "unknown", actualCountry, registeredCountry, fmt.Sprintf("仅 %d 个注册来源可确认，证据不足", matches)
+}
+
+func profileCountryEvidenceMaps(items []profileCountryEvidence) []map[string]any {
+	result := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		result = append(result, map[string]any{"provider": item.Provider, "country": item.Country})
+	}
+	return result
+}
+
 func profileIdentity(cfg Config, client *http.Client, ip string) (map[string]any, error) {
 	result := map[string]any{"ip": ip}
 	var primaryErr error
