@@ -11,7 +11,7 @@ import {
   type NetworkProfileFamily,
 } from "../hostNetworkProfileState";
 
-export const NETWORK_PROFILE_AGENT_VERSION = "2.2.225";
+export const NETWORK_PROFILE_AGENT_VERSION = "2.2.226";
 
 const BGP_GRAPH_CACHE_MS = 6 * 60 * 60_000;
 const BGP_GRAPH_CACHE_LIMIT = 128;
