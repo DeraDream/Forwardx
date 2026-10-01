@@ -74,40 +74,24 @@ function unlockMethodBadge(method: unknown) {
 function ipTypeLabel(value: unknown) {
   const raw = String(value || "").trim();
   if (!raw) return "—";
-  const first = raw.split("/")[0].trim().toLowerCase();
-  const labels: Record<string, string> = {
-    business: "商业",
-    com: "商业",
-    isp: "家宽",
-    "fixed line isp": "家宽",
-    hosting: "机房",
-    dch: "机房",
-    "data center": "机房",
-    datacenter: "机房",
-    "data center/web hosting/transit": "机房",
-    dyn: "动态",
-    dynamic: "动态",
-    education: "教育",
-    edu: "教育",
-    government: "政府",
-    gov: "政府",
-    banking: "银行",
-    organization: "组织",
-    org: "组织",
-    military: "军队",
-    mil: "军队",
-    library: "图书馆",
-    lib: "图书馆",
-    cdn: "CDN",
-    "content delivery network": "CDN",
-    mob: "手机",
-    "mobile isp": "手机",
-    ses: "蜘蛛",
-    "search engine spider": "蜘蛛",
-    rsv: "保留",
-    reserved: "保留",
-  };
-  return labels[first] || raw;
+  const lower = raw.toLowerCase();
+  const code = raw.match(/^\(([A-Za-z]+)\)/)?.[1]?.toLowerCase() || "";
+
+  if (code === "dch" || lower.includes("data center") || lower.includes("datacenter") || lower.includes("web hosting") || lower === "hosting") return "机房";
+  if (code === "isp" || code === "lin" || lower === "isp" || lower.includes("fixed line isp") || lower.includes("residential")) return "家宽";
+  if (code === "com" || lower === "business" || lower === "commercial" || lower.includes("commercial")) return "商业";
+  if (code === "mob" || lower.includes("mobile isp") || lower === "mobile") return "手机";
+  if (code === "cdn" || lower.includes("content delivery network") || lower === "cdn") return "CDN";
+  if (code === "edu" || lower === "education") return "教育";
+  if (code === "gov" || lower === "government") return "政府";
+  if (code === "mil" || lower === "military") return "军队";
+  if (code === "lib" || lower === "library") return "图书馆";
+  if (code === "org" || lower === "organization") return "组织";
+  if (code === "rsv" || lower === "reserved") return "保留";
+  if (code === "ses" || lower.includes("search engine spider")) return "蜘蛛";
+  if (lower === "dyn" || lower === "dynamic") return "动态";
+  if (lower === "banking") return "银行";
+  return raw;
 }
 
 function ipTypeBadgeClass(value: unknown) {
@@ -229,7 +213,11 @@ export function HostNetworkProfileDialog({
   const scoredRiskSources = riskOrder
     .map((name) => riskSources.find((item: any) => item?.name === name))
     .filter((source: any) => source && Number.isFinite(Number(source?.score)));
-  const typeSourceNames = ["IPinfo", "ipregistry", "FFraud", "IP2Location", "AbuseIPDB", "ProxyCheck"];
+  // Only databases whose fields are actually comparable to IPQuality's
+  // “使用类型 / 公司类型” semantics belong in this matrix. FFraud/IP99/ProxyCheck
+  // expose different classification concepts and can be objectively wrong for
+  // routing blocks (e.g. classifying a VPS prefix as Residential/Business).
+  const typeSourceNames = ["IPinfo", "ipregistry", "IP2Location", "AbuseIPDB"];
   const typeSources = typeSourceNames
     .map((name) => ({ name, source: riskSources.find((item: any) => item?.name === name) }))
     .filter((item) => item.source && (item.source.networkType || item.source.companyType));
@@ -528,7 +516,7 @@ export function HostNetworkProfileDialog({
                   当前未获得 Prefix，无法生成 BGP 拓扑图。
                 </div>
               )}
-              <div className="mt-2 text-[10px] text-muted-foreground">图像来自 BGP.Tools Connectivity；按 Prefix 直接生成 pathimg 地址，Panel 代理并缓存 SVG。</div>
+              <div className="mt-2 text-[10px] text-muted-foreground">图像来自 BGP.Tools Connectivity；新版由 Agent 使用目标机出口直接获取 SVG，Panel 仅作为旧数据回退。</div>
             </div>
           </div>
         )}
