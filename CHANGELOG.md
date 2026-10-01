@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.3.396] - 2026-10-01
+
+### 网络画像 UI 与 BGP 缓存修复
+
+- IP 类型属性新增 MaxMind 与 DB-IP：MaxMind 仅展示实际返回的 Enterprise user_type，DB-IP 使用官方 usageType；不根据其他数据库猜测或伪造分类。
+- IP 风险刻度与各数据库进度条改为共享列布局，顶部示例条与下方风险条严格左右对齐；风险条加粗，并只保留 0 到当前风险值的彩色部分，当前值之后恢复为底轨。
+- 流媒体 / AI 解锁卡片重排为纵向信息结构：服务状态、地区、方式、延迟、说明；地区统一归一化为 SG / US / HK / CN / JP 等两位代码，兼容常见三位地区码和长国家名。
+- 修复重新完整检测后 BGP 仍显示旧错误的问题：此前 BGP 查询按 hostId + family 缓存 6 小时，失败结果在新任务后仍被复用。现在优先直接渲染本次 Agent 网络画像中的 bgpGraphDataUrl，并把 taskId / updatedAt 作为查询 revision，使新检测任务自动失效旧 BGP 缓存。
+- 已在目标 Agent SSH 验证 `85.149.212.0/24`：BGP.Tools 返回 HTTP 200、`image/svg+xml`、有效 SVG，确认 Agent 出口和 BGP.Tools 本身正常；本次修复针对 Panel / 前端缓存链路。
+- Panel / APK Release 升级至 `2.3.396`；Agent 升级至 `2.2.226`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.3.395] - 2026-10-01
 
 ### 修复 IP 类型属性语义与 BGP 拓扑空白
