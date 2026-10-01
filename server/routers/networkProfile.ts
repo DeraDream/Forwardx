@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { protectedProcedure, router } from "../_core/trpc";
 import * as db from "../db";
@@ -55,43 +56,68 @@ function normalizeBGPGraphUrl(rawPath: unknown) {
 }
 
 async function fetchBGPGraphDataUrl(rawPath: unknown) {
-  const graphUrl = normalizeBGPGraphUrl(rawPath);
-  if (!graphUrl) throw new Error("BGP 拓扑图地址无效");
-  const cached = bgpGraphCache.get(graphUrl);
+  const normalizedUrl = normalizeBGPGraphUrl(rawPath);
+  if (!normalizedUrl) throw new Error("BGP 拓扑图地址无效");
+
+  const base = new URL(normalizedUrl);
+  const cacheKeyUrl = new URL(normalizedUrl);
+  cacheKeyUrl.search = "";
+  const cacheKey = cacheKeyUrl.toString();
+  const cached = bgpGraphCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.dataUrl;
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 12_000);
-  try {
-    const response = await fetch(graphUrl, {
-      cache: "no-store",
-      headers: {
-        Accept: "image/svg+xml,image/*;q=0.8,*/*;q=0.5",
-        "User-Agent": "Mozilla/5.0 AppleWebKit/537.36 Chrome/122 Safari/537.36",
-        Referer: "https://bgp.tools/",
-      },
-      signal: controller.signal,
-    });
-    if (!response.ok) throw new Error(`BGP.Tools HTTP ${response.status}`);
-    const declaredLength = Number(response.headers.get("content-length") || 0);
-    if (declaredLength > BGP_GRAPH_MAX_BYTES) throw new Error("BGP 拓扑图过大");
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    if (bytes.byteLength === 0 || bytes.byteLength > BGP_GRAPH_MAX_BYTES) {
-      throw new Error("BGP 拓扑图大小异常");
-    }
-    const svg = Buffer.from(bytes).toString("utf8").trim();
-    if (!/<svg\b/i.test(svg.slice(0, 2048))) throw new Error("BGP.Tools 未返回 SVG");
-    if (svg.includes("Not_Visible") && svg.includes("in_DFZ")) throw new Error("该 Prefix 当前未在 DFZ 中可见");
-    const dataUrl = `data:image/svg+xml;base64,${Buffer.from(svg, "utf8").toString("base64")}`;
-    bgpGraphCache.set(graphUrl, {
-      expiresAt: Date.now() + BGP_GRAPH_CACHE_MS,
-      dataUrl,
-    });
-    pruneBGPGraphCache();
-    return dataUrl;
-  } finally {
-    clearTimeout(timer);
+  const candidates: string[] = [];
+  if (base.search) candidates.push(base.toString());
+  for (const showRouteServers of [false, true]) {
+    const candidate = new URL(cacheKey);
+    candidate.search = `?${randomUUID()}&loggedin${showRouteServers ? "&showrs" : ""}`;
+    candidates.push(candidate.toString());
   }
+
+  let lastError: unknown = null;
+  for (const graphUrl of candidates) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15_000);
+    try {
+      const response = await fetch(graphUrl, {
+        cache: "no-store",
+        headers: {
+          Accept: "image/svg+xml,image/*;q=0.9,text/html;q=0.3,*/*;q=0.2",
+          "Accept-Language": "en-US,en;q=0.9",
+          "Cache-Control": "no-cache",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+          Referer: "https://bgp.tools/",
+        },
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(`BGP.Tools HTTP ${response.status}`);
+      const declaredLength = Number(response.headers.get("content-length") || 0);
+      if (declaredLength > BGP_GRAPH_MAX_BYTES) throw new Error("BGP 拓扑图过大");
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (bytes.byteLength === 0 || bytes.byteLength > BGP_GRAPH_MAX_BYTES) {
+        throw new Error("BGP 拓扑图大小异常");
+      }
+      const svg = Buffer.from(bytes).toString("utf8").trim();
+      if (!/<svg\b/i.test(svg.slice(0, 4096))) {
+        throw new Error("BGP.Tools 未返回 SVG");
+      }
+      if (svg.includes("Not_Visible") && svg.includes("in_DFZ")) {
+        throw new Error("该 Prefix 当前未在 DFZ 中可见");
+      }
+      const dataUrl = `data:image/svg+xml;base64,${Buffer.from(svg, "utf8").toString("base64")}`;
+      bgpGraphCache.set(cacheKey, {
+        expiresAt: Date.now() + BGP_GRAPH_CACHE_MS,
+        dataUrl,
+      });
+      pruneBGPGraphCache();
+      return dataUrl;
+    } catch (error) {
+      lastError = error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("BGP 拓扑图获取失败");
 }
 
 async function requireHost(hostId: number, user: any) {
