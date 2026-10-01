@@ -70,8 +70,12 @@ async function fetchNetworkProfileProxyPayload(ip: string, provider: string) {
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const payload = await response.json() as Record<string, unknown>;
-      if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-        throw new Error("invalid JSON payload");
+      if (!payload || typeof payload !== "object" || Array.isArray(payload) || Object.keys(payload).length === 0) {
+        throw new Error("invalid or empty JSON payload");
+      }
+      const keys = Object.keys(payload);
+      if (keys.length <= 2 && ("error" in payload || "message" in payload) && !("data" in payload)) {
+        throw new Error(String(payload.error || payload.message || "provider returned an error payload"));
       }
       networkProfileProxyCache.set(cacheKey, {
         expiresAt: Date.now() + NETWORK_PROFILE_PROXY_CACHE_MS,
