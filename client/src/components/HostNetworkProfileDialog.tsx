@@ -220,7 +220,10 @@ export function HostNetworkProfileDialog({
     .filter(Boolean)
     .join(" · ");
   const ipinfoBasic = identity.ipinfoBasic || {};
-  const basicProvider = String(identity.basicProvider || (Object.keys(ipinfoBasic).length ? "IPinfo" : "ipwho.is"));
+  const rawBasicProvider = String(identity.basicProvider || "");
+  const basicProvider = rawBasicProvider && rawBasicProvider !== "MaxMind"
+    ? rawBasicProvider
+    : (Object.keys(ipinfoBasic).length ? "IPinfo" : "ipwho.is");
   const basic = ipinfoBasic;
   const basicLat = Number(basic.latitude ?? identity.latitude);
   const basicLon = Number(basic.longitude ?? identity.longitude);
