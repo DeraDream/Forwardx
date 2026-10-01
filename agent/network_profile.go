@@ -796,7 +796,7 @@ func profileRiskSourceHasUsefulData(source profileRiskSource) bool {
 }
 
 
-func profileFFraudFallbackSource(client *http.Client, ip string) profileRiskSource {
+func profileFFraudSource(client *http.Client, ip string) profileRiskSource {
 	source := profileRiskSource{Name: "FFraud"}
 	var payload map[string]any
 	if err := profileGetJSONRetry(client, "https://api.ffraud.com/public/ip/"+url.PathEscape(ip), &payload, 2); err != nil {
@@ -826,7 +826,7 @@ func profileFFraudFallbackSource(client *http.Client, ip string) profileRiskSour
 	return source
 }
 
-func profileIP99FallbackSource(client *http.Client, ip string) profileRiskSource {
+func profileIP99Source(client *http.Client, ip string) profileRiskSource {
 	source := profileRiskSource{Name: "IP99"}
 	var payload map[string]any
 	if err := profileGetJSONRetry(client, "https://ip99.com/v1/ip/"+url.PathEscape(ip), &payload, 2); err != nil {
@@ -1481,8 +1481,8 @@ func profileRisk(cfg Config, client *http.Client, ip string) map[string]any {
 		{"ProxyCheck", func() profileRiskSource { return profileProxyCheckSource(cfg, client, ip) }},
 		{"IPinfo", func() profileRiskSource { return profileIPInfoSource(client, ip) }},
 		{"ipregistry", func() profileRiskSource { return profileIPRegistrySource(client, ip) }},
-		{"FFraud", func() profileRiskSource { return profileFFraudFallbackSource(client, ip) }},
-		{"IP99", func() profileRiskSource { return profileIP99FallbackSource(client, ip) }},
+		{"FFraud", func() profileRiskSource { return profileFFraudSource(client, ip) }},
+		{"IP99", func() profileRiskSource { return profileIP99Source(client, ip) }},
 		{"DB-IP", func() profileRiskSource { return profileDBIPSource(client, ip) }},
 		{"IP2Location", func() profileRiskSource { return profileIP2LocationPrimarySource(client, ip) }},
 		{"AbuseIPDB", func() profileRiskSource { return profileAbuseIPDBSource(cfg, client, ip) }},
