@@ -1697,6 +1697,10 @@ function publicSystemSettings(all: Record<string, string | null>, activeProtocol
       panelUpdateEnabled: all.githubAcceleratorPanelUpdateEnabled === "true",
     },
     agentPreferPanelInstall: all.agentPreferPanelInstall === "true",
+    agentUpgradeRollout: {
+      waveSize: Math.min(100, Math.max(1, Math.floor(Number(all.agentUpgradeWaveSize || 5) || 5))),
+      waveIntervalSeconds: Math.min(300, Math.max(1, Math.floor(Number(all.agentUpgradeWaveIntervalSeconds || 15) || 15))),
+    },
     database: databaseSettingsSummary(all, false),
     mysql: {
       configured: false,
@@ -1873,6 +1877,12 @@ export const systemRouter = router({
         panelUpdateEnabled: all.githubAcceleratorPanelUpdateEnabled === "true",
       },
       agentPreferPanelInstall: all.agentPreferPanelInstall === "true",
+      networkProfileApi: {
+        ipapiConfigured: !!String(all.networkProfileIpapiApiKey || "").trim(),
+        ipapiKeyMasked: maskSecret(all.networkProfileIpapiApiKey),
+        abuseIpdbConfigured: !!String(all.networkProfileAbuseIpdbApiKey || "").trim(),
+        abuseIpdbKeyMasked: maskSecret(all.networkProfileAbuseIpdbApiKey),
+      },
       database: databaseSettingsSummary(all),
       mysql: {
         configured: all.mysqlConfigured === "true",
@@ -2095,6 +2105,16 @@ export const systemRouter = router({
           panelUpdateEnabled: z.boolean().optional(),
         }).optional(),
         agentPreferPanelInstall: z.boolean().optional(),
+        agentUpgradeRollout: z.object({
+          waveSize: z.number().int().min(1).max(100).optional(),
+          waveIntervalSeconds: z.number().int().min(1).max(300).optional(),
+        }).optional(),
+        networkProfileApi: z.object({
+          ipapiApiKey: z.string().max(512).optional(),
+          clearIpapiApiKey: z.boolean().optional(),
+          abuseIpdbApiKey: z.string().max(512).optional(),
+          clearAbuseIpdbApiKey: z.boolean().optional(),
+        }).optional(),
         email: z.object({
           enabled: z.boolean().optional(),
           host: z.string().max(256).optional(),
@@ -2314,6 +2334,26 @@ export const systemRouter = router({
       if (input.agentPreferPanelInstall !== undefined) {
         await db.setSetting("agentPreferPanelInstall", input.agentPreferPanelInstall ? "true" : "false");
         console.info(`[Settings] Agent panel-first install ${input.agentPreferPanelInstall ? "enabled" : "disabled"}`);
+      }
+      if (input.agentUpgradeRollout) {
+        const next: Record<string, string | null> = {};
+        if (input.agentUpgradeRollout.waveSize !== undefined) next.agentUpgradeWaveSize = String(input.agentUpgradeRollout.waveSize);
+        if (input.agentUpgradeRollout.waveIntervalSeconds !== undefined) next.agentUpgradeWaveIntervalSeconds = String(input.agentUpgradeRollout.waveIntervalSeconds);
+        await db.setSettings(next);
+        console.info("[Settings] Agent upgrade rollout settings updated");
+      }
+      if (input.networkProfileApi) {
+        const next: Record<string, string | null> = {};
+        if (input.networkProfileApi.clearIpapiApiKey) next.networkProfileIpapiApiKey = null;
+        if (input.networkProfileApi.ipapiApiKey !== undefined && input.networkProfileApi.ipapiApiKey.trim()) {
+          next.networkProfileIpapiApiKey = input.networkProfileApi.ipapiApiKey.trim();
+        }
+        if (input.networkProfileApi.clearAbuseIpdbApiKey) next.networkProfileAbuseIpdbApiKey = null;
+        if (input.networkProfileApi.abuseIpdbApiKey !== undefined && input.networkProfileApi.abuseIpdbApiKey.trim()) {
+          next.networkProfileAbuseIpdbApiKey = input.networkProfileApi.abuseIpdbApiKey.trim();
+        }
+        await db.setSettings(next);
+        console.info("[Settings] network profile API credentials updated");
       }
       if (input.email) {
         const email = input.email;
