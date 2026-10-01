@@ -839,7 +839,21 @@ func profileIP99FallbackSource(client *http.Client, ip string) profileRiskSource
 	source.Level = profileRiskLevelFromText(profileString(risk["level"]), source.Score)
 	source.NetworkType = profileString(network["usage_type"])
 	source.Country = profileCountryCode(geo["country"])
-	signals := profileStringSlice(risk["signals"])
+	signals := make([]string, 0)
+	switch raw := risk["signals"].(type) {
+	case []any:
+		for _, item := range raw {
+			if value := profileString(item); value != "" {
+				signals = append(signals, value)
+			}
+		}
+	case []string:
+		signals = append(signals, raw...)
+	case string:
+		if value := strings.TrimSpace(raw); value != "" {
+			signals = append(signals, value)
+		}
+	}
 	for _, signal := range signals {
 		value := strings.ToLower(strings.TrimSpace(signal))
 		switch value {
