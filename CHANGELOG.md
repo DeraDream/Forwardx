@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.3.397] - 2026-10-01
+
+### 补齐 MaxMind / DB-IP 类型列并优化 BGP 清晰度
+
+- 修复 IP 类型属性中 MaxMind / DB-IP 因“仅有数据才渲染”而整列消失的问题：固定展示 IPinfo、ipregistry、MaxMind、DB-IP、IP2Location 五列，不再让新增数据库无数据时从表格中消失。
+- MaxMind 类型改接官方 GeoIP Insights：使用 traits.user_type / traits.connection_type；通过 Panel 保存可选的 `MAXMIND_ACCOUNT_ID` 与 `MAXMIND_LICENSE_KEY`，未配置时明确显示“需 Insights Key”，不伪造 MaxMind 类型。
+- DB-IP 类型优先使用官方 Core/Extended API 的 usageType，并支持 `DBIP_API_KEY`；无 Key 时尝试 DB-IP 官方 Demo。GitHub Azure 实测官方 Demo 当前返回 `OVER_QUERY_LIMIT`，因此配额耗尽时明确显示“需 API Key”，不再静默隐藏整列。
+- DB-IP usageType 与 MaxMind 常见类型增加中文归一化：consumer/residential→家宽、corporate/business→商业、hosting→机房、cellular→手机、college/school→教育等。
+- BGP SVG 不再在桌面端用 `max-width: 100%` 强行缩进卡片：直接按 SVG 原始尺寸渲染，超出卡片横向滚动。BGP.Tools 当前图宽约 963pt（约 1284 CSS px），避免压缩到约 850px 后文字和细线视觉发糊。
+- 临时 DB-IP 外网探测 workflow 已删除。
+- Panel / APK Release 升级至 `2.3.397`；Agent 升级至 `2.2.227`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.3.396] - 2026-10-01
 
 ### 网络画像 UI 与 BGP 缓存修复
