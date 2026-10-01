@@ -2,6 +2,7 @@ import net from "node:net";
 import type { Router, Request, Response } from "express";
 import { getAgentHostFromRequest } from "./agentAuth";
 import { reportHostNetworkProfile } from "./hostNetworkProfileState";
+import { ENV } from "./env";
 
 function familyOf(value: unknown): "ipv4" | "ipv6" | null {
   const text = String(value || "").trim().toLowerCase();
@@ -28,15 +29,27 @@ type NetworkProfileProxyCacheEntry = {
 
 const networkProfileProxyCache = new Map<string, NetworkProfileProxyCacheEntry>();
 
-function networkProfileProxyUrl(ip: string, provider: string) {
+function networkProfileProxyRequest(ip: string, provider: string) {
   const escapedIp = encodeURIComponent(ip);
   if (provider === "maxmind") {
-    return `https://ipinfo.check.place/${escapedIp}?lang=en`;
+    return { url: `https://ipinfo.check.place/${escapedIp}?lang=en`, headers: {} as Record<string, string> };
   }
   if (provider === "proxycheck") {
-    return `https://proxycheck.io/v2/${escapedIp}?vpn=1&asn=1&risk=1&days=7`;
+    return { url: `https://proxycheck.io/v2/${escapedIp}?vpn=1&asn=1&risk=1&days=7`, headers: {} as Record<string, string> };
   }
-  return `https://ipinfo.check.place/${escapedIp}?db=${encodeURIComponent(provider)}`;
+  if (provider === "abuseipdb" && ENV.abuseIpdbApiKey.trim()) {
+    return {
+      url: `https://api.abuseipdb.com/api/v2/check?ipAddress=${escapedIp}&maxAgeInDays=90&verbose=`,
+      headers: {
+        Key: ENV.abuseIpdbApiKey.trim(),
+        Accept: "application/json",
+      },
+    };
+  }
+  return {
+    url: `https://ipinfo.check.place/${escapedIp}?db=${encodeURIComponent(provider)}`,
+    headers: {} as Record<string, string>,
+  };
 }
 
 function pruneNetworkProfileProxyCache(now = Date.now()) {
@@ -60,11 +73,13 @@ async function fetchNetworkProfileProxyPayload(ip: string, provider: string) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), NETWORK_PROFILE_PROXY_TIMEOUT_MS);
     try {
-      const response = await fetch(networkProfileProxyUrl(ip, provider), {
+      const request = networkProfileProxyRequest(ip, provider);
+      const response = await fetch(request.url, {
         cache: "no-store",
         headers: {
           Accept: "application/json,text/plain,*/*",
           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125 Safari/537.36",
+          ...request.headers,
         },
         signal: controller.signal,
       });
