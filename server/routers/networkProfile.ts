@@ -12,6 +12,81 @@ import {
 
 export const NETWORK_PROFILE_AGENT_VERSION = "2.2.212";
 
+const BGP_GRAPH_CACHE_MS = 6 * 60 * 60_000;
+const BGP_GRAPH_CACHE_LIMIT = 128;
+const BGP_GRAPH_MAX_BYTES = 4 * 1024 * 1024;
+
+type BGPGraphCacheEntry = {
+  expiresAt: number;
+  dataUrl: string;
+};
+
+const bgpGraphCache = new Map<string, BGPGraphCacheEntry>();
+
+function pruneBGPGraphCache(now = Date.now()) {
+  for (const [key, entry] of bgpGraphCache) {
+    if (entry.expiresAt <= now) bgpGraphCache.delete(key);
+  }
+  while (bgpGraphCache.size > BGP_GRAPH_CACHE_LIMIT) {
+    const oldest = bgpGraphCache.keys().next().value;
+    if (!oldest) break;
+    bgpGraphCache.delete(oldest);
+  }
+}
+
+function normalizeBGPGraphUrl(rawPath: unknown) {
+  const value = String(rawPath || "").trim();
+  if (!value) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(value, "https://bgp.tools");
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "https:" || parsed.hostname.toLowerCase() !== "bgp.tools") return null;
+  if (!parsed.pathname.startsWith("/pathimg/")) return null;
+  return parsed.toString();
+}
+
+async function fetchBGPGraphDataUrl(rawPath: unknown) {
+  const graphUrl = normalizeBGPGraphUrl(rawPath);
+  if (!graphUrl) throw new Error("BGP 拓扑图地址无效");
+  const cached = bgpGraphCache.get(graphUrl);
+  if (cached && cached.expiresAt > Date.now()) return cached.dataUrl;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12_000);
+  try {
+    const response = await fetch(graphUrl, {
+      cache: "no-store",
+      headers: {
+        Accept: "image/svg+xml,image/*;q=0.8,*/*;q=0.5",
+        "User-Agent": "ForwardX-Panel (+https://github.com/DeraDream/Forwardx)",
+        Referer: "https://bgp.tools/",
+      },
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`BGP.Tools HTTP ${response.status}`);
+    const declaredLength = Number(response.headers.get("content-length") || 0);
+    if (declaredLength > BGP_GRAPH_MAX_BYTES) throw new Error("BGP 拓扑图过大");
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength === 0 || bytes.byteLength > BGP_GRAPH_MAX_BYTES) {
+      throw new Error("BGP 拓扑图大小异常");
+    }
+    const svg = Buffer.from(bytes).toString("utf8").trim();
+    if (!/<svg\b/i.test(svg.slice(0, 2048))) throw new Error("BGP.Tools 未返回 SVG");
+    const dataUrl = `data:image/svg+xml;base64,${Buffer.from(svg, "utf8").toString("base64")}`;
+    bgpGraphCache.set(graphUrl, {
+      expiresAt: Date.now() + BGP_GRAPH_CACHE_MS,
+      dataUrl,
+    });
+    pruneBGPGraphCache();
+    return dataUrl;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function requireHost(hostId: number, user: any) {
   const host = await db.getHostById(hostId) as any;
   if (!host) throw new Error("主机不存在");
@@ -76,6 +151,37 @@ export const networkProfileRouter = router({
         ipv4,
         ipv6,
       };
+    }),
+
+  bgpGraph: protectedProcedure
+    .input(z.object({
+      hostId: z.number().int().positive(),
+      family: z.enum(["ipv4", "ipv6"]),
+    }))
+    .query(async ({ input, ctx }) => {
+      await requireHost(input.hostId, ctx.user);
+      const view = await hostNetworkProfileView(input.hostId, input.family);
+      const current = view.running || view.persisted;
+      const network = current?.data?.network as Record<string, any> | undefined;
+      const prefix = String(network?.prefix || "").trim();
+      const graphPath = String(network?.bgpGraphPath || "").trim();
+      const pageUrl = String(network?.bgpGraphPageUrl || "").trim()
+        || (prefix ? `https://bgp.tools/prefix/${prefix}#connectivity` : "");
+      if (!graphPath) {
+        return { available: false as const, prefix, pageUrl, dataUrl: null };
+      }
+      try {
+        const dataUrl = await fetchBGPGraphDataUrl(graphPath);
+        return { available: true as const, prefix, pageUrl, dataUrl };
+      } catch (error) {
+        return {
+          available: false as const,
+          prefix,
+          pageUrl,
+          dataUrl: null,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
     }),
 
   start: protectedProcedure
