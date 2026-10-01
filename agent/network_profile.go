@@ -671,8 +671,9 @@ type profileRiskSource struct {
 	IsAbuser     *bool `json:"isAbuser,omitempty"`
 	IsBot        *bool `json:"isBot,omitempty"`
 	NetworkType  string `json:"networkType,omitempty"`
-	CompanyType  string `json:"companyType,omitempty"`
-	Error        string `json:"error,omitempty"`
+	CompanyType      string `json:"companyType,omitempty"`
+	FallbackProvider string `json:"fallbackProvider,omitempty"`
+	Error            string `json:"error,omitempty"`
 }
 
 func profileBoolPtr(value any) *bool {
@@ -689,6 +690,223 @@ func profileScorePtr(value any) *float64 {
 		}
 	}
 	return nil
+}
+
+func profileRiskLevelFromText(raw string, score *float64) string {
+	value := strings.ToLower(strings.TrimSpace(raw))
+	switch value {
+	case "none", "very_low", "very low", "safe":
+		return "very_low"
+	case "low":
+		return "low"
+	case "medium", "moderate", "elevated":
+		return "medium"
+	case "high":
+		return "high"
+	case "critical", "very_high", "very high", "severe":
+		return "very_high"
+	}
+	if score != nil {
+		return profileRiskLevel(*score)
+	}
+	return "unknown"
+}
+
+func profileAppendFallbackProvider(current, next string) string {
+	current = strings.TrimSpace(current)
+	next = strings.TrimSpace(next)
+	if next == "" {
+		return current
+	}
+	if current == "" {
+		return next
+	}
+	for _, item := range strings.Split(current, " + ") {
+		if strings.EqualFold(strings.TrimSpace(item), next) {
+			return current
+		}
+	}
+	return current + " + " + next
+}
+
+func profileMergeRiskSourceFallback(target *profileRiskSource, fallback profileRiskSource, provider string) bool {
+	if target == nil {
+		return false
+	}
+	changed := false
+	if target.Score == nil && fallback.Score != nil {
+		target.Score = fallback.Score
+		target.Level = fallback.Level
+		changed = true
+	}
+	if strings.TrimSpace(target.Level) == "" && strings.TrimSpace(fallback.Level) != "" {
+		target.Level = fallback.Level
+		changed = true
+	}
+	if strings.TrimSpace(target.Country) == "" && strings.TrimSpace(fallback.Country) != "" {
+		target.Country = fallback.Country
+		changed = true
+	}
+	if strings.TrimSpace(target.NetworkType) == "" && strings.TrimSpace(fallback.NetworkType) != "" {
+		target.NetworkType = fallback.NetworkType
+		changed = true
+	}
+	if strings.TrimSpace(target.CompanyType) == "" && strings.TrimSpace(fallback.CompanyType) != "" {
+		target.CompanyType = fallback.CompanyType
+		changed = true
+	}
+	if target.IsProxy == nil && fallback.IsProxy != nil {
+		target.IsProxy = fallback.IsProxy
+		changed = true
+	}
+	if target.IsVPN == nil && fallback.IsVPN != nil {
+		target.IsVPN = fallback.IsVPN
+		changed = true
+	}
+	if target.IsTor == nil && fallback.IsTor != nil {
+		target.IsTor = fallback.IsTor
+		changed = true
+	}
+	if target.IsDatacenter == nil && fallback.IsDatacenter != nil {
+		target.IsDatacenter = fallback.IsDatacenter
+		changed = true
+	}
+	if target.IsAbuser == nil && fallback.IsAbuser != nil {
+		target.IsAbuser = fallback.IsAbuser
+		changed = true
+	}
+	if target.IsBot == nil && fallback.IsBot != nil {
+		target.IsBot = fallback.IsBot
+		changed = true
+	}
+	if changed {
+		target.FallbackProvider = profileAppendFallbackProvider(target.FallbackProvider, provider)
+		target.Error = ""
+	}
+	return changed
+}
+
+func profileRiskSourceHasUsefulData(source profileRiskSource) bool {
+	return source.Score != nil ||
+		strings.TrimSpace(source.Country) != "" ||
+		strings.TrimSpace(source.NetworkType) != "" ||
+		strings.TrimSpace(source.CompanyType) != "" ||
+		source.IsProxy != nil || source.IsVPN != nil || source.IsTor != nil ||
+		source.IsDatacenter != nil || source.IsAbuser != nil || source.IsBot != nil
+}
+
+func profileFFraudFallbackSource(client *http.Client, ip string) profileRiskSource {
+	source := profileRiskSource{Name: "FFraud"}
+	var payload map[string]any
+	if err := profileGetJSONRetry(client, "https://api.ffraud.com/public/ip/"+url.PathEscape(ip), &payload, 2); err != nil {
+		source.Error = err.Error()
+		return source
+	}
+	if success, ok := profileBool(payload["success"]); ok && !success {
+		source.Error = firstNonEmpty(profileString(payload["error"]), profileString(payload["message"]), "FFraud lookup failed")
+		return source
+	}
+	source.Score = profileScorePtr(payload["fraud_score"])
+	source.Level = profileRiskLevelFromText(profileString(payload["risk"]), source.Score)
+	source.NetworkType = profileString(payload["connection_type"])
+	company := profileMap(payload["company"])
+	source.CompanyType = profileString(company["type"])
+	geo := profileMap(payload["geo"])
+	source.Country = profileCountryCode(geo["country"])
+	source.IsProxy = profileBoolPtr(payload["proxy"])
+	source.IsVPN = profileBoolPtr(payload["vpn"])
+	source.IsTor = profileBoolPtr(payload["tor"])
+	source.IsDatacenter = profileBoolPtr(payload["hosting"])
+	source.IsAbuser = profileBoolPtr(payload["is_abuser"])
+	source.IsBot = profileBoolPtr(payload["is_crawler"])
+	if !profileRiskSourceHasUsefulData(source) {
+		source.Error = "FFraud data unavailable"
+	}
+	return source
+}
+
+func profileIP99FallbackSource(client *http.Client, ip string) profileRiskSource {
+	source := profileRiskSource{Name: "IP99"}
+	var payload map[string]any
+	if err := profileGetJSONRetry(client, "https://ip99.com/v1/ip/"+url.PathEscape(ip), &payload, 2); err != nil {
+		source.Error = err.Error()
+		return source
+	}
+	network := profileMap(payload["network"])
+	risk := profileMap(payload["risk"])
+	geo := profileMap(payload["geo"])
+	source.Score = profileScorePtr(risk["score"])
+	source.Level = profileRiskLevelFromText(profileString(risk["level"]), source.Score)
+	source.NetworkType = profileString(network["usage_type"])
+	source.Country = profileCountryCode(geo["country"])
+	signals := make([]string, 0)
+	switch raw := risk["signals"].(type) {
+	case []any:
+		for _, item := range raw {
+			if value := profileString(item); value != "" {
+				signals = append(signals, value)
+			}
+		}
+	case []string:
+		signals = append(signals, raw...)
+	case string:
+		if value := strings.TrimSpace(raw); value != "" {
+			signals = append(signals, value)
+		}
+	}
+	for _, signal := range signals {
+		value := strings.ToLower(strings.TrimSpace(signal))
+		switch value {
+		case "hosting", "datacenter", "data_center":
+			v := true
+			source.IsDatacenter = &v
+		case "vpn":
+			v := true
+			source.IsVPN = &v
+		case "proxy":
+			v := true
+			source.IsProxy = &v
+		case "tor":
+			v := true
+			source.IsTor = &v
+		case "spam", "abuse", "abuser":
+			v := true
+			source.IsAbuser = &v
+		}
+	}
+	if !profileRiskSourceHasUsefulData(source) {
+		source.Error = "IP99 data unavailable"
+	}
+	return source
+}
+
+func profileIP2LocationDirectSource(client *http.Client, ip string) profileRiskSource {
+	source := profileRiskSource{Name: "IP2Location"}
+	var payload map[string]any
+	if err := profileGetJSONRetry(client, "https://api.ip2location.io/?ip="+url.QueryEscape(ip)+"&format=json", &payload, 2); err != nil {
+		source.Error = err.Error()
+		return source
+	}
+	source.Country = profileCountryCode(payload["country_code"])
+	source.NetworkType = profileString(payload["usage_type"])
+	asInfo := profileMap(payload["as_info"])
+	source.CompanyType = profileString(asInfo["as_usage_type"])
+	source.Score = profileScorePtr(payload["fraud_score"])
+	if source.Score != nil {
+		switch {
+		case *source.Score < 33:
+			source.Level = "low"
+		case *source.Score < 66:
+			source.Level = "medium"
+		default:
+			source.Level = "high"
+		}
+	}
+	source.IsProxy = profileBoolPtr(payload["is_proxy"])
+	if !profileRiskSourceHasUsefulData(source) {
+		source.Error = "IP2Location.io data unavailable"
+	}
+	return source
 }
 
 func profileRiskFromCheckPlace(cfg Config, client *http.Client, ip, db string) (map[string]any, error) {
@@ -895,7 +1113,10 @@ func profileIPAPIDirectSource(client *http.Client, ip string) profileRiskSource 
 	location := profileMap(payload["location"])
 	company := profileMap(payload["company"])
 	asn := profileMap(payload["asn"])
-	source.Country = profileString(location["country_code"])
+	source.Country = profileCountryCode(location["country_code"])
+	if source.Country == "" {
+		source.Country = profileCountryCode(payload["country"])
+	}
 	source.NetworkType = profileString(asn["type"])
 	source.CompanyType = profileString(company["type"])
 	source.IsProxy = profileBoolPtr(payload["is_proxy"])
@@ -1216,6 +1437,57 @@ func profileRisk(cfg Config, client *http.Client, ip string) map[string]any {
 		retry := item.check()
 		if strings.TrimSpace(retry.Error) == "" {
 			sources[item.index] = retry
+		}
+	}
+
+	// check.place may be blocked by Cloudflare for datacenter egress. Keep the
+	// exact provider as primary, then fill missing fields from public, no-key
+	// endpoints so the profile remains useful instead of rendering empty cells.
+	ffraud := profileFFraudFallbackSource(client, ip)
+	ip99 := profileIP99FallbackSource(client, ip)
+
+	// ipapi: prefer the exact check.place response, then api.ipapi.is anonymous
+	// data, then FFraud/IP99 only for fields the anonymous tier does not expose.
+	if strings.TrimSpace(sources[3].Error) != "" || !profileRiskSourceHasUsefulData(sources[3]) ||
+		sources[3].NetworkType == "" || sources[3].CompanyType == "" || sources[3].Score == nil {
+		direct := profileIPAPIDirectSource(client, ip)
+		if profileRiskSourceHasUsefulData(direct) {
+			profileMergeRiskSourceFallback(&sources[3], direct, "ipapi.is")
+		}
+		if profileRiskSourceHasUsefulData(ffraud) {
+			profileMergeRiskSourceFallback(&sources[3], ffraud, "FFraud")
+		}
+		if profileRiskSourceHasUsefulData(ip99) {
+			profileMergeRiskSourceFallback(&sources[3], ip99, "IP99")
+		}
+	}
+
+	// AbuseIPDB requires a key for its official API. When check.place is
+	// unavailable, FFraud's public abuse/reputation feed is the closest
+	// no-key substitute; IP99 is the final safety net.
+	if strings.TrimSpace(sources[7].Error) != "" || !profileRiskSourceHasUsefulData(sources[7]) ||
+		sources[7].NetworkType == "" || sources[7].Score == nil {
+		if profileRiskSourceHasUsefulData(ffraud) {
+			profileMergeRiskSourceFallback(&sources[7], ffraud, "FFraud")
+		}
+		if profileRiskSourceHasUsefulData(ip99) {
+			profileMergeRiskSourceFallback(&sources[7], ip99, "IP99")
+		}
+	}
+
+	// IP2Location: query the provider's keyless endpoint first, then fill fields
+	// reserved for higher plans from the same fallback feeds.
+	if strings.TrimSpace(sources[8].Error) != "" || !profileRiskSourceHasUsefulData(sources[8]) ||
+		sources[8].NetworkType == "" || sources[8].CompanyType == "" || sources[8].Score == nil {
+		direct := profileIP2LocationDirectSource(client, ip)
+		if profileRiskSourceHasUsefulData(direct) {
+			profileMergeRiskSourceFallback(&sources[8], direct, "IP2Location.io")
+		}
+		if profileRiskSourceHasUsefulData(ffraud) {
+			profileMergeRiskSourceFallback(&sources[8], ffraud, "FFraud")
+		}
+		if profileRiskSourceHasUsefulData(ip99) {
+			profileMergeRiskSourceFallback(&sources[8], ip99, "IP99")
 		}
 	}
 

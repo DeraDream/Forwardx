@@ -167,3 +167,80 @@ func TestProfileBGPCountryPattern(t *testing.T) {
 		t.Fatalf("profileBGPCountryPattern failed: %#v", match)
 	}
 }
+
+
+func TestProfileMergeRiskSourceFallback(t *testing.T) {
+	score := 20.0
+	hosting := true
+	fallback := profileRiskSource{
+		Name: "FFraud",
+		Score: &score,
+		Level: "low",
+		Country: "SG",
+		NetworkType: "Data Center",
+		CompanyType: "hosting",
+		IsDatacenter: &hosting,
+	}
+	target := profileRiskSource{Name: "IP2Location", Error: "HTTP 403"}
+	if !profileMergeRiskSourceFallback(&target, fallback, "FFraud") {
+		t.Fatal("expected fallback merge to change target")
+	}
+	if target.Error != "" {
+		t.Fatalf("fallback should clear error, got %q", target.Error)
+	}
+	if target.FallbackProvider != "FFraud" {
+		t.Fatalf("fallback provider=%q", target.FallbackProvider)
+	}
+	if target.Score == nil || *target.Score != 20 {
+		t.Fatalf("score=%v", target.Score)
+	}
+	if target.NetworkType != "Data Center" || target.CompanyType != "hosting" || target.Country != "SG" {
+		t.Fatalf("merged target=%+v", target)
+	}
+	if target.IsDatacenter == nil || !*target.IsDatacenter {
+		t.Fatalf("datacenter flag not merged: %+v", target)
+	}
+}
+
+func TestProfileMergeRiskSourceFallbackPreservesExactData(t *testing.T) {
+	exactScore := 4.0
+	fallbackScore := 80.0
+	target := profileRiskSource{
+		Name: "ipapi",
+		Score: &exactScore,
+		Level: "very_low",
+		NetworkType: "hosting",
+	}
+	fallback := profileRiskSource{
+		Score: &fallbackScore,
+		Level: "high",
+		NetworkType: "Data Center",
+		CompanyType: "hosting",
+	}
+	profileMergeRiskSourceFallback(&target, fallback, "FFraud")
+	if target.Score == nil || *target.Score != 4 || target.Level != "very_low" || target.NetworkType != "hosting" {
+		t.Fatalf("exact data overwritten: %+v", target)
+	}
+	if target.CompanyType != "hosting" {
+		t.Fatalf("missing field not supplemented: %+v", target)
+	}
+	if target.FallbackProvider != "FFraud" {
+		t.Fatalf("fallback provider=%q", target.FallbackProvider)
+	}
+}
+
+func TestProfileRiskLevelFromText(t *testing.T) {
+	score := 95.0
+	cases := map[string]string{
+		"none": "very_low",
+		"low": "low",
+		"medium": "medium",
+		"high": "high",
+		"critical": "very_high",
+	}
+	for input, want := range cases {
+		if got := profileRiskLevelFromText(input, &score); got != want {
+			t.Fatalf("profileRiskLevelFromText(%q)=%q want=%q", input, got, want)
+		}
+	}
+}
