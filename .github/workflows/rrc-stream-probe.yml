@@ -1,0 +1,46 @@
+name: RRC Stream Probe
+
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/rrc-stream-probe.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+          cache-dependency-path: agent/go.mod
+      - name: Parser and region mapping tests
+        run: cd agent && go test -run 'TestProfileRRC' ./...
+      - name: Live Global IPv4 probe
+        shell: bash
+        run: |
+          set -u
+          timeout 150 bash agent/region_restriction_check.sh -E -M 4 -F Global_UnlockTest > /tmp/global.txt 2>&1 || true
+          sed -n '1,160p' /tmp/global.txt
+          grep -q 'IPv4:' /tmp/global.txt
+          grep -Eq 'Netflix:|YouTube Premium:|Disney\+:' /tmp/global.txt
+          if grep -q '^IPv6:' /tmp/global.txt; then
+            echo 'unexpected IPv6 section while -M 4 was requested'
+            exit 1
+          fi
+      - name: Live Japan IPv4 probe
+        shell: bash
+        run: |
+          set -u
+          timeout 180 bash agent/region_restriction_check.sh -E -M 4 -F JP_UnlockTest > /tmp/japan.txt 2>&1 || true
+          sed -n '1,180p' /tmp/japan.txt
+          grep -q 'IPv4:' /tmp/japan.txt
+          grep -Eq 'Japan|NHK\+|DMM TV|Abema.TV' /tmp/japan.txt
+          if grep -q '^IPv6:' /tmp/japan.txt; then
+            echo 'unexpected IPv6 section while -M 4 was requested'
+            exit 1
+          fi
