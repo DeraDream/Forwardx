@@ -1177,90 +1177,71 @@ func profilePostRaw(client *http.Client, rawURL, contentType, body string, heade
 
 var profileDBIPKeyPattern = regexp.MustCompile(`data-api-key=["']([^"']+)["']`)
 
-func profileDBIPSource(client *http.Client, ip string) profileRiskSource {
-	source := profileRiskSource{Name: "DB-IP"}
+func profileDBIPSource(cfg Config, client *http.Client, ip string) profileRiskSource {
+	parse := func(payload map[string]any) profileRiskSource {
+		source := profileRiskSource{Name: "DB-IP"}
+		returnedIP := profileString(payload["ipAddress"])
+		if returnedIP != "" && returnedIP != ip {
+			source.Error = "DB-IP returned a different IP"
+			return source
+		}
+		source.Country = profileString(payload["countryCode"])
+		source.NetworkType = profileString(payload["usageType"])
+		source.IsProxy = profileBoolPtr(payload["isProxy"])
+		source.IsBot = profileBoolPtr(payload["isCrawler"])
+		switch strings.ToLower(profileString(payload["threatLevel"])) {
+		case "low":
+			score := float64(0); source.Score = &score; source.Level = "low"
+		case "medium":
+			score := float64(50); source.Score = &score; source.Level = "medium"
+		case "high":
+			score := float64(100); source.Score = &score; source.Level = "high"
+		}
+		if source.Country == "" && source.NetworkType == "" && source.Score == nil && source.IsProxy == nil && source.IsBot == nil {
+			source.Error = "DB-IP type data unavailable"
+		}
+		return source
+	}
 
-	// DB-IP's own demo endpoint accepts an arbitrary IP and returns the vendor's
-	// usageType field (hosting/corporate/consumer/reserved) without borrowing a
-	// classification from another database.
-	if code, body, err := profileReadRetry(client, "https://db-ip.com/demo/home.php?s="+url.QueryEscape(ip), map[string]string{
+	// Prefer the official Core/Extended API through the Panel so the optional
+	// API key never leaves the Panel host.
+	if payload, err := profilePanelRiskProxy(cfg, ip, "dbip"); err == nil {
+		source := parse(payload)
+		if profileRiskSourceHasUsefulData(source) || source.NetworkType != "" {
+			return source
+		}
+	}
+
+	// Best-effort keyless fallback: DB-IP's own public demo exposes usageType,
+	// but it has a shared daily quota and is not guaranteed to be available.
+	code, body, err := profileReadRetry(client, "https://db-ip.com/demo/home.php?s="+url.QueryEscape(ip), map[string]string{
 		"Accept": "application/json,text/plain,*/*",
 		"Referer": "https://db-ip.com/",
-	}, 2); err == nil && code >= 200 && code < 300 {
+	}, 2)
+	if err == nil && code >= 200 && code < 300 {
 		var wrapper map[string]any
 		if json.Unmarshal([]byte(body), &wrapper) == nil {
 			info := profileMap(wrapper["demoInfo"])
 			if info != nil {
-				returnedIP := profileString(info["ipAddress"])
-				if returnedIP == "" || returnedIP == ip {
-					source.Country = profileString(info["countryCode"])
-					source.NetworkType = profileString(info["usageType"])
-					source.IsProxy = profileBoolPtr(info["isProxy"])
-					source.IsBot = profileBoolPtr(info["isCrawler"])
-					switch strings.ToLower(profileString(info["threatLevel"])) {
-					case "low":
-						score := float64(0); source.Score = &score; source.Level = "low"
-					case "medium":
-						score := float64(50); source.Score = &score; source.Level = "medium"
-					case "high":
-						score := float64(100); source.Score = &score; source.Level = "high"
+				if errorCode := profileString(info["errorCode"]); errorCode != "" {
+					source := profileRiskSource{Name: "DB-IP"}
+					if strings.EqualFold(errorCode, "OVER_QUERY_LIMIT") {
+						source.Error = "DB-IP API key is not configured and demo quota is exhausted"
+					} else {
+						source.Error = firstNonEmpty(profileString(info["error"]), errorCode)
 					}
-					if source.Country != "" || source.NetworkType != "" || source.Score != nil || source.IsProxy != nil || source.IsBot != nil {
-						return source
-					}
+					return source
+				}
+				source := parse(info)
+				if profileRiskSourceHasUsefulData(source) || source.NetworkType != "" {
+					return source
 				}
 			}
 		}
 	}
 
-	// Keep the browser API as a fallback for environments where the demo endpoint
-	// is temporarily unavailable.
-	_, coreBody, err := profileReadRetry(client, "https://db-ip.com/api/core/", map[string]string{"Accept": "*/*"}, 2)
-	if err != nil {
-		source.Error = err.Error()
-		return source
-	}
-	match := profileDBIPKeyPattern.FindStringSubmatch(coreBody)
-	if len(match) < 2 {
-		source.Error = "DB-IP web key unavailable"
-		return source
-	}
-	endpoint := "https://api.db-ip.com/v2/" + url.PathEscape(match[1]) + "/self?convertCurrencies"
-	headers := map[string]string{"Origin": "https://db-ip.com", "Referer": "https://db-ip.com/"}
-	code, body, err := profilePostRaw(client, endpoint, "text/plain;charset=UTF-8", `[["11.49","EUR"],["139.90","EUR"],["699.90","EUR"]]`, headers)
-	if err != nil {
-		source.Error = err.Error()
-		return source
-	}
-	if code < 200 || code >= 300 {
-		source.Error = fmt.Sprintf("HTTP %d", code)
-		return source
-	}
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(body), &payload); err != nil {
-		source.Error = err.Error()
-		return source
-	}
-	returnedIP := profileString(payload["ipAddress"])
-	if returnedIP != "" && returnedIP != ip {
-		source.Error = "DB-IP returned a different egress IP"
-		return source
-	}
-	source.Country = profileString(payload["countryCode"])
-	source.NetworkType = profileString(payload["usageType"])
-	source.IsProxy = profileBoolPtr(payload["isProxy"])
-	source.IsBot = profileBoolPtr(payload["isCrawler"])
-	switch strings.ToLower(profileString(payload["threatLevel"])) {
-	case "low":
-		score := float64(0); source.Score = &score; source.Level = "low"
-	case "medium":
-		score := float64(50); source.Score = &score; source.Level = "medium"
-	case "high":
-		score := float64(100); source.Score = &score; source.Level = "high"
-	}
-	if source.Country == "" && source.NetworkType == "" && source.Score == nil && source.IsProxy == nil && source.IsBot == nil {
-		source.Error = "DB-IP threat/type data unavailable"
-	}
+	source := profileRiskSource{Name: "DB-IP"}
+	source.Error = "DB-IP API key is not configured"
 	return source
 }
 
@@ -1328,7 +1309,7 @@ func profileRisk(cfg Config, client *http.Client, ip string) map[string]any {
 		{"ipregistry", func() profileRiskSource { return profileIPRegistrySource(client, ip) }},
 		{"FFraud", func() profileRiskSource { return profileFFraudSource(client, ip) }},
 		{"IP99", func() profileRiskSource { return profileIP99Source(client, ip) }},
-		{"DB-IP", func() profileRiskSource { return profileDBIPSource(client, ip) }},
+		{"DB-IP", func() profileRiskSource { return profileDBIPSource(cfg, client, ip) }},
 		{"IP2Location", func() profileRiskSource { return profileIP2LocationPrimarySource(client, ip) }},
 		{"AbuseIPDB", func() profileRiskSource { return profileAbuseIPDBSource(cfg, client, ip) }},
 	}
