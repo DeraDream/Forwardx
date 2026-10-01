@@ -9,6 +9,7 @@ import {
   isAgentTcpingResult,
   isAgentTrafficStat,
   isAgentTunnelTcpingResult,
+  normalizeAgentProbeCounts,
   type AgentForwardGroupLatencyResult,
   type AgentHostProbeServiceResult,
   type AgentHostTrafficStat,
@@ -326,12 +327,12 @@ export function tunnelProbeTargetHostId(
 type TunnelRelayAggregate = {
   key: string;
   label: string;
-  aggregate: { success: boolean; latencyMs: number | null } | null;
+  aggregate: { success: boolean; latencyMs: number | null; probeCount?: number; probeSuccesses?: number } | null;
 };
 
 export function readyTunnelRelayAggregates(aggregates: TunnelRelayAggregate[]) {
   const completed = aggregates.filter((item): item is TunnelRelayAggregate & {
-    aggregate: { success: boolean; latencyMs: number | null };
+    aggregate: { success: boolean; latencyMs: number | null; probeCount?: number; probeSuccesses?: number };
   } => item.aggregate !== null);
   return completed.some((item) => item.aggregate.success) || completed.length === aggregates.length
     ? completed
@@ -392,12 +393,83 @@ function sameProbeTarget(left: unknown, right: unknown) {
     === String(right || "").trim().replace(/^\[|\]$/g, "").toLowerCase();
 }
 
-export function summarizeTunnelBranches(branches: Array<{ latencyMs: number | null; isTimeout: boolean }>) {
+export function summarizeTunnelBranches(branches: Array<{ latencyMs: number | null; isTimeout: boolean; probeCount?: number; probeSuccesses?: number }>) {
   const successful = branches.filter((branch) => !branch.isTimeout && Number(branch.latencyMs || 0) > 0);
-  return {
+  const normalizeBranchCounts = (branch: typeof branches[number]) => {
+    const rawCount = Number(branch.probeCount);
+    const probeCount = Number.isInteger(rawCount) && rawCount >= 1 && rawCount <= 1024 ? rawCount : 1;
+    const rawSuccesses = Number(branch.probeSuccesses);
+    const hasSuccesses = branch.probeSuccesses !== undefined
+      && branch.probeSuccesses !== null
+      && Number.isInteger(rawSuccesses);
+    const probeSuccesses = Math.max(0, Math.min(
+      probeCount,
+      hasSuccesses ? rawSuccesses : (branch.isTimeout ? 0 : probeCount),
+    ));
+    return { probeCount, probeSuccesses };
+  };
+  const successfulCounts = successful
+    .map(normalizeBranchCounts)
+    .sort((left, right) => right.probeSuccesses / right.probeCount - left.probeSuccesses / left.probeCount);
+  const allCounts = branches.map(normalizeBranchCounts);
+  const result: {
+    unavailable: boolean;
+    partial: boolean;
+    latencyMs: number | null;
+    probeCount?: number;
+    probeSuccesses?: number;
+  } = {
     unavailable: successful.length === 0,
     partial: successful.length > 0 && successful.length < branches.length,
     latencyMs: successful.length > 0 ? Math.max(...successful.map((branch) => Number(branch.latencyMs))) : null,
+  };
+  let probeCount = 1;
+  let probeSuccesses = result.unavailable ? 0 : 1;
+  if (successfulCounts.length > 0) {
+    ({ probeCount, probeSuccesses } = successfulCounts[0]);
+  } else if (allCounts.length > 0) {
+    probeCount = Math.max(...allCounts.map((counts) => counts.probeCount), 1);
+    const ratio = Math.min(...allCounts.map((counts) => counts.probeSuccesses / counts.probeCount));
+    probeSuccesses = Math.max(0, Math.min(probeCount, Math.floor(ratio * probeCount + 1e-9)));
+  }
+  if (probeCount !== 1 || probeSuccesses !== (result.unavailable ? 0 : 1)) {
+    result.probeCount = probeCount;
+    result.probeSuccesses = probeSuccesses;
+  }
+  return result;
+}
+
+/**
+ * Compose the exit-to-target probe with the current tunnel sample. Both
+ * probes describe the same end-to-end request from different hops, so retain
+ * the lowest success ratio instead of silently reporting a clean target
+ * probe when the tunnel itself had partial loss.
+ */
+export function combineTunnelRuleProbeCounts(input: {
+  target: { isTimeout?: unknown; probeCount?: unknown; probeSuccesses?: unknown };
+  tunnel?: { isTimeout?: unknown; probeCount?: unknown; probeSuccesses?: unknown } | null;
+  combinedIsTimeout: boolean;
+}) {
+  const target = normalizeAgentProbeCounts(input.target, { legacyZeroAsSuccess: false });
+  if (!input.tunnel) {
+    return {
+      probeCount: target.probeCount,
+      probeSuccesses: input.combinedIsTimeout ? 0 : target.probeSuccesses,
+    };
+  }
+  // Tunnel rows can predate counter telemetry. Successful legacy rows have
+  // the new column's zero default, which normalizeAgentProbeCounts recognizes
+  // as one successful probe at this database-read boundary.
+  const tunnel = normalizeAgentProbeCounts(input.tunnel);
+  const probeCount = Math.max(target.probeCount, tunnel.probeCount, 1);
+  if (input.combinedIsTimeout) return { probeCount, probeSuccesses: 0 };
+  const successRatio = Math.min(
+    target.probeSuccesses / target.probeCount,
+    tunnel.probeSuccesses / tunnel.probeCount,
+  );
+  return {
+    probeCount,
+    probeSuccesses: Math.max(0, Math.min(probeCount, Math.floor(successRatio * probeCount + 1e-9))),
   };
 }
 
@@ -946,6 +1018,23 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
       ? req.body.services
       : (Array.isArray(req.body?.serviceResults) ? req.body.serviceResults : []);
     const parsedServiceResults: AgentHostProbeServiceResult[] = rawServiceResults.filter(isAgentHostProbeServiceResult);
+    // Normalize the optional counters once at the ingress boundary.  This
+    // keeps old Agents (which omit them) compatible while preserving partial
+    // packet loss reported by newer Agents through every persistence path.
+    for (const report of [
+      ...parsedResults,
+      ...parsedTunnelResults,
+      ...parsedForwardGroupResults,
+      ...parsedServiceResults,
+    ]) {
+      const probeCounts = normalizeAgentProbeCounts(report, { legacyZeroAsSuccess: false });
+      Object.assign(report, probeCounts);
+      // Keep the legacy boolean and packet counters coherent at the trust
+      // boundary. Packet counters are authoritative: a partially successful
+      // probe is reachable, while a report with zero successful packets is a
+      // timeout even if an Agent used an inconsistent legacy boolean.
+      report.isTimeout = probeCounts.probeSuccesses <= 0;
+    }
     if (parsedResults.length === 0 && parsedTunnelResults.length === 0 && parsedForwardGroupResults.length === 0 && parsedServiceResults.length === 0) {
       res.status(400).json({ error: "results, tunnels, forwardGroups or services array is required" });
       return;
@@ -994,7 +1083,7 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
       const multiEntryGeneration = `${topologyKey}:entries:${orderedEntryHostIds.join(",")}`;
       const relayFailover = isTunnelRelayFailover(tunnel, hops);
       const relayCandidateCount = relayFailover ? tunnelRelayCandidates(hops).length : 0;
-      const branchByKey = new Map<string, { key: string; label: string; latencyMs: number | null; isTimeout: boolean }>();
+      const branchByKey = new Map<string, { key: string; label: string; latencyMs: number | null; isTimeout: boolean; probeCount?: number; probeSuccesses?: number }>();
       for (const report of reports) {
         if (!await validateTunnelProbeSource(Number(host.id), tunnel, report, { hops, exitNodes, entryHostIds, topologyKey })) continue;
         const latencyValue = typeof report.latencyMs === "number" && report.latencyMs > 0 ? report.latencyMs : null;
@@ -1013,6 +1102,8 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
             hopCount: hasHop ? hopCount : 1,
             latencyMs: latencyValue,
             isTimeout,
+            probeCount: report.probeCount,
+            probeSuccesses: report.probeSuccesses,
             generation: multiEntryGeneration,
             pathKey: seriesKey || "default",
             toHostId: tunnelProbeTargetHostId(tunnel, hops, exitNodes, report, seriesKey),
@@ -1026,6 +1117,8 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
               tunnelId,
               latencyMs: detail.isTimeout ? null : detail.latencyMs,
               isTimeout: detail.isTimeout,
+              probeCount: detail.probeCount ?? 1,
+              probeSuccesses: detail.probeSuccesses ?? (detail.isTimeout ? 0 : 1),
               seriesKey: detailSeriesKey,
               seriesLabel: cleanTunnelSeriesLabel(
                 branchLabel ? `${detail.label} / ${branchLabel}` : detail.label,
@@ -1041,6 +1134,8 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
               label,
               latencyMs: aggregate.success ? aggregate.latencyMs : null,
               isTimeout: !aggregate.success,
+              probeCount: aggregate.probeCount ?? 1,
+              probeSuccesses: aggregate.probeSuccesses ?? (aggregate.success ? 1 : 0),
             });
             continue;
           }
@@ -1048,6 +1143,8 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
             tunnelId,
             latencyMs: aggregate.success ? aggregate.latencyMs : null,
             isTimeout: !aggregate.success,
+            probeCount: aggregate.probeCount ?? 1,
+            probeSuccesses: aggregate.probeSuccesses ?? (aggregate.success ? 1 : 0),
             seriesKey: "total",
             seriesLabel: aggregate.partial ? "可用入口最大延迟" : "多入口最大延迟",
             recordedAt,
@@ -1065,6 +1162,8 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
             hopCount: 2,
             latencyMs: latencyValue,
             isTimeout,
+            probeCount: report.probeCount,
+            probeSuccesses: report.probeSuccesses,
             generation: topologyKey,
             pathKey: seriesKey,
             allowEarlyFailure: true,
@@ -1080,13 +1179,22 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
             hopCount: hasHop ? hopCount : 1,
             latencyMs: latencyValue,
             isTimeout,
+            probeCount: report.probeCount,
+            probeSuccesses: report.probeSuccesses,
             generation: topologyKey,
             pathKey: seriesKey,
             fromHostId: Number(host.id),
             toHostId: tunnelProbeTargetHostId(tunnel, hops, exitNodes, report, seriesKey),
           });
           const label = cleanTunnelSeriesLabel(report.seriesLabel, seriesKey === "primary" ? "主出口" : seriesKey);
-          branchByKey.set(seriesKey, { key: seriesKey, label, latencyMs: latencyValue, isTimeout });
+          branchByKey.set(seriesKey, {
+            key: seriesKey,
+            label,
+            latencyMs: latencyValue,
+            isTimeout,
+            probeCount: Number(report.probeCount) || 1,
+            probeSuccesses: Number(report.probeSuccesses) || 0,
+          });
           continue;
         }
         if (hasHop) {
@@ -1096,6 +1204,8 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
             hopCount,
             latencyMs: latencyValue,
             isTimeout,
+            probeCount: report.probeCount,
+            probeSuccesses: report.probeSuccesses,
             generation: topologyKey,
             fromHostId: Number(host.id),
             toHostId: tunnelProbeTargetHostId(tunnel, hops, exitNodes, report, seriesKey),
@@ -1105,6 +1215,8 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
             tunnelId,
             latencyMs: aggregate.success ? aggregate.latencyMs : null,
             isTimeout: !aggregate.success,
+            probeCount: aggregate.probeCount ?? 1,
+            probeSuccesses: aggregate.probeSuccesses ?? (aggregate.success ? 1 : 0),
             seriesKey: "total",
             seriesLabel: "总延迟",
           }, { preserveMessage: true });
@@ -1118,6 +1230,8 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
           tunnelId,
           latencyMs: latencyValue,
           isTimeout,
+          probeCount: Number(report.probeCount) || 1,
+          probeSuccesses: Number(report.probeSuccesses) || 0,
           seriesKey: "total",
           seriesLabel: "总延迟",
         }, { preserveMessage: true });
@@ -1152,6 +1266,8 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
               label: item.label,
               latencyMs: item.aggregate.success ? item.aggregate.latencyMs : null,
               isTimeout: !item.aggregate.success,
+              probeCount: item.aggregate.probeCount ?? 1,
+              probeSuccesses: item.aggregate.probeSuccesses ?? (item.aggregate.success ? 1 : 0),
             });
           }
         }
@@ -1165,6 +1281,8 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
           tunnelId,
           latencyMs: branch.isTimeout ? null : branch.latencyMs,
           isTimeout: branch.isTimeout,
+          probeCount: branch.probeCount || 1,
+          probeSuccesses: branch.probeSuccesses ?? (branch.isTimeout ? 0 : 1),
           seriesKey: branch.key,
           seriesLabel: branch.label,
           recordedAt,
@@ -1175,6 +1293,8 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
         tunnelId,
         latencyMs: summary.latencyMs,
         isTimeout: summary.unavailable,
+        probeCount: summary.probeCount ?? 1,
+        probeSuccesses: summary.probeSuccesses ?? (summary.unavailable ? 0 : 1),
         seriesKey: "total",
         seriesLabel: summary.partial ? "可用出口最大延迟" : "最大延迟",
         recordedAt,
@@ -1258,6 +1378,8 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
           hopCount,
           latencyMs: typeof report.latencyMs === "number" && report.latencyMs > 0 ? report.latencyMs : null,
           isTimeout: !!report.isTimeout,
+          probeCount: report.probeCount,
+          probeSuccesses: report.probeSuccesses,
           generation: topologyKey,
         });
         if (!aggregate) continue;
@@ -1265,6 +1387,8 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
           groupId,
           latencyMs: aggregate.success ? aggregate.latencyMs : null,
           isTimeout: !aggregate.success,
+          probeCount: aggregate.probeCount ?? 1,
+          probeSuccesses: aggregate.probeSuccesses ?? (aggregate.success ? 1 : 0),
         });
       }
     });
@@ -1304,6 +1428,8 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
         hostId: host.id,
         latencyMs: typeof report.latencyMs === "number" && report.latencyMs > 0 ? report.latencyMs : null,
         isTimeout: !!report.isTimeout,
+        probeCount: Number(report.probeCount) || 1,
+        probeSuccesses: Number(report.probeSuccesses) || 0,
       }];
     });
     if (serviceStats.length > 0) {
@@ -1357,6 +1483,8 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
             hostId: host.id,
             latencyMs,
             isTimeout,
+            probeCount: Number(report.probeCount) || 1,
+            probeSuccesses: Number(report.probeSuccesses) || 0,
             healthStatus: report.healthStatus || null,
             healthPending: !!report.healthPending,
           },
@@ -1381,12 +1509,22 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
       });
       if (!combined) return null;
       const tunnelIntroducedTimeout = combined.isTimeout && !report.isTimeout;
+      // Compose target and tunnel counters. If the tunnel path timed out,
+      // no end-to-end packet can be considered successful; otherwise retain
+      // the lower success ratio from either segment.
+      const composedProbeCounts = combineTunnelRuleProbeCounts({
+        target: report,
+        tunnel: latestTunnelLatency,
+        combinedIsTimeout: combined.isTimeout,
+      });
       return {
         stat: {
           ruleId,
           hostId: host.id,
           latencyMs: combined.latencyMs,
           isTimeout: combined.isTimeout,
+          probeCount: composedProbeCounts.probeCount,
+          probeSuccesses: composedProbeCounts.probeSuccesses,
           healthStatus: tunnelIntroducedTimeout ? null : report.healthStatus || null,
           healthPending: tunnelIntroducedTimeout ? false : !!report.healthPending,
         },
