@@ -32,6 +32,18 @@ jobs:
             echo 'unexpected IPv6 section while -M 4 was requested'
             exit 1
           fi
+      - name: Live Global IPv6 probe
+        shell: bash
+        run: |
+          set -u
+          timeout 150 bash agent/region_restriction_check.sh -E -M 6 -F Global_UnlockTest > /tmp/global6.txt 2>&1 || true
+          sed -n '1,120p' /tmp/global6.txt
+          grep -q 'IPv6:' /tmp/global6.txt
+          grep -Eq 'Netflix:|YouTube Premium:|Disney\+:' /tmp/global6.txt
+          if grep -q '^IPv4:' /tmp/global6.txt; then
+            echo 'unexpected IPv4 section while -M 6 was requested'
+            exit 1
+          fi
       - name: Live Japan IPv4 probe
         shell: bash
         run: |
