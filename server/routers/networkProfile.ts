@@ -238,26 +238,47 @@ export const networkProfileRouter = router({
       if (!isAgentVersionAtLeast(host.agentVersion, NETWORK_PROFILE_AGENT_VERSION)) {
         throw new Error(`Agent 版本过旧，需要升级至 ${NETWORK_PROFILE_AGENT_VERSION} 或更高版本`);
       }
-      const family = input.family as NetworkProfileFamily;
-      const task = startHostNetworkProfileTask({ hostId: input.hostId, family, mode: input.mode });
-      const pushed = pushAgentNetworkProfile(input.hostId, {
-        taskId: task.taskId,
+      const selectedFamily = input.family as NetworkProfileFamily;
+      const families: NetworkProfileFamily[] = [selectedFamily];
+      if (input.mode === "full") {
+        if (selectedFamily !== "ipv4" && String(host.ipv4 || "").trim()) families.push("ipv4");
+        if (selectedFamily !== "ipv6" && String(host.ipv6 || "").trim()) families.push("ipv6");
+      }
+
+      const tasks = families.map((family) => startHostNetworkProfileTask({
+        hostId: input.hostId,
         family,
         mode: input.mode,
-      });
-      if (!pushed) {
+      }));
+      let pushedCount = 0;
+      for (const task of tasks) {
+        const pushed = pushAgentNetworkProfile(input.hostId, {
+          taskId: task.taskId,
+          family: task.family,
+          mode: input.mode,
+        });
+        if (pushed) {
+          pushedCount += 1;
+          continue;
+        }
         await reportHostNetworkProfile({
           hostId: input.hostId,
           taskId: task.taskId,
-          family,
+          family: task.family,
           stage: "dispatch",
           status: "error",
           message: "Agent 实时通道不可用",
           completed: true,
           failed: true,
         });
+      }
+      if (pushedCount === 0) {
         throw new Error("Agent 实时通道不可用，请确认 Agent 在线后重试");
       }
-      return task;
+      return {
+        ...tasks[0],
+        tasks,
+        dualStack: input.mode === "full" && tasks.length > 1,
+      };
     }),
 });
