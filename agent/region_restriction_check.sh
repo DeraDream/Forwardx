@@ -4010,18 +4010,6 @@ function echo_Result() {
     done;
 }
 
-if [ -n "$func" ]; then
-    if [[ "$NetworkType" != "6" ]]; then
-        echo -e "${Font_Green}IPv4:${Font_Suffix}"
-        $func 4
-    fi
-    if [[ "$NetworkType" != "4" ]]; then
-        echo -e "${Font_Green}IPv6:${Font_Suffix}"
-        $func 6
-    fi
-    exit
-fi
-
 function NA_UnlockTest() {
     echo "===========[ North America ]==========="
     local result=$(
@@ -4608,6 +4596,18 @@ function Goodbye() {
         echo -e "${Font_Green}本次测试已结束，感谢使用此脚本 ${Font_Suffix}"
     fi
 }
+
+if [ -n "$func" ]; then
+    if [[ "$NetworkType" != "6" ]]; then
+        echo -e "${Font_Green}IPv4:${Font_Suffix}"
+        $func 4
+    fi
+    if [[ "$NetworkType" != "4" ]]; then
+        echo -e "${Font_Green}IPv6:${Font_Suffix}"
+        $func 6
+    fi
+    exit
+fi
 
 clear
 
