@@ -23,12 +23,6 @@ function statusCardClass(status: string) {
   return "border-emerald-200/80 bg-emerald-500/5";
 }
 
-function riskValue(value: unknown) {
-  if (value === true) return <span className="font-semibold text-red-600 dark:text-red-400">是</span>;
-  if (value === false) return <span className="font-semibold text-emerald-600 dark:text-emerald-400">否</span>;
-  return <span className="text-muted-foreground">—</span>;
-}
-
 function riskPercent(data: any): number | null {
   const score = Number(data?.score);
   if (data?.score !== null && data?.score !== undefined && Number.isFinite(score) && score >= 0) {
@@ -74,7 +68,6 @@ export function HostNetworkProfileDialog({
   const risk = data.risk || {};
   const apps = useMemo(() => Object.values(data.apps || {}) as any[], [data.apps]);
   const riskScore = riskPercent(risk);
-  const riskSources = Array.isArray(risk.sources) ? risk.sources : [];
   const steps = current?.steps || {};
   const completed = Object.values(steps).filter((item: any) => ["success", "error", "skip"].includes(item?.status)).length;
   const total = Math.max(5, Object.keys(steps).length);
@@ -169,38 +162,9 @@ export function HostNetworkProfileDialog({
                   {networkType && <Badge variant="outline">{networkType}</Badge>}
                 </div>
                 <div className="mt-2 text-[11px] text-muted-foreground">数据源：{risk.provider === "multi-source" ? "多库综合" : risk.provider || "待检测"}</div>
-                {riskScore === null && <div className="mt-1 text-xs text-muted-foreground">暂无可用评分，但仍会展示各数据库风险因子。</div>}
+                {riskScore === null && <div className="mt-1 text-xs text-muted-foreground">暂无可用评分。</div>}
               </div>
             </div>
-
-            {riskSources.length > 0 && (
-              <div className="rounded-lg border border-rose-200/60 bg-rose-500/[0.02] p-3">
-                <div className="mb-2 flex items-center justify-between">
-                  <div className="text-sm font-medium text-rose-700 dark:text-rose-300">风险评分 / 风险因子</div>
-                  <span className="text-[11px] text-muted-foreground">{riskSources.filter((item: any) => !item.error).length}/{riskSources.length} 数据源可用</span>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[620px] text-[11px]">
-                    <thead className="text-muted-foreground"><tr className="border-b">
-                      <th className="py-1.5 text-left font-medium">数据库</th><th className="text-left font-medium">地区</th><th className="text-left font-medium">评分</th>
-                      <th className="text-center font-medium">代理</th><th className="text-center font-medium">Tor</th><th className="text-center font-medium">VPN</th>
-                      <th className="text-center font-medium">服务器</th><th className="text-center font-medium">滥用</th><th className="text-center font-medium">机器人</th>
-                    </tr></thead>
-                    <tbody>
-                      {riskSources.map((source: any) => (
-                        <tr key={source.name} className="border-b last:border-0">
-                          <td className="py-1.5 font-medium text-cyan-700 dark:text-cyan-300">{source.name}</td>
-                          <td className="text-emerald-700 dark:text-emerald-300">{source.country || "—"}</td>
-                          <td>{source.score != null ? <span className={Number(source.score) >= 60 ? "font-semibold text-red-600" : Number(source.score) >= 25 ? "font-semibold text-amber-600" : "font-semibold text-emerald-600"}>{Math.round(Number(source.score))}</span> : source.error ? <div className="max-w-[150px]" title={source.error}><div className="text-amber-600">暂不可用</div><div className="truncate text-[9px] text-muted-foreground">{source.error}</div></div> : "—"}</td>
-                          <td className="text-center">{riskValue(source.isProxy)}</td><td className="text-center">{riskValue(source.isTor)}</td><td className="text-center">{riskValue(source.isVPN)}</td>
-                          <td className="text-center">{riskValue(source.isDatacenter)}</td><td className="text-center">{riskValue(source.isAbuser)}</td><td className="text-center">{riskValue(source.isBot)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
 
 
             <div className="rounded-lg border border-violet-200/60 bg-violet-500/[0.025] p-3">

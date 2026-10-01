@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.3.389] - 2026-10-01
+
+### 网络画像精简风险因子展示
+
+- 移除网络画像弹窗中的“风险评分 / 风险因子”多数据库明细表，不再展示 ProxyCheck、IPinfo、ipregistry、ipapi.is、DB-IP、Scamalytics、IPQS、AbuseIPDB、IP2Location 的逐库矩阵。
+- 保留顶部“IP 风险”综合风险卡片，以及 IP / ASN、应用解锁、网络 / IXP 等现有模块。
+- 清理前端风险因子表相关的无用渲染与状态代码，避免保留无效 UI 依赖。
+- Panel / APK Release 升级至 `2.3.389`；Agent 保持 `2.2.219`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.3.388] - 2026-10-01
 
 ### 网络画像按 NodeQuality / IPQuality / NetQuality 思路重构
