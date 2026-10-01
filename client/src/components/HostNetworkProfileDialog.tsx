@@ -453,19 +453,14 @@ export function HostNetworkProfileDialog({
                   const status = String(app.status || "unknown");
                   const region = normalizeRegionCode(app.region);
                   return (
-                    <div key={app.id} className={`min-h-36 rounded-md border px-3 py-2.5 ${statusCardClass(status)}`}>
+                    <div key={app.id} className={`min-h-24 rounded-md border px-3 py-2.5 ${statusCardClass(status)}`}>
                       <div className="flex items-center justify-between gap-2">
                         <div className="truncate text-sm font-medium">{app.name || app.id}</div>
                         {statusBadge(status)}
                       </div>
-                      <div className="mt-2.5 space-y-1.5 text-[10px] leading-5">
+                      <div className="mt-2 space-y-1 text-[10px] leading-5">
                         <div><span className="inline-block w-11 text-muted-foreground">地区</span><span className={appRegionClass(region, baseCountry, status)}>{region || "—"}</span></div>
                         <div className="flex items-center"><span className="inline-block w-11 shrink-0 text-muted-foreground">方式</span>{unlockMethodBadge(app.unlockMethod)}</div>
-                        <div><span className="inline-block w-11 text-muted-foreground">延迟</span><span>{app.latencyMs != null ? `${app.latencyMs} ms` : "—"}</span></div>
-                        <div className="border-t border-current/10 pt-1.5 text-muted-foreground">
-                          <span className="mr-1.5">说明</span>
-                          <span className="break-words" title={app.note || app.message || ""}>{app.note || app.message || "—"}</span>
-                        </div>
                       </div>
                     </div>
                   );
