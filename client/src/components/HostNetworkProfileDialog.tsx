@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Activity, ExternalLink, Globe2, RefreshCw, ShieldCheck, Wifi, XCircle } from "lucide-react";
+import { Activity, ExternalLink, Globe2, Mail, RefreshCw, ShieldCheck, XCircle } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -23,23 +23,53 @@ function statusCardClass(status: string) {
   return "border-emerald-200/80 bg-emerald-500/5";
 }
 
-function riskPercent(data: any): number | null {
-  const score = Number(data?.score);
-  if (data?.score !== null && data?.score !== undefined && Number.isFinite(score) && score >= 0) {
-    return Math.min(100, Math.round(score));
-  }
-  const knownFlags = ["isDatacenter", "isVPN", "isProxy", "isTor", "isAbuser"]
-    .filter((key) => typeof data?.[key] === "boolean");
-  if (knownFlags.length === 0) return null;
-  let derived = 0;
-  if (data?.isDatacenter === true) derived += 20;
-  if (data?.isVPN === true) derived += 25;
-  if (data?.isProxy === true) derived += 25;
-  if (data?.isTor === true) derived += 40;
-  if (data?.isAbuser === true) derived += 35;
-  return Math.min(100, derived);
+function riskLevelText(level: unknown) {
+  const labels: Record<string, string> = {
+    very_low: "极低风险",
+    low: "低风险",
+    medium: "中等风险",
+    elevated: "较高风险",
+    high: "高风险",
+    very_high: "极高风险",
+    suspicious: "可疑 IP",
+    risky: "存在风险",
+    block: "建议封禁",
+    unknown: "无数据",
+  };
+  return labels[String(level || "unknown")] || "无数据";
 }
 
+function riskLevelBadgeClass(level: unknown) {
+  const value = String(level || "unknown");
+  if (["very_low", "low"].includes(value)) return "border-emerald-200 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300";
+  if (["medium", "elevated", "suspicious"].includes(value)) return "border-amber-200 bg-amber-500/15 text-amber-700 dark:text-amber-300";
+  if (["high", "very_high", "risky", "block"].includes(value)) return "border-red-200 bg-red-500/15 text-red-700 dark:text-red-300";
+  return "border-border bg-muted/40 text-muted-foreground";
+}
+
+function riskScoreText(source: any) {
+  const score = Number(source?.score);
+  if (!Number.isFinite(score)) return "—";
+  if (String(source?.name || "").toLowerCase().includes("ipapi")) return `${score.toFixed(2)}%`;
+  return Number.isInteger(score) ? String(score) : score.toFixed(1);
+}
+
+function appRegionClass(region: unknown, baseCountry: string, status: string) {
+  const code = String(region || "").trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(code)) return "text-muted-foreground";
+  if (status === "blocked" || status === "error") return "text-red-600 dark:text-red-400";
+  if (code === "CN" && baseCountry && baseCountry !== "CN") return "font-semibold text-red-600 dark:text-red-400";
+  if (baseCountry && code === baseCountry) return "font-semibold text-emerald-600 dark:text-emerald-400";
+  if (baseCountry && code !== baseCountry) return "font-semibold text-amber-600 dark:text-amber-300";
+  return "font-medium text-emerald-600 dark:text-emerald-400";
+}
+
+function unlockMethodBadge(method: unknown) {
+  const value = String(method || "").toLowerCase();
+  if (value === "dns") return <Badge className="border-amber-200 bg-amber-500/15 text-amber-700 dark:text-amber-300">DNS</Badge>;
+  if (value === "native") return <Badge className="border-emerald-200 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">原生</Badge>;
+  return <span className="text-muted-foreground">—</span>;
+}
 
 function ipTypeLabel(value: unknown) {
   const raw = String(value || "").trim();
@@ -123,20 +153,20 @@ export function HostNetworkProfileDialog({
   const identity = data.identity || {};
   const risk = data.risk || {};
   const bgpGraphPath = String(data.network?.bgpGraphPath || "").trim();
+  const bgpPrefix = String(data.network?.prefix || "").trim();
   const bgpGraphQuery = trpc.networkProfile.bgpGraph.useQuery(
     { hostId, family },
     {
-      enabled: open && hostId > 0 && !!bgpGraphPath,
+      enabled: open && hostId > 0 && !!(bgpGraphPath || bgpPrefix),
       staleTime: 6 * 60 * 60 * 1000,
       refetchOnWindowFocus: false,
       retry: 1,
     },
   );
   const apps = useMemo(() => Object.values(data.apps || {}) as any[], [data.apps]);
-  const riskScore = riskPercent(risk);
   const steps = current?.steps || {};
   const completed = Object.values(steps).filter((item: any) => ["success", "error", "skip"].includes(item?.status)).length;
-  const total = Math.max(5, Object.keys(steps).length);
+  const total = Math.max(6, Object.keys(steps).length);
   const progress = Math.min(100, Math.round((completed / total) * 100));
   const detectedIp = data.ip?.address || identity.ip || (family === "ipv4" ? query.data?.host.ipv4 : query.data?.host.ipv6);
   const ixpItems = Array.isArray(data.network?.ixp) ? data.network.ixp : [];
@@ -152,12 +182,10 @@ export function HostNetworkProfileDialog({
           ? "无 IXP 登记"
           : Array.isArray(data.network?.warnings) && data.network.warnings.some((item: any) => String(item).startsWith("PeeringDB:"))
             ? "IXP 检测失败"
-            : "待检测";
-  const riskLevelText: Record<string, string> = { low: "低", medium: "中等", high: "高", very_high: "极高", unknown: "未知" };
-  const networkType = risk.networkType || (risk.isDatacenter === true ? "Hosting / Datacenter" : "");
+            : "无数据";
   const rpkiText: Record<string, string> = { valid: "有效", invalid_asn: "ASN 不匹配", invalid_length: "前缀长度无效", unknown: "未配置 ROA" };
   const neighbours = Array.isArray(data.network?.neighbours) ? data.network.neighbours : [];
-  const ipNatureText: Record<string, string> = { native: "原生 IP", broadcast: "广播 IP", unknown: "待确认" };
+  const ipNatureText: Record<string, string> = { native: "原生 IP", broadcast: "广播 IP", unknown: "证据不足" };
   const geoEvidence = Array.isArray(identity.ipNatureGeoEvidence) ? identity.ipNatureGeoEvidence : [];
   const registeredEvidence = Array.isArray(identity.ipNatureRegisteredEvidence) ? identity.ipNatureRegisteredEvidence : [];
   const evidenceText = (items: any[]) => items
@@ -165,34 +193,50 @@ export function HostNetworkProfileDialog({
     .filter(Boolean)
     .join(" · ");
   const maxmind = identity.maxmind || {};
-  const maxmindLat = Number(maxmind.latitude ?? identity.latitude);
-  const maxmindLon = Number(maxmind.longitude ?? identity.longitude);
-  const hasCoordinates = Number.isFinite(maxmindLat) && Number.isFinite(maxmindLon);
+  const ipinfoBasic = identity.ipinfoBasic || {};
+  const basicProvider = String(identity.basicProvider || (Object.keys(ipinfoBasic).length ? "IPinfo" : "ipwho.is"));
+  const usingMaxMind = basicProvider === "MaxMind";
+  const basic = usingMaxMind ? maxmind : ipinfoBasic;
+  const basicLat = Number(basic.latitude ?? identity.latitude);
+  const basicLon = Number(basic.longitude ?? identity.longitude);
+  const hasCoordinates = Number.isFinite(basicLat) && Number.isFinite(basicLon);
   const coordinateText = hasCoordinates
-    ? `${coordinateDMS(maxmindLon, false)}, ${coordinateDMS(maxmindLat, true)}`
-    : "待检测";
+    ? `${coordinateDMS(basicLon, false)}, ${coordinateDMS(basicLat, true)}`
+    : "无数据";
   const mapUrl = hasCoordinates
-    ? `https://check.place/${maxmindLat},${maxmindLon},${Number(maxmind.accuracyRadius) || 1001},cn`
+    ? `https://check.place/${basicLat},${basicLon},${Number(basic.accuracyRadius) || 1001},cn`
     : "";
-  const maxmindCityText = [maxmind.subdivision, maxmind.city, maxmind.postalCode].filter(Boolean).join(" · ");
-  const maxmindUsageText = [
-    maxmind.countryCode ? `[${maxmind.countryCode}]` : "",
-    maxmind.country || identity.country,
-    maxmind.continentCode ? `[${maxmind.continentCode}]` : "",
-    maxmind.continent || identity.continent,
+  const cityText = [basic.subdivision || identity.region, basic.city || identity.city, basic.postalCode || identity.postalCode].filter(Boolean).join(" · ");
+  const usageCode = String(basic.countryCode || identity.actualCountryCode || identity.countryCode || "").toUpperCase();
+  const registeredCode = String(basic.registeredCountryCode || identity.registeredCountryCode || "").toUpperCase();
+  const usageText = [
+    usageCode ? `[${usageCode}]` : "",
+    basic.country || identity.country,
+    basic.continentCode ? `[${basic.continentCode}]` : "",
+    basic.continent || identity.continent,
   ].filter(Boolean).join(" ");
-  const maxmindRegisteredText = [
-    maxmind.registeredCountryCode ? `[${maxmind.registeredCountryCode}]` : (identity.registeredCountryCode ? `[${identity.registeredCountryCode}]` : ""),
-    maxmind.registeredCountry,
+  const registeredText = [
+    registeredCode ? `[${registeredCode}]` : "",
+    basic.registeredCountry,
   ].filter(Boolean).join(" ");
-  const typeSourceNames = ["IPinfo", "ipregistry", "ipapi.is", "IP2Location"];
+  const baseCountry = usageCode;
+  const riskSources = Array.isArray(risk.sources) ? risk.sources : [];
+  const riskOrder = ["IP2Location", "Scamalytics", "ipapi", "AbuseIPDB", "IPQS", "DB-IP"];
+  const scoredRiskSources = riskOrder.map((name) => {
+    const source = riskSources.find((item: any) => item?.name === name || (name === "ipapi" && item?.name === "ipapi.is"));
+    return source ? { ...source, displayName: name } : { name, displayName: name, level: "unknown", error: "无可用数据" };
+  });
+  const typeSourceNames = ["IPinfo", "ipregistry", "ipapi.is", "IP2Location", "AbuseIPDB"];
   const typeSources = typeSourceNames.map((name) => {
-    const source = (Array.isArray(risk.sources) ? risk.sources : []).find((item: any) => item?.name === name);
+    const source = riskSources.find((item: any) => item?.name === name);
     return {
       name: name === "ipapi.is" ? "ipapi" : name,
       source,
     };
   });
+  const mail = data.mail || {};
+  const mailProviders = Array.isArray(mail.providers) ? mail.providers : [];
+  const dnsbl = mail.dnsbl || {};
   const relationClass = (relation: string, index: number) => {
     const value = String(relation || "").toLowerCase();
     if (value.includes("left")) return "border-sky-300 bg-sky-500/10 text-sky-700 dark:text-sky-300";
@@ -235,129 +279,185 @@ export function HostNetworkProfileDialog({
           <div className="rounded-lg border border-dashed py-14 text-center text-sm text-muted-foreground">该协议族还没有检测记录。</div>
         ) : (
           <div className="space-y-4">
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="rounded-lg border border-sky-200/70 bg-sky-500/[0.035] p-3">
-                <div className="mb-2 flex items-center gap-2 text-sm font-medium text-sky-700 dark:text-sky-300"><Wifi className="h-4 w-4" />IP / ASN</div>
-                <div className="space-y-1 text-xs">
-                  <div className="font-mono text-sm font-semibold text-sky-700 dark:text-sky-300">{detectedIp || "检测中..."}</div>
-                  <div><span className="text-muted-foreground">ASN：</span><span className="font-medium text-violet-700 dark:text-violet-300">{identity.asn || "待检测"}</span></div>
-                  <div><span className="text-muted-foreground">运营商：</span><span className="font-medium text-indigo-700 dark:text-indigo-300">{identity.company || identity.isp || "待检测"}</span></div>
-                  <div><span className="text-muted-foreground">地区：</span><span className="font-medium text-emerald-700 dark:text-emerald-300">{[identity.flag, identity.city, identity.region, identity.country].filter(Boolean).join(" · ") || "待检测"}</span></div>
-                  <div>
-                    <span className="text-muted-foreground">IP 属性：</span>
-                    <span
-                      title={identity.ipNatureReason || ""}
-                      className={identity.ipNature === "broadcast" ? "font-semibold text-red-600 dark:text-red-400" : identity.ipNature === "native" ? "font-semibold text-emerald-600 dark:text-emerald-400" : "font-medium text-amber-700 dark:text-amber-300"}
-                    >
-                      {ipNatureText[String(identity.ipNature || "unknown")] || "待确认"}
-                    </span>
-                  </div>
-                  {(identity.ipNatureReason || geoEvidence.length > 0 || registeredEvidence.length > 0) && (
-                    <div className="rounded-md border border-sky-100/70 bg-background/60 px-2 py-1.5 text-[10px] leading-4 text-muted-foreground dark:border-sky-900/40">
-                      {identity.ipNatureReason ? <div>{identity.ipNatureReason}</div> : null}
-                      {geoEvidence.length > 0 ? <div title={evidenceText(geoEvidence)}>实际地区：{evidenceText(geoEvidence)}</div> : null}
-                      {registeredEvidence.length > 0 ? <div title={evidenceText(registeredEvidence)}>注册/分配：{evidenceText(registeredEvidence)}</div> : null}
-                    </div>
-                  )}
-                  <div><span className="text-muted-foreground">使用类型：</span><span className="font-medium text-amber-700 dark:text-amber-300">{ipTypeLabel(networkType) || "待检测"}</span></div>
-                  {identity.domain ? <div><span className="text-muted-foreground">网络域名：</span><span className="font-medium">{identity.domain}</span></div> : null}
-                </div>
-              </div>
-              <div className="rounded-lg border border-amber-200/70 bg-amber-500/[0.035] p-3">
-                <div className="mb-2 flex items-center gap-2 text-sm font-medium text-amber-700 dark:text-amber-300"><ShieldCheck className="h-4 w-4" />IP 风险</div>
-                <div className="mb-2 flex items-center justify-between text-xs"><span>综合风险</span><span>{riskScore === null ? "暂无评分" : `${riskScore}/100 · ${riskLevelText[String(risk.level || "unknown")] || risk.level}`}</span></div>
-                <Progress value={riskScore ?? 0} className={riskScore == null ? "" : riskScore < 25 ? "[&>div]:bg-emerald-500" : riskScore < 60 ? "[&>div]:bg-amber-500" : "[&>div]:bg-red-500"} />
-                <div className="mt-2 flex flex-wrap gap-1">
-                  {riskScore !== null && riskScore < 25 && <Badge className="border-emerald-200 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">低风险</Badge>}
-                  {riskScore !== null && riskScore >= 25 && riskScore < 60 && <Badge className="border-amber-200 bg-amber-500/15 text-amber-700 dark:text-amber-300">中等风险</Badge>}
-                  {riskScore !== null && riskScore >= 60 && <Badge className="border-red-200 bg-red-500/15 text-red-700 dark:text-red-300">高风险</Badge>}
-                  {risk.isDatacenter === true && <Badge variant="secondary">机房</Badge>}
-                  {risk.isVPN === true && <Badge variant="secondary">VPN</Badge>}
-                  {risk.isProxy === true && <Badge variant="secondary">Proxy</Badge>}
-                  {risk.isTor === true && <Badge variant="destructive">Tor</Badge>}
-                  {risk.isAbuser === true && <Badge variant="destructive">滥用记录</Badge>}
-                  {networkType && <Badge variant="outline">{networkType}</Badge>}
-                </div>
-                <div className="mt-2 text-[11px] text-muted-foreground">数据源：{risk.provider === "multi-source" ? "多库综合" : risk.provider || "待检测"}</div>
-                {riskScore === null && <div className="mt-1 text-xs text-muted-foreground">暂无可用评分。</div>}
-              </div>
-            </div>
-
             <div className="rounded-lg border border-sky-200/60 bg-sky-500/[0.025] p-3">
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <div className="text-sm font-medium text-sky-700 dark:text-sky-300">基础信息 <span className="font-normal text-muted-foreground">（MaxMind 数据库）</span></div>
-                <span className="text-[10px] text-muted-foreground">对应 IPQuality 基础信息字段</span>
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <div className="text-sm font-medium text-sky-700 dark:text-sky-300">基础信息</div>
+                <Badge variant="outline">数据源：{basicProvider}</Badge>
               </div>
-              <div className="grid gap-x-4 gap-y-1.5 text-xs sm:grid-cols-2">
-                <div><span className="text-muted-foreground">自治系统号：</span><span className="font-medium">{maxmind.asn ? `AS${maxmind.asn}` : identity.asnNumber ? `AS${identity.asnNumber}` : "待检测"}</span></div>
-                <div><span className="text-muted-foreground">组织：</span><span className="font-medium">{maxmind.organization || identity.company || "待检测"}</span></div>
+              <div className="grid gap-x-5 gap-y-1.5 text-xs sm:grid-cols-2">
+                <div><span className="text-muted-foreground">IP：</span><span className="font-mono font-semibold text-sky-700 dark:text-sky-300">{detectedIp || "无数据"}</span></div>
+                <div><span className="text-muted-foreground">自治系统号：</span><span className="font-medium">{basic.asn ? `AS${basic.asn}` : identity.asnNumber ? `AS${identity.asnNumber}` : identity.asn || "无数据"}</span></div>
+                <div className="sm:col-span-2"><span className="text-muted-foreground">组织：</span><span className="font-medium">{basic.organization || identity.company || identity.isp || "无数据"}</span></div>
                 <div className="sm:col-span-2"><span className="text-muted-foreground">坐标：</span><span className="font-mono">{coordinateText}</span></div>
                 <div className="sm:col-span-2">
                   <span className="text-muted-foreground">地图：</span>
-                  {mapUrl ? <a href={mapUrl} target="_blank" rel="noreferrer" className="font-medium text-sky-700 underline decoration-dotted underline-offset-2 dark:text-sky-300">{mapUrl}</a> : <span>待检测</span>}
+                  {mapUrl ? <a href={mapUrl} target="_blank" rel="noreferrer" className="font-medium text-sky-700 underline decoration-dotted underline-offset-2 dark:text-sky-300">{mapUrl}</a> : <span>无坐标数据</span>}
                 </div>
-                <div><span className="text-muted-foreground">城市：</span><span className="font-medium">{maxmindCityText || [identity.region, identity.city, identity.postalCode].filter(Boolean).join(" · ") || "待检测"}</span></div>
-                <div><span className="text-muted-foreground">使用地：</span><span className="font-medium text-emerald-700 dark:text-emerald-300">{maxmindUsageText || "待检测"}</span></div>
-                <div><span className="text-muted-foreground">注册地：</span><span className="font-medium text-amber-700 dark:text-amber-300">{maxmindRegisteredText || identity.registeredCountryCode || "待确认"}</span></div>
-                <div><span className="text-muted-foreground">时区：</span><span className="font-medium">{maxmind.timezone || identity.timezone || "待检测"}</span></div>
-                <div><span className="text-muted-foreground">IP 类型：</span><span className={identity.ipNature === "broadcast" ? "font-semibold text-red-600 dark:text-red-400" : identity.ipNature === "native" ? "font-semibold text-emerald-600 dark:text-emerald-400" : "font-medium text-amber-700 dark:text-amber-300"}>{ipNatureText[String(identity.ipNature || "unknown")] || "待确认"}</span></div>
+                <div><span className="text-muted-foreground">城市：</span><span className="font-medium">{cityText || "无数据"}</span></div>
+                <div><span className="text-muted-foreground">时区：</span><span className="font-medium">{basic.timezone || identity.timezone || "无数据"}</span></div>
+                <div><span className="text-muted-foreground">使用地：</span><span className="font-medium text-emerald-700 dark:text-emerald-300">{usageText || "无数据"}</span></div>
+                <div><span className="text-muted-foreground">注册地：</span><span className={registeredCode ? "font-medium text-emerald-700 dark:text-emerald-300" : "font-medium text-muted-foreground"}>{registeredText || "无注册地址数据"}</span></div>
+                <div>
+                  <span className="text-muted-foreground">IP 类型：</span>
+                  <span className={identity.ipNature === "broadcast" ? "font-semibold text-red-600 dark:text-red-400" : identity.ipNature === "native" ? "font-semibold text-emerald-600 dark:text-emerald-400" : "font-medium text-amber-700 dark:text-amber-300"}>
+                    {ipNatureText[String(identity.ipNature || "unknown")] || "证据不足"}
+                  </span>
+                </div>
+                <div><span className="text-muted-foreground">网络域名：</span><span className="font-medium">{identity.domain || "无数据"}</span></div>
+              </div>
+
+              {(identity.ipNatureReason || geoEvidence.length > 0 || registeredEvidence.length > 0) && (
+                <div className="mt-3 rounded-md border border-sky-100/70 bg-background/60 px-2.5 py-2 text-[10px] leading-4 text-muted-foreground dark:border-sky-900/40">
+                  {identity.ipNatureReason ? <div>{identity.ipNatureReason}</div> : null}
+                  {geoEvidence.length > 0 ? <div title={evidenceText(geoEvidence)}>使用地证据：{evidenceText(geoEvidence)}</div> : null}
+                  {registeredEvidence.length > 0 ? <div title={evidenceText(registeredEvidence)}>注册地证据：{evidenceText(registeredEvidence)}</div> : null}
+                </div>
+              )}
+
+              <div className="mt-4 border-t pt-3">
+                <div className="mb-2 text-sm font-medium text-fuchsia-700 dark:text-fuchsia-300">IP 类型属性</div>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[620px] text-xs">
+                    <thead>
+                      <tr className="border-b text-muted-foreground">
+                        <th className="py-2 text-left font-medium">数据库</th>
+                        {typeSources.map((item) => <th key={item.name} className="px-2 py-2 text-center font-medium">{item.name}</th>)}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr className="border-b">
+                        <td className="py-2 text-muted-foreground">使用类型</td>
+                        {typeSources.map((item) => (
+                          <td key={item.name} className="px-2 py-2 text-center">
+                            <Badge variant="outline" className={ipTypeBadgeClass(item.source?.networkType)}>{ipTypeLabel(item.source?.networkType)}</Badge>
+                          </td>
+                        ))}
+                      </tr>
+                      <tr>
+                        <td className="py-2 text-muted-foreground">公司类型</td>
+                        {typeSources.map((item) => (
+                          <td key={item.name} className="px-2 py-2 text-center">
+                            {item.source?.companyType ? <Badge variant="outline" className={ipTypeBadgeClass(item.source.companyType)}>{ipTypeLabel(item.source.companyType)}</Badge> : <span className="text-muted-foreground">—</span>}
+                          </td>
+                        ))}
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
 
-            <div className="rounded-lg border border-fuchsia-200/60 bg-fuchsia-500/[0.02] p-3">
-              <div className="mb-2 text-sm font-medium text-fuchsia-700 dark:text-fuchsia-300">IP 类型属性</div>
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[520px] text-xs">
-                  <thead>
-                    <tr className="border-b text-muted-foreground">
-                      <th className="py-2 text-left font-medium">数据库</th>
-                      {typeSources.map((item) => <th key={item.name} className="px-2 py-2 text-center font-medium">{item.name}</th>)}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr className="border-b">
-                      <td className="py-2 text-muted-foreground">使用类型</td>
-                      {typeSources.map((item) => (
-                        <td key={item.name} className="px-2 py-2 text-center">
-                          <Badge variant="outline" className={ipTypeBadgeClass(item.source?.networkType)}>{ipTypeLabel(item.source?.networkType)}</Badge>
-                        </td>
-                      ))}
-                    </tr>
-                    <tr>
-                      <td className="py-2 text-muted-foreground">公司类型</td>
-                      {typeSources.map((item) => (
-                        <td key={item.name} className="px-2 py-2 text-center">
-                          <Badge variant="outline" className={ipTypeBadgeClass(item.source?.companyType)}>{ipTypeLabel(item.source?.companyType)}</Badge>
-                        </td>
-                      ))}
-                    </tr>
-                  </tbody>
-                </table>
+            <div className="rounded-lg border border-amber-200/70 bg-amber-500/[0.025] p-3">
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-sm font-medium text-amber-700 dark:text-amber-300"><ShieldCheck className="h-4 w-4" />IP 风险</div>
+                <span className="text-[10px] text-muted-foreground">各数据库按自身口径独立评分</span>
               </div>
-              <div className="mt-2 text-[10px] text-muted-foreground">“使用类型”和“公司类型”来自各数据库自己的分类口径；它们是网络归类，不等同于 VPN/Proxy 风险判定。</div>
+              <div className="mb-3">
+                <div className="grid grid-cols-5 text-center text-[10px] text-muted-foreground">
+                  <span>极低</span><span>低</span><span>中等</span><span>高</span><span>极高</span>
+                </div>
+                <div className="mt-1 flex h-2 overflow-hidden rounded-full">
+                  <span className="w-1/5 bg-emerald-500/70" />
+                  <span className="w-1/5 bg-emerald-400/70" />
+                  <span className="w-1/5 bg-amber-400/80" />
+                  <span className="w-1/5 bg-orange-500/80" />
+                  <span className="w-1/5 bg-red-500/80" />
+                </div>
+              </div>
+              <div className="space-y-2.5">
+                {scoredRiskSources.map((source: any) => {
+                  const score = Number(source?.score);
+                  const hasScore = Number.isFinite(score);
+                  const marker = hasScore ? Math.max(0, Math.min(100, score)) : 0;
+                  return (
+                    <div key={source.name} className="grid grid-cols-[96px_minmax(0,1fr)_54px_auto] items-center gap-2 text-xs">
+                      <div className="font-medium">{source.displayName || source.name}</div>
+                      <div className="relative h-2 overflow-visible rounded-full bg-muted">
+                        <div className="absolute inset-0 flex overflow-hidden rounded-full opacity-70">
+                          <span className="w-1/5 bg-emerald-500/70" />
+                          <span className="w-1/5 bg-emerald-400/70" />
+                          <span className="w-1/5 bg-amber-400/80" />
+                          <span className="w-1/5 bg-orange-500/80" />
+                          <span className="w-1/5 bg-red-500/80" />
+                        </div>
+                        {hasScore ? <span className="absolute top-1/2 h-3.5 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-foreground shadow-sm" style={{ left: `${marker}%` }} /> : null}
+                      </div>
+                      <div className="text-right font-mono">{riskScoreText(source)}</div>
+                      <Badge variant="outline" title={source.error || ""} className={riskLevelBadgeClass(source.level)}>{riskLevelText(source.level)}</Badge>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
 
             <div className="rounded-lg border border-violet-200/60 bg-violet-500/[0.025] p-3">
-              <div className="mb-1 flex items-center justify-between"><div className="text-sm font-medium text-violet-700 dark:text-violet-300">应用解锁 / 可达性</div><span className="text-xs text-muted-foreground">{apps.length ? `${apps.length} 项已返回` : "等待结果"}</span></div>
-              <div className="mb-3 text-[11px] text-muted-foreground">应用结果显示“解锁 / 屏蔽”；ChatGPT 会额外区分“仅 App / 仅 Web”，网络或接口本身异常时单独显示“检测错误”。</div>
+              <div className="mb-1 flex items-center justify-between"><div className="text-sm font-medium text-violet-700 dark:text-violet-300">流媒体 / AI 解锁</div><span className="text-xs text-muted-foreground">{apps.length ? `${apps.length} 项已返回` : "检测中"}</span></div>
+              <div className="mb-3 text-[11px] text-muted-foreground">解锁地区与机器使用地一致显示绿色；跨区显示橙色；非中国出口却落到 CN 显示红色。方式区分原生解析与 DNS 解锁。</div>
               <div className="grid gap-2 sm:grid-cols-2 md:grid-cols-3">
-                {apps.map((app: any) => (
-                  <div key={app.id} className={`flex min-h-14 items-center justify-between gap-2 rounded-md border px-2.5 py-2 ${statusCardClass(String(app.status || "unknown"))}`}>
-                    <div className="min-w-0"><div className="truncate text-sm font-medium">{app.name || app.id}</div><div className="truncate text-[10px] text-muted-foreground" title={app.note || app.message || ""}>{app.region ? `${app.region}${app.latencyMs != null ? ` · ${app.latencyMs} ms` : ""}` : (app.latencyMs != null ? `${app.latencyMs} ms` : app.message || app.note || "")}</div></div>
-                    {statusBadge(String(app.status || "unknown"))}
-                  </div>
-                ))}
-                {apps.length === 0 && <div className="col-span-full py-5 text-center text-xs text-muted-foreground">检测开始后会逐项显示，不需要等待全部完成。</div>}
+                {apps.map((app: any) => {
+                  const status = String(app.status || "unknown");
+                  const region = String(app.region || "").trim().toUpperCase();
+                  return (
+                    <div key={app.id} className={`min-h-20 rounded-md border px-2.5 py-2 ${statusCardClass(status)}`}>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="truncate text-sm font-medium">{app.name || app.id}</div>
+                        {statusBadge(status)}
+                      </div>
+                      <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px]">
+                        <span className="text-muted-foreground">地区：</span>
+                        <span className={appRegionClass(region, baseCountry, status)}>{region || "—"}</span>
+                        <span className="text-muted-foreground">方式：</span>
+                        {unlockMethodBadge(app.unlockMethod)}
+                        {app.latencyMs != null ? <span className="text-muted-foreground">{app.latencyMs} ms</span> : null}
+                      </div>
+                      {(app.note || app.message) ? <div className="mt-1 truncate text-[10px] text-muted-foreground" title={app.note || app.message}>{app.note || app.message}</div> : null}
+                    </div>
+                  );
+                })}
+                {apps.length === 0 && <div className="col-span-full py-5 text-center text-xs text-muted-foreground">检测开始后会逐项显示。</div>}
               </div>
             </div>
+
+            {data.mail ? (
+              <div className="rounded-lg border border-rose-200/60 bg-rose-500/[0.02] p-3">
+                <div className="mb-3 flex items-center gap-2 text-sm font-medium text-rose-700 dark:text-rose-300"><Mail className="h-4 w-4" />邮局连通性 / IP 黑名单</div>
+                <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
+                  <span className="text-muted-foreground">25 端口出站：</span>
+                  {mail.outbound25?.available === true
+                    ? <Badge className="border-emerald-200 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">可用</Badge>
+                    : <Badge className="border-red-200 bg-red-500/15 text-red-700 dark:text-red-300">阻断</Badge>}
+                </div>
+                <div className="grid gap-1.5 sm:grid-cols-3 md:grid-cols-4">
+                  {mailProviders.map((provider: any) => (
+                    <div key={provider.name} title={provider.detail || ""} className="flex items-center justify-between rounded-md border bg-background/60 px-2 py-1.5 text-xs">
+                      <span>{provider.name}</span>
+                      <Badge className={provider.available ? "border-emerald-200 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300" : "border-red-200 bg-red-500/15 text-red-700 dark:text-red-300"}>{provider.available ? "+" : "−"}</Badge>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-3 rounded-md border bg-background/60 p-2.5 text-xs">
+                  {dnsbl.supported === false ? (
+                    <div className="text-muted-foreground">{dnsbl.reason || "DNSBL 不适用于当前协议族"}</div>
+                  ) : (
+                    <div className="flex flex-wrap gap-x-4 gap-y-1">
+                      <span>IP 黑名单数据库</span>
+                      <span className="text-sky-700 dark:text-sky-300">有效 {dnsbl.total ?? 0}</span>
+                      <span className="text-emerald-700 dark:text-emerald-300">正常 {dnsbl.clean ?? 0}</span>
+                      <span className="text-amber-700 dark:text-amber-300">已标记 {dnsbl.marked ?? 0}</span>
+                      <span className="font-semibold text-red-700 dark:text-red-300">黑名单 {dnsbl.blacklisted ?? 0}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : null}
 
             <div className="rounded-lg border border-cyan-200/60 bg-cyan-500/[0.025] p-3">
               <div className="mb-2 text-sm font-medium text-cyan-700 dark:text-cyan-300">网络 / IXP</div>
               <div className="grid gap-1 text-xs sm:grid-cols-2">
-                <div>ASN：{data.network?.asn || identity.asnNumber || identity.asn || "待检测"}</div>
-                <div>网络名称：{data.network?.name || identity.company || "待检测"}</div>
-                <div>Prefix：{data.network?.prefix || "待检测"}</div>
-                <div>RPKI：{data.network?.rpki ? (rpkiText[String(data.network.rpki)] || data.network.rpki) : "待检测"}</div>
+                <div>ASN：{data.network?.asn || identity.asnNumber || identity.asn || "无数据"}</div>
+                <div>网络名称：{data.network?.name || identity.company || "无数据"}</div>
+                <div>Prefix：{data.network?.prefix || "无数据"}</div>
+                <div>RPKI：{data.network?.rpki ? (rpkiText[String(data.network.rpki)] || data.network.rpki) : "无数据"}</div>
                 <div className="sm:col-span-2">
                   <div className="mb-1.5 text-muted-foreground">互联网互联 ASN：</div>
                   {neighbours.length > 0 ? (
@@ -369,14 +469,14 @@ export function HostNetworkProfileDialog({
                         </div>
                       ))}
                     </div>
-                  ) : <span className="text-muted-foreground">待检测</span>}
+                  ) : <span className="text-muted-foreground">无数据</span>}
                 </div>
                 <div className="sm:col-span-2">IXP：{ixpText}</div>
                 <div>PeeringDB 交换点 / 机房：{data.network?.ixCount ?? "—"} / {data.network?.facilityCount ?? "—"}</div>
                 <div>AS 邻居：{data.network?.neighbourUnique ?? "—"}（左 {data.network?.neighbourLeft ?? "—"} / 右 {data.network?.neighbourRight ?? "—"}）</div>
                 <div>上游：{data.network?.upstreamCount ?? "—"}{data.network?.transitFree === true ? "（Transit-free）" : ""}</div>
                 <div>Peers：{data.network?.peerCount ?? "—"}</div>
-                <div className="sm:col-span-2 text-[11px] text-muted-foreground">BGP 接入统计优先参考 BGP.Tools；互联 ASN 继续结合 RIPEstat，IXP 名称来自 PeeringDB。</div>
+                <div className="sm:col-span-2 text-[11px] text-muted-foreground">BGP 接入统计优先参考 BGP.Tools；互联 ASN 结合 RIPEstat，IXP 名称来自 PeeringDB。</div>
               </div>
             </div>
 
@@ -384,45 +484,34 @@ export function HostNetworkProfileDialog({
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <div className="text-sm font-medium text-blue-700 dark:text-blue-300">BGP 路由拓扑</div>
-                  <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">{data.network?.prefix || "Prefix 待检测"}</div>
+                  <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">{bgpPrefix || "无 Prefix 数据"}</div>
                 </div>
                 {String(data.network?.bgpGraphPageUrl || bgpGraphQuery.data?.pageUrl || "").trim() ? (
-                  <a
-                    href={String(data.network?.bgpGraphPageUrl || bgpGraphQuery.data?.pageUrl)}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex h-8 items-center gap-1 rounded-md border px-2.5 text-xs font-medium transition-colors hover:bg-muted"
-                  >
+                  <a href={String(data.network?.bgpGraphPageUrl || bgpGraphQuery.data?.pageUrl)} target="_blank" rel="noreferrer" className="inline-flex h-8 items-center gap-1 rounded-md border px-2.5 text-xs font-medium transition-colors hover:bg-muted">
                     BGP.Tools 查看 <ExternalLink className="h-3.5 w-3.5" />
                   </a>
                 ) : null}
               </div>
-              {bgpGraphPath ? (
+              {(bgpGraphPath || bgpPrefix) ? (
                 bgpGraphQuery.isLoading ? (
                   <div className="flex min-h-40 items-center justify-center rounded-md border border-dashed text-xs text-muted-foreground">
                     <Activity className="mr-2 h-4 w-4 animate-spin" />正在加载 BGP 拓扑图…
                   </div>
                 ) : bgpGraphQuery.data?.available && bgpGraphQuery.data.dataUrl ? (
                   <div className="overflow-auto rounded-md border bg-white p-2">
-                    <img
-                      src={bgpGraphQuery.data.dataUrl}
-                      alt={`BGP 路由拓扑 ${data.network?.prefix || detectedIp || ""}`}
-                      className="mx-auto h-auto min-w-[680px] max-w-none lg:min-w-0 lg:max-w-full"
-                    />
+                    <img src={bgpGraphQuery.data.dataUrl} alt={`BGP 路由拓扑 ${bgpPrefix || detectedIp || ""}`} className="mx-auto h-auto min-w-[680px] max-w-none lg:min-w-0 lg:max-w-full" />
                   </div>
                 ) : (
                   <div className="rounded-md border border-dashed px-3 py-8 text-center text-xs text-muted-foreground">
-                    BGP 拓扑暂不可用{bgpGraphQuery.data?.error ? `：${bgpGraphQuery.data.error}` : ""}
+                    BGP 拓扑获取失败{bgpGraphQuery.data?.error ? `：${bgpGraphQuery.data.error}` : ""}
                   </div>
                 )
               ) : (
                 <div className="rounded-md border border-dashed px-3 py-8 text-center text-xs text-muted-foreground">
-                  当前记录还没有 BGP 拓扑信息，重新执行网络画像检测后会自动获取。
+                  当前未获得 Prefix，无法生成 BGP 拓扑图。
                 </div>
               )}
-              <div className="mt-2 text-[10px] text-muted-foreground">
-                图像来自 BGP.Tools Connectivity；Panel 代理并缓存 SVG，避免每次打开弹窗都重复请求。
-              </div>
+              <div className="mt-2 text-[10px] text-muted-foreground">图像来自 BGP.Tools Connectivity；按 Prefix 直接生成 pathimg 地址，Panel 代理并缓存 SVG。</div>
             </div>
           </div>
         )}

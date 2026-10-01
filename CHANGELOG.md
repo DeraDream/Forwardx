@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.3.392] - 2026-10-01
+
+### 网络画像重构：IPQuality 对齐、BGP 拓扑、邮局与黑名单检测
+
+- 重排网络画像：移除重复的顶部 IP / ASN 卡片，基础信息置顶，IP 风险第二，后续依次为流媒体 / AI 解锁、邮局连通性 / IP 黑名单、网络 / IXP 与 BGP 路由拓扑。
+- 基础信息按 IPQuality 逻辑优先使用 MaxMind，MaxMind 不可用时回退 IPinfo；补齐 IP、ASN、组织、坐标、地图、城市、使用地、注册地、时区、网络域名及原生 / 广播 IP 判定。
+- 原生 / 广播判定优先采用同一数据库的使用地与注册地对比：MaxMind Country / RegisteredCountry，回退 IPinfo Country / Abuse Country；再使用 RDAP 与 BGP.Tools 证据补充。
+- IP 风险取消多库平均“综合分”，改为 IP2Location、Scamalytics、ipapi、AbuseIPDB、IPQS、DB-IP 各自按 IPQuality 的原始阈值独立展示。
+- IP2Location 补充 fraud_score、代理 / Tor / VPN / 数据中心 / 滥用 / 机器人字段；IP 类型属性加入 AbuseIPDB，并保持各数据库自己的分类口径。
+- 流媒体 / AI 解锁新增地区对比着色：与机器使用地一致为绿色、跨区为橙色、非中国出口落到 CN 为红色；新增“原生 / DNS”解锁方式。
+- 完整检测新增 25 端口出站测试、Gmail / Outlook / Yahoo / Apple / QQ / Mail.ru / AOL / GMX / Mail.com / 163 / Sohu / Sina 的 MX:25 连通性检测。
+- 引入 IPQuality 的 424 条 DNSBL 列表，完整检测汇总有效、正常、已标记、黑名单数量。
+- BGP 路由拓扑不再依赖页面中的 id=pathimg；直接按已检测 Prefix 构造 BGP.Tools pathimg 地址，并支持 RIPEstat 得到 Prefix 后补生成，Panel 继续代理并缓存 SVG。
+- Panel / APK Release 升级至 `2.3.392`；Agent 升级至 `2.2.222`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.3.391] - 2026-10-01
 
 ### 网络画像 BGP 拓扑、原生/广播判定与 IP 类型信息增强

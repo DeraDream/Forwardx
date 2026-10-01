@@ -75,6 +75,7 @@ export function startHostNetworkProfileTask(input: {
       network: { status: "pending", updatedAt: now },
       risk: { status: "pending", updatedAt: now },
       unlock: { status: "pending", updatedAt: now },
+      mail: { status: "pending", updatedAt: now },
     },
     data: { apps: {} },
   };

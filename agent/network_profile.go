@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -33,6 +35,10 @@ type networkProfileReport struct {
 	Completed bool           `json:"completed,omitempty"`
 	Failed    bool           `json:"failed,omitempty"`
 }
+
+//go:embed dnsbl.list
+var profileDNSBLList string
+
 
 func profileHTTPClient(family string, timeout time.Duration) *http.Client {
 	network := "tcp4"
@@ -284,34 +290,32 @@ func profileCountryConsensus(items []profileCountryEvidence) string {
 }
 
 func profileIPNatureFromEvidence(actualEvidence, registeredEvidence []profileCountryEvidence) (nature, actualCountry, registeredCountry, reason string) {
-	actualCountry = profileCountryConsensus(actualEvidence)
-	registeredCountry = profileCountryConsensus(registeredEvidence)
-	if actualCountry == "" || len(registeredEvidence) == 0 {
-		return "unknown", actualCountry, registeredCountry, "地理位置或注册地址证据不足"
+	// Match IPQuality's primary semantics first: compare the geolocation country
+	// with the registered/abuse country from the same database family.
+	type pair struct{ actual, registered, label string }
+	pairs := []pair{
+		{profileEvidenceCountry(actualEvidence, "MaxMind GeoIP"), profileEvidenceCountry(registeredEvidence, "MaxMind RegisteredCountry"), "MaxMind"},
+		{profileEvidenceCountry(actualEvidence, "IPinfo GeoIP"), profileEvidenceCountry(registeredEvidence, "IPinfo Abuse Country"), "IPinfo"},
 	}
-	matches := 0
-	mismatches := 0
-	for _, item := range registeredEvidence {
-		country := profileCountryCode(item.Country)
-		if country == "" {
+	for _, item := range pairs {
+		if item.actual == "" || item.registered == "" {
 			continue
 		}
-		if country == actualCountry {
-			matches++
-		} else {
-			mismatches++
+		if item.actual == item.registered {
+			return "native", item.actual, item.registered, item.label + " 使用地与注册地一致"
 		}
+		return "broadcast", item.actual, item.registered, item.label + " 使用地与注册地不一致"
 	}
-	if matches >= 2 && mismatches == 0 {
-		return "native", actualCountry, registeredCountry, fmt.Sprintf("%d 个注册来源与实际地区一致", matches)
+
+	actualCountry = profileCountryConsensus(actualEvidence)
+	registeredCountry = profileCountryConsensus(registeredEvidence)
+	if actualCountry == "" || registeredCountry == "" {
+		return "unknown", actualCountry, registeredCountry, "缺少可用的使用地或注册地数据"
 	}
-	if mismatches >= 2 && mismatches > matches {
-		return "broadcast", actualCountry, registeredCountry, fmt.Sprintf("%d 个注册来源与实际地区不一致", mismatches)
+	if actualCountry == registeredCountry {
+		return "native", actualCountry, registeredCountry, "多源使用地与注册地一致"
 	}
-	if mismatches > 0 {
-		return "unknown", actualCountry, registeredCountry, fmt.Sprintf("注册地址证据存在冲突（匹配 %d / 不匹配 %d）", matches, mismatches)
-	}
-	return "unknown", actualCountry, registeredCountry, fmt.Sprintf("仅 %d 个注册来源可确认，证据不足", matches)
+	return "broadcast", actualCountry, registeredCountry, "多源使用地与注册地不一致"
 }
 
 func profileCountryEvidenceMaps(items []profileCountryEvidence) []map[string]any {
@@ -320,6 +324,50 @@ func profileCountryEvidenceMaps(items []profileCountryEvidence) []map[string]any
 		result = append(result, map[string]any{"provider": item.Provider, "country": item.Country})
 	}
 	return result
+}
+
+func profileIPInfoBasic(client *http.Client, ip string) map[string]any {
+	result := map[string]any{}
+	var payload map[string]any
+	if err := profileGetJSONRetry(client, "https://ipinfo.io/widget/demo/"+url.PathEscape(ip), &payload, 2); err != nil {
+		return result
+	}
+	data := profileMap(payload["data"])
+	if data == nil {
+		return result
+	}
+	asn := profileMap(data["asn"])
+	abuse := profileMap(data["abuse"])
+	result["asn"] = profileASNNumber(asn["asn"])
+	result["organization"] = profileString(asn["name"])
+	result["city"] = profileString(data["city"])
+	result["postalCode"] = profileString(data["postal"])
+	result["timezone"] = profileString(data["timezone"])
+	result["countryCode"] = profileCountryCode(data["country"])
+	result["registeredCountryCode"] = profileCountryCode(abuse["country"])
+	if loc := strings.TrimSpace(profileString(data["loc"])); loc != "" {
+		parts := strings.SplitN(loc, ",", 2)
+		if len(parts) == 2 {
+			if lat, err := strconv.ParseFloat(strings.TrimSpace(parts[0]), 64); err == nil {
+				result["latitude"] = lat
+			}
+			if lon, err := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64); err == nil {
+				result["longitude"] = lon
+			}
+		}
+	}
+	return result
+}
+
+func profileEvidenceCountry(items []profileCountryEvidence, provider string) string {
+	for _, item := range items {
+		if strings.EqualFold(strings.TrimSpace(item.Provider), strings.TrimSpace(provider)) {
+			if code := profileCountryCode(item.Country); code != "" {
+				return code
+			}
+		}
+	}
+	return ""
 }
 
 func profileIdentity(cfg Config, client *http.Client, ip string) (map[string]any, error) {
@@ -404,6 +452,13 @@ func profileIdentity(cfg Config, client *http.Client, ip string) (map[string]any
 		result["classificationProvider"] = "ipapi.is"
 	}
 
+	ipinfoBasic := profileIPInfoBasic(client, ip)
+	if len(ipinfoBasic) > 0 {
+		actualEvidence = profileAddCountryEvidence(actualEvidence, "IPinfo GeoIP", ipinfoBasic["countryCode"])
+		registeredEvidence = profileAddCountryEvidence(registeredEvidence, "IPinfo Abuse Country", ipinfoBasic["registeredCountryCode"])
+		result["ipinfoBasic"] = ipinfoBasic
+	}
+
 	var maxmindPayload map[string]any
 	maxmindURL := "https://ipinfo.check.place/" + url.PathEscape(ip) + "?lang=en"
 	if payload, err := profileGetJSONWithPanelFallback(cfg, client, maxmindURL, ip, "maxmind"); err == nil {
@@ -465,6 +520,34 @@ func profileIdentity(cfg Config, client *http.Client, ip string) (map[string]any
 		if profileString(maxmind["timezone"]) != "" {
 			result["maxmindTimezone"] = maxmind["timezone"]
 		}
+		if profileASNNumber(maxmind["asn"]) > 0 || profileCountryCode(maxmind["countryCode"]) != "" || profileString(maxmind["city"]) != "" {
+			result["basicProvider"] = "MaxMind"
+		}
+	}
+	if profileString(result["basicProvider"]) == "" && len(ipinfoBasic) > 0 {
+		result["basicProvider"] = "IPinfo"
+		// IPQuality itself falls back to IPinfo when MaxMind is unavailable.
+		if profileASNNumber(result["asnNumber"]) <= 0 && profileASNNumber(ipinfoBasic["asn"]) > 0 {
+			result["asnNumber"] = profileASNNumber(ipinfoBasic["asn"])
+		}
+		if profileString(result["company"]) == "" {
+			result["company"] = profileString(ipinfoBasic["organization"])
+		}
+		if profileString(result["city"]) == "" {
+			result["city"] = profileString(ipinfoBasic["city"])
+		}
+		if profileString(result["postalCode"]) == "" {
+			result["postalCode"] = profileString(ipinfoBasic["postalCode"])
+		}
+		if profileString(result["timezone"]) == "" {
+			result["timezone"] = profileString(ipinfoBasic["timezone"])
+		}
+		if _, ok := result["latitude"]; !ok {
+			result["latitude"] = ipinfoBasic["latitude"]
+		}
+		if _, ok := result["longitude"]; !ok {
+			result["longitude"] = ipinfoBasic["longitude"]
+		}
 	}
 
 	// RDAP is queried even when MaxMind is available. A single provider matching
@@ -477,6 +560,9 @@ func profileIdentity(cfg Config, client *http.Client, ip string) (map[string]any
 	nature, actualCode, registeredCode, reason := profileIPNatureFromEvidence(actualEvidence, registeredEvidence)
 	result["actualCountryCode"] = actualCode
 	result["registeredCountryCode"] = registeredCode
+	if profileString(result["basicProvider"]) == "" {
+		result["basicProvider"] = "ipwho.is"
+	}
 	result["ipNature"] = nature
 	result["ipNatureReason"] = reason
 	result["ipNatureGeoEvidence"] = profileCountryEvidenceMaps(actualEvidence)
@@ -782,7 +868,7 @@ func profileDBIPSource(client *http.Client, ip string) profileRiskSource {
 	case "medium":
 		score := float64(50); source.Score = &score; source.Level = "medium"
 	case "high":
-		score := float64(100); source.Score = &score; source.Level = "very_high"
+		score := float64(100); source.Score = &score; source.Level = "high"
 	}
 	if source.Country == "" && source.Score == nil && source.IsProxy == nil && source.IsBot == nil {
 		source.Error = "DB-IP threat data unavailable"
@@ -820,7 +906,21 @@ func profileIPAPIDirectSource(client *http.Client, ip string) profileRiskSource 
 					score *= 100
 				}
 				source.Score = &score
-				source.Level = profileRiskLevel(score)
+				lowerRisk := strings.ToLower(scoreText)
+				switch {
+				case strings.Contains(lowerRisk, "very low"):
+					source.Level = "very_low"
+				case strings.Contains(lowerRisk, "elevated"):
+					source.Level = "elevated"
+				case strings.Contains(lowerRisk, "very high"):
+					source.Level = "very_high"
+				case strings.Contains(lowerRisk, "high"):
+					source.Level = "high"
+				case strings.Contains(lowerRisk, "low"):
+					source.Level = "low"
+				default:
+					source.Level = profileRiskLevel(score)
+				}
 			}
 		}
 	}
@@ -845,7 +945,16 @@ func profileScamalyticsSource(cfg Config, client *http.Client, ip string) profil
 	maxmind := profileMap(external["maxmind_geolite2"])
 	source.Score = profileScorePtr(scam["scamalytics_score"])
 	if source.Score != nil {
-		source.Level = profileRiskLevel(*source.Score)
+		switch {
+		case *source.Score < 20:
+			source.Level = "low"
+		case *source.Score < 60:
+			source.Level = "medium"
+		case *source.Score < 90:
+			source.Level = "high"
+		default:
+			source.Level = "very_high"
+		}
 	}
 	source.IsVPN = profileBoolPtr(proxy["is_vpn"])
 	source.IsDatacenter = profileBoolPtr(proxy["is_datacenter"])
@@ -865,7 +974,16 @@ func profileIPQSSource(cfg Config, client *http.Client, ip string) profileRiskSo
 	}
 	source.Score = profileScorePtr(payload["fraud_score"])
 	if source.Score != nil {
-		source.Level = profileRiskLevel(*source.Score)
+		switch {
+		case *source.Score < 75:
+			source.Level = "low"
+		case *source.Score < 85:
+			source.Level = "suspicious"
+		case *source.Score < 90:
+			source.Level = "risky"
+		default:
+			source.Level = "high"
+		}
 	}
 	source.Country = profileString(payload["country_code"])
 	source.IsProxy = profileBoolPtr(payload["proxy"])
@@ -894,7 +1012,21 @@ func profileIPAPISource(cfg Config, client *http.Client, ip string) profileRiskS
 					score = raw * 100
 				}
 				source.Score = &score
-				source.Level = profileRiskLevel(score)
+				lowerRisk := strings.ToLower(scoreText)
+				switch {
+				case strings.Contains(lowerRisk, "very low"):
+					source.Level = "very_low"
+				case strings.Contains(lowerRisk, "elevated"):
+					source.Level = "elevated"
+				case strings.Contains(lowerRisk, "very high"):
+					source.Level = "very_high"
+				case strings.Contains(lowerRisk, "high"):
+					source.Level = "high"
+				case strings.Contains(lowerRisk, "low"):
+					source.Level = "low"
+				default:
+					source.Level = profileRiskLevel(score)
+				}
 			}
 		}
 	}
@@ -922,7 +1054,14 @@ func profileAbuseIPDBSource(cfg Config, client *http.Client, ip string) profileR
 	data := profileMap(payload["data"])
 	source.Score = profileScorePtr(data["abuseConfidenceScore"])
 	if source.Score != nil {
-		source.Level = profileRiskLevel(*source.Score)
+		switch {
+		case *source.Score < 25:
+			source.Level = "low"
+		case *source.Score < 75:
+			source.Level = "high"
+		default:
+			source.Level = "block"
+		}
 	}
 	source.Country = profileString(data["countryCode"])
 	source.NetworkType = profileString(data["usageType"])
@@ -942,14 +1081,43 @@ func profileIP2LocationSource(cfg Config, client *http.Client, ip string) profil
 	source.NetworkType = profileString(payload["usage_type"])
 	asInfo := profileMap(payload["as_info"])
 	source.CompanyType = profileString(asInfo["as_usage_type"])
-	proxyType := strings.ToUpper(profileString(payload["proxy_type"]))
-	if proxyType != "" && proxyType != "-" {
-		proxy := true
-		source.IsProxy = &proxy
+	source.Score = profileScorePtr(payload["fraud_score"])
+	if source.Score != nil {
+		switch {
+		case *source.Score < 33:
+			source.Level = "low"
+		case *source.Score < 66:
+			source.Level = "medium"
+		default:
+			source.Level = "high"
+		}
 	}
-	lowerType := strings.ToLower(source.NetworkType)
-	server := strings.Contains(lowerType, "data center") || strings.Contains(lowerType, "hosting") || strings.HasPrefix(strings.ToUpper(source.NetworkType), "DCH")
-	source.IsDatacenter = &server
+	proxyInfo := profileMap(payload["proxy"])
+	proxy := profileBoolPtr(payload["is_proxy"])
+	if proxy == nil {
+		proxy = profileBoolPtr(proxyInfo["is_public_proxy"])
+	}
+	if proxy == nil {
+		proxy = profileBoolPtr(proxyInfo["is_web_proxy"])
+	}
+	source.IsProxy = proxy
+	source.IsTor = profileBoolPtr(proxyInfo["is_tor"])
+	source.IsVPN = profileBoolPtr(proxyInfo["is_vpn"])
+	source.IsDatacenter = profileBoolPtr(proxyInfo["is_data_center"])
+	source.IsAbuser = profileBoolPtr(proxyInfo["is_spammer"])
+	bot := profileBoolPtr(proxyInfo["is_web_crawler"])
+	if bot == nil {
+		bot = profileBoolPtr(proxyInfo["is_scanner"])
+	}
+	if bot == nil {
+		bot = profileBoolPtr(proxyInfo["is_botnet"])
+	}
+	source.IsBot = bot
+	if source.IsDatacenter == nil {
+		lowerType := strings.ToLower(source.NetworkType)
+		server := strings.Contains(lowerType, "data center") || strings.Contains(lowerType, "hosting") || strings.HasPrefix(strings.ToUpper(source.NetworkType), "DCH")
+		source.IsDatacenter = &server
+	}
 	return source
 }
 
@@ -1288,6 +1456,15 @@ func profileBGPToolsGraphPath(body string) string {
 	return ""
 }
 
+func profileBGPToolsGraphPathFromPrefix(prefix string) string {
+	value := strings.TrimSpace(prefix)
+	if value == "" || !strings.Contains(value, "/") {
+		return ""
+	}
+	return "/pathimg/rt-" + strings.ReplaceAll(value, "/", "_")
+}
+
+
 func profileBGPTools(client *http.Client, ip string) map[string]any {
 	result := map[string]any{"provider": "BGP.Tools"}
 	headers := map[string]string{
@@ -1329,6 +1506,9 @@ func profileBGPTools(client *http.Client, ip string) map[string]any {
 	}
 	prefix := profileString(result["prefix"])
 	if prefix != "" {
+		if profileString(result["bgpGraphPath"]) == "" {
+			result["bgpGraphPath"] = profileBGPToolsGraphPathFromPrefix(prefix)
+		}
 		result["bgpGraphPageUrl"] = "https://bgp.tools/prefix/" + prefix + "#connectivity"
 		ixCode, ixBody, ixErr := profileReadRetry(client, "https://bgp.tools/ixp-rs-route/"+prefix, headers, 2)
 		if ixErr == nil && ixCode >= 200 && ixCode < 300 {
@@ -1372,6 +1552,14 @@ func profileNetwork(client *http.Client, ip string, asnValue any) (map[string]an
 	}
 	if len(result) == 0 {
 		return nil, fmt.Errorf("%s", strings.Join(errorsFound, "; "))
+	}
+	if prefix := profileString(result["prefix"]); prefix != "" {
+		if profileString(result["bgpGraphPath"]) == "" {
+			result["bgpGraphPath"] = profileBGPToolsGraphPathFromPrefix(prefix)
+		}
+		if profileString(result["bgpGraphPageUrl"]) == "" {
+			result["bgpGraphPageUrl"] = "https://bgp.tools/prefix/" + prefix + "#connectivity"
+		}
 	}
 	if len(errorsFound) > 0 {
 		result["warnings"] = errorsFound
@@ -1895,6 +2083,243 @@ func profileRedditCheck(client *http.Client) map[string]any {
 	return map[string]any{"id": "reddit", "name": "Reddit", "status": status, "region": region, "httpStatus": code, "latencyMs": time.Since(started).Milliseconds(), "note": note}
 }
 
+
+func profileSameIPv4Subnet(a, b net.IP) bool {
+	a4 := a.To4()
+	b4 := b.To4()
+	return a4 != nil && b4 != nil && a4[0] == b4[0] && a4[1] == b4[1] && a4[2] == b4[2]
+}
+
+func profileSuspiciousDNSAnswer(answer, source net.IP) bool {
+	if answer == nil {
+		return false
+	}
+	if answer.IsLoopback() || answer.IsPrivate() || answer.IsLinkLocalUnicast() || answer.IsLinkLocalMulticast() || answer.IsUnspecified() {
+		return true
+	}
+	return profileSameIPv4Subnet(answer, source)
+}
+
+func profileUnlockMethod(target, family, sourceIP string) string {
+	parsed, err := url.Parse(target)
+	if err != nil || parsed.Hostname() == "" {
+		return "native"
+	}
+	host := parsed.Hostname()
+	source := net.ParseIP(sourceIP)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err == nil {
+		for _, addr := range addrs {
+			if family == "ipv4" && addr.IP.To4() == nil {
+				continue
+			}
+			if family == "ipv6" && (addr.IP.To4() != nil || addr.IP.To16() == nil) {
+				continue
+			}
+			if profileSuspiciousDNSAnswer(addr.IP, source) {
+				return "dns"
+			}
+		}
+	}
+	randomHost := fmt.Sprintf("forwardx-%d.%s", time.Now().UnixNano(), host)
+	randomCtx, randomCancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer randomCancel()
+	if wildcard, wildcardErr := net.DefaultResolver.LookupIPAddr(randomCtx, randomHost); wildcardErr == nil && len(wildcard) > 0 {
+		return "dns"
+	}
+	return "native"
+}
+
+type profileMailProviderResult struct {
+	Name      string `json:"name"`
+	Available bool   `json:"available"`
+	Detail    string `json:"detail,omitempty"`
+}
+
+func profileSMTPAvailable(family, host string, timeout time.Duration) (bool, string) {
+	network := "tcp4"
+	if strings.EqualFold(family, "ipv6") {
+		network = "tcp6"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	dialer := &net.Dialer{Timeout: timeout}
+	conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(host, "25"))
+	if err != nil {
+		return false, err.Error()
+	}
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(timeout))
+	line, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil {
+		return false, err.Error()
+	}
+	line = strings.TrimSpace(line)
+	if strings.HasPrefix(line, "220") {
+		_, _ = conn.Write([]byte("QUIT\r\n"))
+		return true, line
+	}
+	return false, line
+}
+
+func profileMailProviderCheck(family, name, domain string) profileMailProviderResult {
+	result := profileMailProviderResult{Name: name}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	mx, err := net.DefaultResolver.LookupMX(ctx, domain)
+	if err != nil || len(mx) == 0 {
+		if err != nil {
+			result.Detail = err.Error()
+		}
+		return result
+	}
+	sort.Slice(mx, func(i, j int) bool { return mx[i].Pref < mx[j].Pref })
+	for _, record := range mx {
+		host := strings.TrimSuffix(record.Host, ".")
+		if ok, detail := profileSMTPAvailable(family, host, 4*time.Second); ok {
+			result.Available = true
+			result.Detail = detail
+			return result
+		} else if result.Detail == "" {
+			result.Detail = detail
+		}
+	}
+	return result
+}
+
+var profileDNSBLDomainPattern = regexp.MustCompile(`(?i)^[a-z0-9][a-z0-9.-]*[a-z0-9]$`)
+
+func profileDNSBLDomains() []string {
+	seen := map[string]struct{}{}
+	result := make([]string, 0, 450)
+	for _, line := range strings.Split(profileDNSBLList, "\n") {
+		value := strings.TrimSpace(line)
+		if value == "" || strings.HasPrefix(value, "#") || !profileDNSBLDomainPattern.MatchString(value) {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
+func profileDNSBLCheck(ip string) map[string]any {
+	parsed := net.ParseIP(ip)
+	if parsed == nil || parsed.To4() == nil {
+		return map[string]any{"supported": false, "reason": "DNSBL 仅检测 IPv4"}
+	}
+	octets := parsed.To4()
+	reversed := fmt.Sprintf("%d.%d.%d.%d", octets[3], octets[2], octets[1], octets[0])
+	domains := profileDNSBLDomains()
+	type outcome struct {
+		domain string
+		kind   string
+	}
+	results := make(chan outcome, len(domains))
+	sem := make(chan struct{}, 40)
+	var wg sync.WaitGroup
+	for _, domain := range domains {
+		domain := domain
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			ctx, cancel := context.WithTimeout(context.Background(), 2500*time.Millisecond)
+			defer cancel()
+			hosts, err := net.DefaultResolver.LookupHost(ctx, reversed+"."+domain)
+			if err != nil || len(hosts) == 0 {
+				results <- outcome{domain: domain, kind: "clean"}
+				return
+			}
+			kind := "marked"
+			for _, host := range hosts {
+				if host == "127.0.0.2" {
+					kind = "blacklisted"
+					break
+				}
+				if strings.HasPrefix(host, "127.255.255.") {
+					kind = "clean"
+				}
+			}
+			results <- outcome{domain: domain, kind: kind}
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	clean, marked, blacklisted := 0, 0, 0
+	markedBy := make([]string, 0, 12)
+	blacklistedBy := make([]string, 0, 12)
+	for item := range results {
+		switch item.kind {
+		case "blacklisted":
+			blacklisted++
+			if len(blacklistedBy) < 12 {
+				blacklistedBy = append(blacklistedBy, item.domain)
+			}
+		case "marked":
+			marked++
+			if len(markedBy) < 12 {
+				markedBy = append(markedBy, item.domain)
+			}
+		default:
+			clean++
+		}
+	}
+	return map[string]any{
+		"supported": true,
+		"total": len(domains),
+		"clean": clean,
+		"marked": marked,
+		"blacklisted": blacklisted,
+		"markedBy": markedBy,
+		"blacklistedBy": blacklistedBy,
+	}
+}
+
+func profileMailAndBlacklist(family, ip string) map[string]any {
+	outboundOK, outboundDetail := profileSMTPAvailable(family, "smtp.mailgun.org", 8*time.Second)
+	providers := []struct{ name, domain string }{
+		{"Gmail", "gmail.com"},
+		{"Outlook", "outlook.com"},
+		{"Yahoo", "yahoo.com"},
+		{"Apple", "me.com"},
+		{"QQ", "qq.com"},
+		{"Mail.ru", "mail.ru"},
+		{"AOL", "aol.com"},
+		{"GMX", "gmx.com"},
+		{"Mail.com", "mail.com"},
+		{"163", "163.com"},
+		{"Sohu", "sohu.com"},
+		{"Sina", "sina.com"},
+	}
+	checks := make([]profileMailProviderResult, len(providers))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 4)
+	for index, provider := range providers {
+		index, provider := index, provider
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			checks[index] = profileMailProviderCheck(family, provider.name, provider.domain)
+			<-sem
+		}()
+	}
+	wg.Wait()
+	return map[string]any{
+		"outbound25": map[string]any{"available": outboundOK, "detail": outboundDetail},
+		"providers": checks,
+		"dnsbl": profileDNSBLCheck(ip),
+	}
+}
+
 func profileGenericAppCheck(client *http.Client, id, name, target string) map[string]any {
 	started := time.Now()
 	code, _, err := profileReadRetry(client, target, nil, 2)
@@ -2056,6 +2481,9 @@ func runNetworkProfile(cfg Config, request networkProfileRequest) {
 			defer wg.Done()
 			sem <- struct{}{}
 			result := profileAppCheck(client, item.id, item.name, item.target)
+			if statusText := profileString(result["status"]); statusText != "blocked" && statusText != "error" {
+				result["unlockMethod"] = profileUnlockMethod(item.target, request.Family, ip)
+			}
 			<-sem
 			status := "success"
 			if result["status"] == "error" {
@@ -2066,6 +2494,14 @@ func runNetworkProfile(cfg Config, request networkProfileRequest) {
 	}
 	wg.Wait()
 	report("unlock", "success", map[string]any{"total": len(apps)}, "")
+
+	if request.Mode == "full" {
+		report("mail", "running", nil, "")
+		mail := profileMailAndBlacklist(request.Family, ip)
+		report("mail", "success", mail, "")
+	} else {
+		report("mail", "skip", map[string]any{"reason": "完整检测时执行"}, "")
+	}
 
 	reportNetworkProfile(cfg, networkProfileReport{
 		TaskID: request.TaskID, Family: request.Family, Stage: "complete",
