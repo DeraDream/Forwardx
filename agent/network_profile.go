@@ -138,11 +138,19 @@ func profilePanelRiskProxy(cfg Config, ip, provider string) (map[string]any, err
 func profileGetJSONWithPanelFallback(cfg Config, client *http.Client, rawURL, ip, provider string) (map[string]any, error) {
 	var payload map[string]any
 	directErr := profileGetJSONRetry(client, rawURL, &payload, 2)
-	if directErr == nil && payload != nil { return payload, nil }
+	if directErr == nil && len(payload) > 0 {
+		return payload, nil
+	}
 	panelPayload, panelErr := profilePanelRiskProxy(cfg, ip, provider)
-	if panelErr == nil && panelPayload != nil { return panelPayload, nil }
-	if directErr == nil { directErr = fmt.Errorf("empty direct response") }
-	if panelErr == nil { panelErr = fmt.Errorf("empty panel proxy response") }
+	if panelErr == nil && len(panelPayload) > 0 {
+		return panelPayload, nil
+	}
+	if directErr == nil {
+		directErr = fmt.Errorf("empty direct response")
+	}
+	if panelErr == nil {
+		panelErr = fmt.Errorf("empty panel proxy response")
+	}
 	return nil, fmt.Errorf("direct %v; panel fallback %v", directErr, panelErr)
 }
 
@@ -1126,7 +1134,8 @@ func profileIP2LocationSource(cfg Config, client *http.Client, ip string) profil
 		source.IsDatacenter = &server
 	}
 	if source.Country == "" && source.NetworkType == "" && source.CompanyType == "" && source.Score == nil &&
-		source.IsProxy == nil && source.IsVPN == nil && source.IsTor == nil && source.IsDatacenter == nil && source.IsAbuser == nil && source.IsBot == nil {
+		source.IsProxy == nil && source.IsVPN == nil && source.IsTor == nil && source.IsAbuser == nil && source.IsBot == nil &&
+		profileMap(payload["proxy"]) == nil {
 		source.Error = "IP2Location data unavailable"
 	}
 	return source
