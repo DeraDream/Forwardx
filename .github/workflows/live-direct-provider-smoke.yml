@@ -1,0 +1,74 @@
+name: Live Direct Provider Smoke
+
+on:
+  push:
+    branches:
+      - smoke-network-profile-85-149-212-98
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Direct provider tests for 85.149.212.98
+        shell: bash
+        run: |
+          set -u
+          IP="85.149.212.98"
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
+
+          echo "=== ipapi.is ==="
+          curl -L -sS -A "$UA" --connect-timeout 10 --max-time 20 -D /tmp/ipapi.h             -o /tmp/ipapi.json -w "HTTP=%{http_code}\n" "https://api.ipapi.is/?q=$IP" || true
+          grep -i '^content-type:' /tmp/ipapi.h | tail -1 || true
+          python3 - <<'PY'
+          import json
+          p='/tmp/ipapi.json'
+          try:
+            d=json.load(open(p))
+            print("keys=",sorted(d.keys()))
+            print("asn=",d.get("asn"))
+            print("company=",d.get("company"))
+            print("location=",d.get("location"))
+            print("risk=",{k:d.get(k) for k in ["is_datacenter","is_vpn","is_proxy","is_tor","is_abuser","is_crawler"]})
+          except Exception as e:
+            print("ERR",e)
+            print(open(p,errors="replace").read()[:500])
+          PY
+
+          echo "=== ip2location.io ==="
+          curl -L -sS -A "$UA" --connect-timeout 10 --max-time 20 -D /tmp/ip2.h             -o /tmp/ip2.json -w "HTTP=%{http_code}\n" "https://api.ip2location.io/?ip=$IP&format=json" || true
+          grep -i '^content-type:' /tmp/ip2.h | tail -1 || true
+          python3 - <<'PY'
+          import json
+          p='/tmp/ip2.json'
+          try:
+            d=json.load(open(p))
+            print("keys=",sorted(d.keys()))
+            for k in ["country_code","asn","as","usage_type","is_proxy","fraud_score","proxy_type","isp","domain"]:
+              print(k,"=",d.get(k))
+            print("as_info=",d.get("as_info"))
+          except Exception as e:
+            print("ERR",e)
+            print(open(p,errors="replace").read()[:500])
+          PY
+
+          echo "=== AbuseIPDB public page ==="
+          curl -L -sS -A "$UA" -H "Accept-Language: en-US,en;q=0.9"             --connect-timeout 10 --max-time 20 -D /tmp/abuse.h             -o /tmp/abuse.html -w "HTTP=%{http_code}\n" "https://www.abuseipdb.com/check/$IP" || true
+          grep -i '^content-type:' /tmp/abuse.h | tail -1 || true
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          t=Path('/tmp/abuse.html').read_text(errors='replace')
+          print("bytes=",len(t))
+          for pat in [
+            r'Abuse Confidence Score[^0-9]{0,100}([0-9]{1,3})',
+            r'Usage Type[^<]{0,50}</[^>]+>\s*<[^>]+>\s*([^<]+)',
+            r'ISP[^<]{0,50}</[^>]+>\s*<[^>]+>\s*([^<]+)',
+            r'Country[^<]{0,50}</[^>]+>\s*<[^>]+>\s*([^<]+)',
+          ]:
+            m=re.search(pat,t,re.I|re.S)
+            print(pat, "=>", m.group(1).strip() if m else None)
+          for key in ["usageType","abuseConfidenceScore","isWhitelisted","totalReports"]:
+            i=t.find(key)
+            if i>=0: print(key, t[i:i+300])
+          PY
