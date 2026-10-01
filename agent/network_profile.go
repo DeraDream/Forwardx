@@ -481,6 +481,22 @@ func profileIdentity(cfg Config, client *http.Client, ip string) (map[string]any
 		cityCountry := profileMap(city["Country"])
 		cityContinent := profileMap(city["Continent"])
 		cityLocation := profileMap(city["Location"])
+		traits := profileMap(maxmindPayload["Traits"])
+		if traits == nil {
+			traits = profileMap(maxmindPayload["traits"])
+		}
+		maxmindUserType := firstNonEmpty(
+			profileString(traits["UserType"]),
+			profileString(traits["user_type"]),
+			profileString(maxmindPayload["UserType"]),
+			profileString(maxmindPayload["user_type"]),
+		)
+		maxmindConnectionType := firstNonEmpty(
+			profileString(traits["ConnectionType"]),
+			profileString(traits["connection_type"]),
+			profileString(maxmindPayload["ConnectionType"]),
+			profileString(maxmindPayload["connection_type"]),
+		)
 		subdivisionName := ""
 		subdivisionCode := ""
 		if subdivisions, ok := city["Subdivisions"].([]any); ok && len(subdivisions) > 0 {
@@ -515,6 +531,8 @@ func profileIdentity(cfg Config, client *http.Client, ip string) (map[string]any
 			"timezone": profileString(cityLocation["TimeZone"]),
 			"subdivisionCode": subdivisionCode,
 			"subdivision": subdivisionName,
+			"userType": maxmindUserType,
+			"connectionType": maxmindConnectionType,
 		}
 		result["maxmind"] = maxmind
 		// Prefer MaxMind basic fields for the detailed basic-information section,
@@ -1169,6 +1187,9 @@ func profileDBIPSource(client *http.Client, ip string) profileRiskSource {
 		return source
 	}
 	source.Country = profileString(payload["countryCode"])
+	// DB-IP explicitly documents usageType as hosting/corporate/consumer/reserved.
+	// This is comparable to the “使用类型” row; do not invent a company type.
+	source.NetworkType = profileString(payload["usageType"])
 	source.IsProxy = profileBoolPtr(payload["isProxy"])
 	source.IsBot = profileBoolPtr(payload["isCrawler"])
 	switch strings.ToLower(profileString(payload["threatLevel"])) {
