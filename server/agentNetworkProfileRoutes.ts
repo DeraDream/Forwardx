@@ -13,7 +13,6 @@ const NETWORK_PROFILE_PROXY_TIMEOUT_MS = 9_000;
 const NETWORK_PROFILE_PROXY_CACHE_MS = 10 * 60_000;
 const NETWORK_PROFILE_PROXY_CACHE_LIMIT = 2_048;
 const NETWORK_PROFILE_PROXY_PROVIDERS = new Set([
-  "maxmind",
   "ipapi",
   "proxycheck",
   "abuseipdb",
@@ -28,9 +27,6 @@ const networkProfileProxyCache = new Map<string, NetworkProfileProxyCacheEntry>(
 
 async function networkProfileProxyRequest(ip: string, provider: string) {
   const escapedIp = encodeURIComponent(ip);
-  if (provider === "maxmind") {
-    return { url: `https://ipinfo.check.place/${escapedIp}?lang=en`, headers: {} as Record<string, string> };
-  }
   if (provider === "ipapi") {
     const apiKey = String((await db.getSetting("networkProfileIpapiApiKey")) || "").trim();
     if (!apiKey) throw new Error("ipapi.is API key is not configured");
