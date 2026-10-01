@@ -10,7 +10,7 @@ import {
   type NetworkProfileFamily,
 } from "../hostNetworkProfileState";
 
-export const NETWORK_PROFILE_AGENT_VERSION = "2.2.212";
+export const NETWORK_PROFILE_AGENT_VERSION = "2.2.222";
 
 const BGP_GRAPH_CACHE_MS = 6 * 60 * 60_000;
 const BGP_GRAPH_CACHE_LIMIT = 128;
@@ -32,6 +32,12 @@ function pruneBGPGraphCache(now = Date.now()) {
     if (!oldest) break;
     bgpGraphCache.delete(oldest);
   }
+}
+
+function bgpGraphPathFromPrefix(prefix: unknown) {
+  const value = String(prefix || "").trim();
+  if (!value || !value.includes("/")) return "";
+  return `/pathimg/rt-${value.replaceAll("/", "_")}`;
 }
 
 function normalizeBGPGraphUrl(rawPath: unknown) {
@@ -164,7 +170,7 @@ export const networkProfileRouter = router({
       const current = view.running || view.persisted;
       const network = current?.data?.network as Record<string, any> | undefined;
       const prefix = String(network?.prefix || "").trim();
-      const graphPath = String(network?.bgpGraphPath || "").trim();
+      const graphPath = String(network?.bgpGraphPath || "").trim() || bgpGraphPathFromPrefix(prefix);
       const pageUrl = String(network?.bgpGraphPageUrl || "").trim()
         || (prefix ? `https://bgp.tools/prefix/${prefix}#connectivity` : "");
       if (!graphPath) {
