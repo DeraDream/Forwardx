@@ -190,6 +190,9 @@ export const networkProfileRouter = router({
     .input(z.object({
       hostId: z.number().int().positive(),
       family: z.enum(["ipv4", "ipv6"]),
+      // Used only to invalidate the client query cache when a new profile task
+      // replaces an older BGP result. The server always reads the latest snapshot.
+      revision: z.string().max(200).optional(),
     }))
     .query(async ({ input, ctx }) => {
       await requireHost(input.hostId, ctx.user);
