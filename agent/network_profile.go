@@ -2409,7 +2409,6 @@ type profileRRCRegionPlan struct {
 }
 
 var profileRRCANSI = regexp.MustCompile("\x1b\\[[0-9;?]*[ -/]*[@-~]")
-var profileRRCResultLine = regexp.MustCompile("^(.+):\\s+(.+)$")
 var profileRRCRegionPattern = regexp.MustCompile("(?i)Region:\\s*([A-Za-z]{2,3})")
 var profileRRCHeadingPattern = regexp.MustCompile("\\[\\s*([^\\]]+?)\\s*\\]")
 
@@ -2500,6 +2499,58 @@ func profileRRCSlug(value string) string {
 	return result
 }
 
+func profileRRCKnownResultPrefix(value string) bool {
+	lower := strings.ToLower(strings.TrimSpace(value))
+	prefixes := []string{
+		"yes", "no", "failed", "unsupported", "originals only", "oversea only",
+		"only available", "serviced by", "available", "not available",
+	}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func profileRRCSplitResultLine(line string) (string, string, bool) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return "", "", false
+	}
+	type candidate struct {
+		name  string
+		value string
+	}
+	candidates := make([]candidate, 0, 3)
+	for index := 0; index < len(line); index++ {
+		if line[index] != ':' || index+1 >= len(line) {
+			continue
+		}
+		next := line[index+1]
+		if next != ' ' && next != '\t' {
+			continue
+		}
+		name := strings.TrimSpace(line[:index])
+		value := strings.TrimSpace(line[index+1:])
+		if name == "" || value == "" {
+			continue
+		}
+		candidates = append(candidates, candidate{name: name, value: value})
+		if profileRRCKnownResultPrefix(value) {
+			return name, value, true
+		}
+	}
+	if len(candidates) == 0 {
+		return "", "", false
+	}
+	// Metadata rows such as "Google Location: California, USA" or
+	// "Steam Currency: HKD" have arbitrary values. Their first delimiter is
+	// the service-name separator, while status rows with ':' inside the
+	// service name are handled above by the known-result-prefix branch.
+	return candidates[0].name, candidates[0].value, true
+}
+
 func profileRRCStatus(value string) string {
 	lower := strings.ToLower(strings.TrimSpace(value))
 	switch {
@@ -2563,12 +2614,10 @@ func profileRRCParseOutput(raw, category, group string) []map[string]any {
 			}
 			continue
 		}
-		match := profileRRCResultLine.FindStringSubmatch(line)
-		if len(match) < 3 {
+		name, value, ok := profileRRCSplitResultLine(line)
+		if !ok {
 			continue
 		}
-		name := strings.TrimSpace(match[1])
-		value := strings.TrimSpace(match[2])
 		if name == "" || value == "" || name == "IPv4" || name == "IPv6" {
 			continue
 		}
