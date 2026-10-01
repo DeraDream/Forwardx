@@ -12,6 +12,9 @@ type Family = "ipv4" | "ipv6";
 function statusBadge(status: string) {
   if (status === "error") return <Badge className="border-red-200 bg-red-500/10 text-red-700">检测错误</Badge>;
   if (status === "blocked") return <Badge className="border-red-200 bg-red-500/15 text-red-700 dark:text-red-300">屏蔽</Badge>;
+  if (status === "partial") return <Badge className="border-amber-200 bg-amber-500/15 text-amber-700 dark:text-amber-300">部分解锁</Badge>;
+  if (status === "unsupported") return <Badge className="border-border bg-muted/60 text-muted-foreground">不支持</Badge>;
+  if (status === "info") return <Badge className="border-sky-200 bg-sky-500/10 text-sky-700 dark:text-sky-300">信息</Badge>;
   if (status === "app_only") return <Badge className="border-amber-200 bg-amber-500/15 text-amber-700 dark:text-amber-300">仅 App</Badge>;
   if (status === "web_only") return <Badge className="border-amber-200 bg-amber-500/15 text-amber-700 dark:text-amber-300">仅 Web</Badge>;
   return <Badge className="border-emerald-200 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">解锁</Badge>;
@@ -19,7 +22,9 @@ function statusBadge(status: string) {
 
 function statusCardClass(status: string) {
   if (status === "error" || status === "blocked") return "border-red-200/80 bg-red-500/5";
-  if (status === "app_only" || status === "web_only") return "border-amber-200/80 bg-amber-500/5";
+  if (status === "partial" || status === "app_only" || status === "web_only") return "border-amber-200/80 bg-amber-500/5";
+  if (status === "unsupported") return "border-border bg-muted/25";
+  if (status === "info") return "border-sky-200/80 bg-sky-500/5";
   return "border-emerald-200/80 bg-emerald-500/5";
 }
 
@@ -173,6 +178,7 @@ export function HostNetworkProfileDialog({
   const familyView = family === "ipv4" ? query.data?.ipv4 : query.data?.ipv6;
   const current = familyView?.running || familyView?.persisted;
   const running = familyView?.running?.status === "running";
+  const anyRunning = query.data?.ipv4?.running?.status === "running" || query.data?.ipv6?.running?.status === "running";
   const data = current?.data || {};
   const identity = data.identity || {};
   const risk = data.risk || {};
@@ -191,6 +197,28 @@ export function HostNetworkProfileDialog({
   );
   const bgpDisplayDataUrl = embeddedBGPGraphDataUrl || String(bgpGraphQuery.data?.dataUrl || "");
   const apps = useMemo(() => Object.values(data.apps || {}) as any[], [data.apps]);
+  const appSections = useMemo(() => {
+    const aiIds = new Set(["chatgpt", "claude", "gemini", "grok", "perplexity"]);
+    const buckets = new Map<string, { key: string; title: string; order: number; items: any[] }>();
+    for (const app of apps) {
+      const id = String(app?.id || "");
+      const category = String(app?.category || (aiIds.has(id) ? "ai" : "global"));
+      const group = String(app?.group || (category === "ai" ? "AI 平台" : category === "regional" ? "区域平台" : "跨国平台"));
+      const subgroup = String(app?.subgroup || "").trim();
+      const title = subgroup ? `${group} · ${subgroup}` : group;
+      const order = category === "ai" ? 0 : category === "global" ? 1 : category === "regional" ? 2 : 3;
+      const key = `${order}:${title}`;
+      const currentBucket = buckets.get(key) || { key, title, order, items: [] };
+      currentBucket.items.push(app);
+      buckets.set(key, currentBucket);
+    }
+    return Array.from(buckets.values())
+      .sort((a, b) => a.order - b.order || a.title.localeCompare(b.title))
+      .map((section) => ({
+        ...section,
+        items: section.items.sort((a, b) => String(a?.name || "").localeCompare(String(b?.name || ""))),
+      }));
+  }, [apps]);
   const steps = current?.steps || {};
   const completed = Object.values(steps).filter((item: any) => ["success", "error", "skip"].includes(item?.status)).length;
   const total = Math.max(6, Object.keys(steps).length);
@@ -282,7 +310,7 @@ export function HostNetworkProfileDialog({
       <DialogContent className="max-h-[86vh] max-w-3xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><Globe2 className="h-5 w-5" />网络画像 · {hostName || query.data?.host.name || `主机 #${hostId}`}</DialogTitle>
-          <DialogDescription>IPv4 / IPv6 独立检测；重新检测时结果会边跑边更新。</DialogDescription>
+          <DialogDescription>快速检测当前协议族；完整检测会同时检测可用的 IPv4 / IPv6，并按出口国家自动选择区域流媒体项目。</DialogDescription>
         </DialogHeader>
 
         <div className="flex gap-2">
@@ -446,26 +474,47 @@ export function HostNetworkProfileDialog({
             </div>
 
             <div className="rounded-lg border border-violet-200/60 bg-violet-500/[0.025] p-3">
-              <div className="mb-1 flex items-center justify-between"><div className="text-sm font-medium text-violet-700 dark:text-violet-300">流媒体 / AI 解锁</div><span className="text-xs text-muted-foreground">{apps.length ? `${apps.length} 项已返回` : "检测中"}</span></div>
-              <div className="mb-3 text-[11px] text-muted-foreground">解锁地区与机器使用地一致显示绿色；跨区显示橙色；非中国出口却落到 CN 显示红色。方式区分原生解析与 DNS 解锁。</div>
-              <div className="grid gap-2 sm:grid-cols-2 md:grid-cols-3">
-                {apps.map((app: any) => {
-                  const status = String(app.status || "unknown");
-                  const region = normalizeRegionCode(app.region);
-                  return (
-                    <div key={app.id} className={`min-h-24 rounded-md border px-3 py-2.5 ${statusCardClass(status)}`}>
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="truncate text-sm font-medium">{app.name || app.id}</div>
-                        {statusBadge(status)}
-                      </div>
-                      <div className="mt-2 space-y-1 text-[10px] leading-5">
-                        <div><span className="inline-block w-11 text-muted-foreground">地区</span><span className={appRegionClass(region, baseCountry, status)}>{region || "—"}</span></div>
-                        <div className="flex items-center"><span className="inline-block w-11 shrink-0 text-muted-foreground">方式</span>{unlockMethodBadge(app.unlockMethod)}</div>
-                      </div>
+              <div className="mb-1 flex items-center justify-between">
+                <div className="text-sm font-medium text-violet-700 dark:text-violet-300">流媒体 / AI 解锁</div>
+                <span className="text-xs text-muted-foreground">{apps.length ? `${apps.length} 项已返回` : "检测中"}</span>
+              </div>
+              <div className="mb-3 text-[11px] text-muted-foreground">
+                AI 平台使用 ForwardX 原有检测；流媒体参考 RegionRestrictionCheck，并根据当前出口使用地自动检测跨国平台与对应区域平台。
+              </div>
+              <div className="space-y-3">
+                {appSections.map((section) => (
+                  <div key={section.key}>
+                    <div className="mb-1.5 flex items-center gap-2 text-xs font-medium text-violet-700 dark:text-violet-300">
+                      <span>{section.title}</span>
+                      <span className="text-[10px] font-normal text-muted-foreground">{section.items.length} 项</span>
                     </div>
-                  );
-                })}
-                {apps.length === 0 && <div className="col-span-full py-5 text-center text-xs text-muted-foreground">检测开始后会逐项显示。</div>}
+                    <div className="grid gap-2 sm:grid-cols-2 md:grid-cols-3">
+                      {section.items.map((app: any) => {
+                        const status = String(app.status || "unknown");
+                        const region = normalizeRegionCode(app.region);
+                        const value = String(app.value || "").trim();
+                        const showResultValue = status === "info" || status === "partial" || status === "unsupported";
+                        return (
+                          <div key={app.id} className={`min-h-20 rounded-md border px-3 py-2 ${statusCardClass(status)}`}>
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="truncate text-sm font-medium" title={app.name || app.id}>{app.name || app.id}</div>
+                              {statusBadge(status)}
+                            </div>
+                            <div className="mt-1.5 space-y-0.5 text-[10px] leading-5">
+                              {showResultValue && value ? (
+                                <div className="flex min-w-0"><span className="inline-block w-11 shrink-0 text-muted-foreground">结果</span><span className="truncate" title={value}>{value}</span></div>
+                              ) : (
+                                <div><span className="inline-block w-11 text-muted-foreground">地区</span><span className={appRegionClass(region, baseCountry, status)}>{region || "—"}</span></div>
+                              )}
+                              <div className="flex items-center"><span className="inline-block w-11 shrink-0 text-muted-foreground">方式</span>{unlockMethodBadge(app.unlockMethod)}</div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+                {apps.length === 0 && <div className="py-5 text-center text-xs text-muted-foreground">检测开始后会逐项显示。</div>}
               </div>
             </div>
 
@@ -605,7 +654,7 @@ export function HostNetworkProfileDialog({
           <div className="flex gap-2">
             {family === "ipv6" && !query.data?.host.ipv6 && !current ? <span className="inline-flex items-center gap-1 text-xs text-muted-foreground"><XCircle className="h-3.5 w-3.5" />当前未上报 IPv6</span> : null}
             <Button variant="outline" disabled={start.isPending || running} onClick={() => start.mutate({ hostId, family, mode: "quick" })}>快速检测</Button>
-            <Button disabled={start.isPending || running} onClick={() => start.mutate({ hostId, family, mode: "full" })}>{running ? <Activity className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}{current ? "重新完整检测" : "完整检测"}</Button>
+            <Button disabled={start.isPending || anyRunning} onClick={() => start.mutate({ hostId, family, mode: "full" })}>{anyRunning ? <Activity className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}{current ? "重新完整检测" : "完整检测"}{query.data?.host.ipv4 && query.data?.host.ipv6 ? " · 双栈" : ""}</Button>
           </div>
         </DialogFooter>
       </DialogContent>
