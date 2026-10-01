@@ -219,11 +219,9 @@ export function HostNetworkProfileDialog({
     .map((item: any) => [item?.provider, item?.country].filter(Boolean).join(" "))
     .filter(Boolean)
     .join(" · ");
-  const maxmind = identity.maxmind || {};
   const ipinfoBasic = identity.ipinfoBasic || {};
   const basicProvider = String(identity.basicProvider || (Object.keys(ipinfoBasic).length ? "IPinfo" : "ipwho.is"));
-  const usingMaxMind = basicProvider === "MaxMind";
-  const basic = usingMaxMind ? maxmind : ipinfoBasic;
+  const basic = ipinfoBasic;
   const basicLat = Number(basic.latitude ?? identity.latitude);
   const basicLon = Number(basic.longitude ?? identity.longitude);
   const hasCoordinates = Number.isFinite(basicLat) && Number.isFinite(basicLon);
