@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Activity, Globe2, RefreshCw, ShieldCheck, Wifi, XCircle } from "lucide-react";
+import { Activity, ExternalLink, Globe2, RefreshCw, ShieldCheck, Wifi, XCircle } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -66,6 +66,16 @@ export function HostNetworkProfileDialog({
   const data = current?.data || {};
   const identity = data.identity || {};
   const risk = data.risk || {};
+  const bgpGraphPath = String(data.network?.bgpGraphPath || "").trim();
+  const bgpGraphQuery = trpc.networkProfile.bgpGraph.useQuery(
+    { hostId, family },
+    {
+      enabled: open && hostId > 0 && !!bgpGraphPath,
+      staleTime: 6 * 60 * 60 * 1000,
+      refetchOnWindowFocus: false,
+      retry: 1,
+    },
+  );
   const apps = useMemo(() => Object.values(data.apps || {}) as any[], [data.apps]);
   const riskScore = riskPercent(risk);
   const steps = current?.steps || {};
@@ -92,6 +102,12 @@ export function HostNetworkProfileDialog({
   const rpkiText: Record<string, string> = { valid: "有效", invalid_asn: "ASN 不匹配", invalid_length: "前缀长度无效", unknown: "未配置 ROA" };
   const neighbours = Array.isArray(data.network?.neighbours) ? data.network.neighbours : [];
   const ipNatureText: Record<string, string> = { native: "原生 IP", broadcast: "广播 IP", unknown: "待确认" };
+  const geoEvidence = Array.isArray(identity.ipNatureGeoEvidence) ? identity.ipNatureGeoEvidence : [];
+  const registeredEvidence = Array.isArray(identity.ipNatureRegisteredEvidence) ? identity.ipNatureRegisteredEvidence : [];
+  const evidenceText = (items: any[]) => items
+    .map((item: any) => [item?.provider, item?.country].filter(Boolean).join(" "))
+    .filter(Boolean)
+    .join(" · ");
   const relationClass = (relation: string, index: number) => {
     const value = String(relation || "").toLowerCase();
     if (value.includes("left")) return "border-sky-300 bg-sky-500/10 text-sky-700 dark:text-sky-300";
@@ -142,7 +158,22 @@ export function HostNetworkProfileDialog({
                   <div><span className="text-muted-foreground">ASN：</span><span className="font-medium text-violet-700 dark:text-violet-300">{identity.asn || "待检测"}</span></div>
                   <div><span className="text-muted-foreground">运营商：</span><span className="font-medium text-indigo-700 dark:text-indigo-300">{identity.company || identity.isp || "待检测"}</span></div>
                   <div><span className="text-muted-foreground">地区：</span><span className="font-medium text-emerald-700 dark:text-emerald-300">{[identity.flag, identity.city, identity.region, identity.country].filter(Boolean).join(" · ") || "待检测"}</span></div>
-                  <div><span className="text-muted-foreground">IP 属性：</span><span className={identity.ipNature === "broadcast" ? "font-semibold text-red-600 dark:text-red-400" : identity.ipNature === "native" ? "font-semibold text-emerald-600 dark:text-emerald-400" : "font-medium text-amber-700 dark:text-amber-300"}>{ipNatureText[String(identity.ipNature || "unknown")] || "待确认"}</span></div>
+                  <div>
+                    <span className="text-muted-foreground">IP 属性：</span>
+                    <span
+                      title={identity.ipNatureReason || ""}
+                      className={identity.ipNature === "broadcast" ? "font-semibold text-red-600 dark:text-red-400" : identity.ipNature === "native" ? "font-semibold text-emerald-600 dark:text-emerald-400" : "font-medium text-amber-700 dark:text-amber-300"}
+                    >
+                      {ipNatureText[String(identity.ipNature || "unknown")] || "待确认"}
+                    </span>
+                  </div>
+                  {(identity.ipNatureReason || geoEvidence.length > 0 || registeredEvidence.length > 0) && (
+                    <div className="rounded-md border border-sky-100/70 bg-background/60 px-2 py-1.5 text-[10px] leading-4 text-muted-foreground dark:border-sky-900/40">
+                      {identity.ipNatureReason ? <div>{identity.ipNatureReason}</div> : null}
+                      {geoEvidence.length > 0 ? <div title={evidenceText(geoEvidence)}>实际地区：{evidenceText(geoEvidence)}</div> : null}
+                      {registeredEvidence.length > 0 ? <div title={evidenceText(registeredEvidence)}>注册/分配：{evidenceText(registeredEvidence)}</div> : null}
+                    </div>
+                  )}
                   <div><span className="text-muted-foreground">使用类型：</span><span className="font-medium text-amber-700 dark:text-amber-300">{networkType || "待检测"}</span>{identity.domain ? <span className="text-muted-foreground"> · {identity.domain}</span> : null}</div>
                 </div>
               </div>
@@ -207,6 +238,51 @@ export function HostNetworkProfileDialog({
                 <div>上游：{data.network?.upstreamCount ?? "—"}{data.network?.transitFree === true ? "（Transit-free）" : ""}</div>
                 <div>Peers：{data.network?.peerCount ?? "—"}</div>
                 <div className="sm:col-span-2 text-[11px] text-muted-foreground">BGP 接入统计优先参考 BGP.Tools；互联 ASN 继续结合 RIPEstat，IXP 名称来自 PeeringDB。</div>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-blue-200/60 bg-blue-500/[0.025] p-3">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="text-sm font-medium text-blue-700 dark:text-blue-300">BGP 路由拓扑</div>
+                  <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">{data.network?.prefix || "Prefix 待检测"}</div>
+                </div>
+                {String(data.network?.bgpGraphPageUrl || bgpGraphQuery.data?.pageUrl || "").trim() ? (
+                  <a
+                    href={String(data.network?.bgpGraphPageUrl || bgpGraphQuery.data?.pageUrl)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex h-8 items-center gap-1 rounded-md border px-2.5 text-xs font-medium transition-colors hover:bg-muted"
+                  >
+                    BGP.Tools 查看 <ExternalLink className="h-3.5 w-3.5" />
+                  </a>
+                ) : null}
+              </div>
+              {bgpGraphPath ? (
+                bgpGraphQuery.isLoading ? (
+                  <div className="flex min-h-40 items-center justify-center rounded-md border border-dashed text-xs text-muted-foreground">
+                    <Activity className="mr-2 h-4 w-4 animate-spin" />正在加载 BGP 拓扑图…
+                  </div>
+                ) : bgpGraphQuery.data?.available && bgpGraphQuery.data.dataUrl ? (
+                  <div className="overflow-auto rounded-md border bg-white p-2">
+                    <img
+                      src={bgpGraphQuery.data.dataUrl}
+                      alt={`BGP 路由拓扑 ${data.network?.prefix || detectedIp || ""}`}
+                      className="mx-auto h-auto min-w-[680px] max-w-none lg:min-w-0 lg:max-w-full"
+                    />
+                  </div>
+                ) : (
+                  <div className="rounded-md border border-dashed px-3 py-8 text-center text-xs text-muted-foreground">
+                    BGP 拓扑暂不可用{bgpGraphQuery.data?.error ? `：${bgpGraphQuery.data.error}` : ""}
+                  </div>
+                )
+              ) : (
+                <div className="rounded-md border border-dashed px-3 py-8 text-center text-xs text-muted-foreground">
+                  当前记录还没有 BGP 拓扑信息，重新执行网络画像检测后会自动获取。
+                </div>
+              )}
+              <div className="mt-2 text-[10px] text-muted-foreground">
+                图像来自 BGP.Tools Connectivity；Panel 代理并缓存 SVG，避免每次打开弹窗都重复请求。
               </div>
             </div>
           </div>

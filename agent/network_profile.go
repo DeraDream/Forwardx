@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"net"
 	"net/http"
@@ -223,9 +224,109 @@ func profileBool(value any) (bool, bool) {
 
 var profileBGPCountryPattern = regexp.MustCompile(`(?i)country:\s*(?:&nbsp;|\s)*([A-Z]{2})`)
 
+type profileCountryEvidence struct {
+	Provider string `json:"provider"`
+	Country  string `json:"country"`
+}
+
+func profileCountryCode(value any) string {
+	code := strings.ToUpper(strings.TrimSpace(profileString(value)))
+	if len(code) != 2 {
+		return ""
+	}
+	for _, ch := range code {
+		if ch < 'A' || ch > 'Z' {
+			return ""
+		}
+	}
+	return code
+}
+
+func profileAddCountryEvidence(items []profileCountryEvidence, provider string, value any) []profileCountryEvidence {
+	country := profileCountryCode(value)
+	provider = strings.TrimSpace(provider)
+	if country == "" || provider == "" {
+		return items
+	}
+	for _, item := range items {
+		if strings.EqualFold(item.Provider, provider) && item.Country == country {
+			return items
+		}
+	}
+	return append(items, profileCountryEvidence{Provider: provider, Country: country})
+}
+
+func profileCountryConsensus(items []profileCountryEvidence) string {
+	if len(items) == 0 {
+		return ""
+	}
+	counts := map[string]int{}
+	order := make([]string, 0, len(items))
+	for _, item := range items {
+		country := profileCountryCode(item.Country)
+		if country == "" {
+			continue
+		}
+		if _, exists := counts[country]; !exists {
+			order = append(order, country)
+		}
+		counts[country]++
+	}
+	best := ""
+	bestCount := 0
+	for _, country := range order {
+		if counts[country] > bestCount {
+			best = country
+			bestCount = counts[country]
+		}
+	}
+	return best
+}
+
+func profileIPNatureFromEvidence(actualEvidence, registeredEvidence []profileCountryEvidence) (nature, actualCountry, registeredCountry, reason string) {
+	actualCountry = profileCountryConsensus(actualEvidence)
+	registeredCountry = profileCountryConsensus(registeredEvidence)
+	if actualCountry == "" || len(registeredEvidence) == 0 {
+		return "unknown", actualCountry, registeredCountry, "地理位置或注册地址证据不足"
+	}
+	matches := 0
+	mismatches := 0
+	for _, item := range registeredEvidence {
+		country := profileCountryCode(item.Country)
+		if country == "" {
+			continue
+		}
+		if country == actualCountry {
+			matches++
+		} else {
+			mismatches++
+		}
+	}
+	if matches >= 2 && mismatches == 0 {
+		return "native", actualCountry, registeredCountry, fmt.Sprintf("%d 个注册来源与实际地区一致", matches)
+	}
+	if mismatches >= 2 && mismatches > matches {
+		return "broadcast", actualCountry, registeredCountry, fmt.Sprintf("%d 个注册来源与实际地区不一致", mismatches)
+	}
+	if mismatches > 0 {
+		return "unknown", actualCountry, registeredCountry, fmt.Sprintf("注册地址证据存在冲突（匹配 %d / 不匹配 %d）", matches, mismatches)
+	}
+	return "unknown", actualCountry, registeredCountry, fmt.Sprintf("仅 %d 个注册来源可确认，证据不足", matches)
+}
+
+func profileCountryEvidenceMaps(items []profileCountryEvidence) []map[string]any {
+	result := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		result = append(result, map[string]any{"provider": item.Provider, "country": item.Country})
+	}
+	return result
+}
+
 func profileIdentity(cfg Config, client *http.Client, ip string) (map[string]any, error) {
 	result := map[string]any{"ip": ip}
 	var primaryErr error
+	actualEvidence := make([]profileCountryEvidence, 0, 3)
+	registeredEvidence := make([]profileCountryEvidence, 0, 3)
 
 	var who map[string]any
 	if err := profileGetJSON(client, "https://ipwho.is/"+url.PathEscape(ip), &who); err == nil {
@@ -266,6 +367,7 @@ func profileIdentity(cfg Config, client *http.Client, ip string) (map[string]any
 			result["timezone"] = profileString(timezone["id"])
 			result["flag"] = profileString(flag["emoji"])
 			result["identityProvider"] = "ipwho.is"
+			actualEvidence = profileAddCountryEvidence(actualEvidence, "ipwho.is", who["country_code"])
 		} else {
 			primaryErr = fmt.Errorf("ipwho.is lookup failed")
 		}
@@ -293,6 +395,9 @@ func profileIdentity(cfg Config, client *http.Client, ip string) (map[string]any
 				result["asnNumber"] = profileASNNumber(asn)
 			}
 		}
+		if location := profileMap(ipapi["location"]); location != nil {
+			actualEvidence = profileAddCountryEvidence(actualEvidence, "ipapi.is", location["country_code"])
+		}
 		result["classificationProvider"] = "ipapi.is"
 	}
 
@@ -304,48 +409,34 @@ func profileIdentity(cfg Config, client *http.Client, ip string) (map[string]any
 	if maxmindPayload != nil {
 		country := profileMap(maxmindPayload["Country"])
 		registered := profileMap(country["RegisteredCountry"])
-		actualCode := strings.ToUpper(profileString(country["IsoCode"]))
+		actualCode := profileCountryCode(country["IsoCode"])
 		if actualCode == "" {
 			city := profileMap(maxmindPayload["City"])
 			cityCountry := profileMap(city["Country"])
-			actualCode = strings.ToUpper(profileString(cityCountry["IsoCode"]))
+			actualCode = profileCountryCode(cityCountry["IsoCode"])
 		}
-		if actualCode == "" { actualCode = strings.ToUpper(profileString(result["countryCode"])) }
-		registeredCode := strings.ToUpper(profileString(registered["IsoCode"]))
-		result["actualCountryCode"] = actualCode
-		result["registeredCountryCode"] = registeredCode
-		result["ipNature"] = profileIPNature(actualCode, registeredCode)
-		result["ipNatureProvider"] = "MaxMind"
+		if actualCode == "" {
+			actualCode = profileCountryCode(result["countryCode"])
+		}
+		actualEvidence = profileAddCountryEvidence(actualEvidence, "MaxMind GeoIP", actualCode)
+		registeredEvidence = profileAddCountryEvidence(registeredEvidence, "MaxMind RegisteredCountry", registered["IsoCode"])
 	}
 
-	if profileString(result["ipNature"]) == "" {
-		var rdap map[string]any
-		if err := profileGetJSONRetry(client, "https://rdap.org/ip/"+url.PathEscape(ip), &rdap, 2); err == nil {
-			actualCode := strings.ToUpper(profileString(result["countryCode"]))
-			registeredCode := strings.ToUpper(profileString(rdap["country"]))
-			if registeredCode != "" {
-				result["actualCountryCode"] = actualCode
-				result["registeredCountryCode"] = registeredCode
-				result["ipNature"] = profileIPNature(actualCode, registeredCode)
-				result["ipNatureProvider"] = "RDAP"
-			}
-		}
+	// RDAP is queried even when MaxMind is available. A single provider matching
+	// the detected geography is no longer enough to label an address as native.
+	var rdap map[string]any
+	if err := profileGetJSONRetry(client, "https://rdap.org/ip/"+url.PathEscape(ip), &rdap, 2); err == nil {
+		registeredEvidence = profileAddCountryEvidence(registeredEvidence, "RDAP", rdap["country"])
 	}
-	if profileString(result["ipNature"]) == "" {
-		if _, body, err := profileReadRetry(client, "https://bgp.tools/prefix/"+url.PathEscape(ip), nil, 2); err == nil {
-			if match := profileBGPCountryPattern.FindStringSubmatch(body); len(match) > 1 {
-				actualCode := strings.ToUpper(profileString(result["countryCode"]))
-				registeredCode := strings.ToUpper(strings.TrimSpace(match[1]))
-				result["actualCountryCode"] = actualCode
-				result["registeredCountryCode"] = registeredCode
-				result["ipNature"] = profileIPNature(actualCode, registeredCode)
-				result["ipNatureProvider"] = "BGP.Tools WHOIS"
-			}
-		}
-	}
-	if profileString(result["ipNature"]) == "" {
-		result["ipNature"] = "unknown"
-	}
+
+	nature, actualCode, registeredCode, reason := profileIPNatureFromEvidence(actualEvidence, registeredEvidence)
+	result["actualCountryCode"] = actualCode
+	result["registeredCountryCode"] = registeredCode
+	result["ipNature"] = nature
+	result["ipNatureReason"] = reason
+	result["ipNatureGeoEvidence"] = profileCountryEvidenceMaps(actualEvidence)
+	result["ipNatureRegisteredEvidence"] = profileCountryEvidenceMaps(registeredEvidence)
+	result["ipNatureProvider"] = "multi-source"
 
 	if profileString(result["asn"]) == "" && primaryErr != nil {
 		return nil, primaryErr
@@ -353,12 +444,41 @@ func profileIdentity(cfg Config, client *http.Client, ip string) (map[string]any
 	return result, nil
 }
 
-func profileIPNature(actualCountryCode, registeredCountryCode string) string {
-	actual := strings.ToUpper(strings.TrimSpace(actualCountryCode))
-	registered := strings.ToUpper(strings.TrimSpace(registeredCountryCode))
-	if len(actual) != 2 || len(registered) != 2 { return "unknown" }
-	if actual == registered { return "native" }
-	return "broadcast"
+func profileMergeBGPIPNature(identity map[string]any, bgpTools map[string]any) {
+	if identity == nil || bgpTools == nil {
+		return
+	}
+	actualEvidence := make([]profileCountryEvidence, 0, 4)
+	registeredEvidence := make([]profileCountryEvidence, 0, 4)
+	if raw, ok := identity["ipNatureGeoEvidence"].([]map[string]any); ok {
+		for _, item := range raw {
+			actualEvidence = profileAddCountryEvidence(actualEvidence, profileString(item["provider"]), item["country"])
+		}
+	} else if raw, ok := identity["ipNatureGeoEvidence"].([]any); ok {
+		for _, value := range raw {
+			item := profileMap(value)
+			actualEvidence = profileAddCountryEvidence(actualEvidence, profileString(item["provider"]), item["country"])
+		}
+	}
+	if raw, ok := identity["ipNatureRegisteredEvidence"].([]map[string]any); ok {
+		for _, item := range raw {
+			registeredEvidence = profileAddCountryEvidence(registeredEvidence, profileString(item["provider"]), item["country"])
+		}
+	} else if raw, ok := identity["ipNatureRegisteredEvidence"].([]any); ok {
+		for _, value := range raw {
+			item := profileMap(value)
+			registeredEvidence = profileAddCountryEvidence(registeredEvidence, profileString(item["provider"]), item["country"])
+		}
+	}
+	registeredEvidence = profileAddCountryEvidence(registeredEvidence, "BGP.Tools WHOIS", bgpTools["registeredCountryCode"])
+	nature, actualCode, registeredCode, reason := profileIPNatureFromEvidence(actualEvidence, registeredEvidence)
+	identity["actualCountryCode"] = actualCode
+	identity["registeredCountryCode"] = registeredCode
+	identity["ipNature"] = nature
+	identity["ipNatureReason"] = reason
+	identity["ipNatureGeoEvidence"] = profileCountryEvidenceMaps(actualEvidence)
+	identity["ipNatureRegisteredEvidence"] = profileCountryEvidenceMaps(registeredEvidence)
+	identity["ipNatureProvider"] = "multi-source"
 }
 
 func firstNonEmpty(values ...string) string {
@@ -1068,6 +1188,8 @@ func profileRouting(client *http.Client, ip string, asnValue any) (map[string]an
 
 var profileBGPToolsPrefixPattern = regexp.MustCompile(`(?s)<p id="network-name" class="heading-xlarge">\s*([^<]+)\s*</p>`)
 var profileBGPToolsASNPattern = regexp.MustCompile(`(?s)Originated by.*?<strong>\s*([^<]+)\s*</strong>`)
+var profileBGPToolsPathImagePattern = regexp.MustCompile(`(?is)<img[^>]+id=["']pathimg["'][^>]+src=["']([^"']+)["']`)
+var profileBGPToolsPathImagePatternAlt = regexp.MustCompile(`(?is)<img[^>]+src=["']([^"']+)["'][^>]+id=["']pathimg["']`)
 
 func profileHTMLTableRowCount(body, tableID string) int {
 	startToken := `<table id="` + tableID + `"`
@@ -1087,9 +1209,28 @@ func profileHTMLTableRowCount(body, tableID string) int {
 	return rows - 1
 }
 
+func profileBGPToolsGraphPath(body string) string {
+	for _, pattern := range []*regexp.Regexp{profileBGPToolsPathImagePattern, profileBGPToolsPathImagePatternAlt} {
+		if match := pattern.FindStringSubmatch(body); len(match) > 1 {
+			value := html.UnescapeString(strings.TrimSpace(match[1]))
+			if strings.HasPrefix(value, "/pathimg/") {
+				return value
+			}
+			if parsed, err := url.Parse(value); err == nil && strings.EqualFold(parsed.Hostname(), "bgp.tools") && strings.HasPrefix(parsed.Path, "/pathimg/") {
+				return parsed.RequestURI()
+			}
+		}
+	}
+	return ""
+}
+
 func profileBGPTools(client *http.Client, ip string) map[string]any {
 	result := map[string]any{"provider": "BGP.Tools"}
-	code, body, err := profileReadRetry(client, "https://bgp.tools/prefix/"+url.PathEscape(ip), nil, 2)
+	headers := map[string]string{
+		"User-Agent": "ForwardX-Agent/" + Version + " (+https://github.com/DeraDream/Forwardx)",
+		"Accept": "text/html,application/xhtml+xml",
+	}
+	code, body, err := profileReadRetry(client, "https://bgp.tools/prefix/"+url.PathEscape(ip), headers, 2)
 	if err != nil || code < 200 || code >= 300 || strings.TrimSpace(body) == "" {
 		if err != nil {
 			result["error"] = err.Error()
@@ -1105,6 +1246,12 @@ func profileBGPTools(client *http.Client, ip string) map[string]any {
 		asnText := strings.TrimSpace(strings.Split(match[1], ",")[0])
 		result["asn"] = asnText
 	}
+	if match := profileBGPCountryPattern.FindStringSubmatch(body); len(match) > 1 {
+		result["registeredCountryCode"] = profileCountryCode(match[1])
+	}
+	if graphPath := profileBGPToolsGraphPath(body); graphPath != "" {
+		result["bgpGraphPath"] = graphPath
+	}
 	if upstreams := profileHTMLTableRowCount(body, "upstreamTable"); upstreams >= 0 {
 		if strings.Contains(body, "This network is transit-free.") {
 			result["upstreamCount"] = 0
@@ -1118,7 +1265,8 @@ func profileBGPTools(client *http.Client, ip string) map[string]any {
 	}
 	prefix := profileString(result["prefix"])
 	if prefix != "" {
-		ixCode, ixBody, ixErr := profileReadRetry(client, "https://bgp.tools/ixp-rs-route/"+prefix, nil, 2)
+		result["bgpGraphPageUrl"] = "https://bgp.tools/prefix/" + prefix + "#connectivity"
+		ixCode, ixBody, ixErr := profileReadRetry(client, "https://bgp.tools/ixp-rs-route/"+prefix, headers, 2)
 		if ixErr == nil && ixCode >= 200 && ixCode < 300 {
 			if ixCount := profileHTMLTableRowCount(ixBody, "upstreamTable"); ixCount >= 0 {
 				result["bgpToolsIXPCount"] = ixCount
@@ -1784,6 +1932,11 @@ func runNetworkProfile(cfg Config, request networkProfileRequest) {
 		report("network", "error", map[string]any{"asn": profileASNNumber(asnValue)}, networkErr.Error())
 	} else {
 		report("network", "success", network, "")
+		// BGP.Tools WHOIS is an additional allocation-country signal. Recompute
+		// IP nature only after the network stage so we reuse the same page fetch
+		// that also provides prefix/connectivity data.
+		profileMergeBGPIPNature(identity, network)
+		report("identity", "success", identity, "")
 	}
 
 	report("risk", "running", nil, "")

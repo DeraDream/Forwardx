@@ -64,22 +64,60 @@ func TestProfileShortASNName(t *testing.T) {
 }
 
 
-func TestProfileIPNature(t *testing.T) {
+func TestProfileIPNatureFromEvidence(t *testing.T) {
 	cases := []struct {
-		actual     string
-		registered string
+		name       string
+		actual     []profileCountryEvidence
+		registered []profileCountryEvidence
 		want       string
 	}{
-		{"SG", "SG", "native"},
-		{"sg", "SG", "native"},
-		{"SG", "US", "broadcast"},
-		{"", "SG", "unknown"},
-		{"SG", "", "unknown"},
-		{"Singapore", "SG", "unknown"},
+		{
+			name: "native needs two agreeing registration sources",
+			actual: []profileCountryEvidence{{Provider: "ipwho.is", Country: "SG"}, {Provider: "ipapi.is", Country: "SG"}},
+			registered: []profileCountryEvidence{{Provider: "MaxMind RegisteredCountry", Country: "SG"}, {Provider: "RDAP", Country: "SG"}},
+			want: "native",
+		},
+		{
+			name: "single matching registration source stays unknown",
+			actual: []profileCountryEvidence{{Provider: "ipwho.is", Country: "SG"}},
+			registered: []profileCountryEvidence{{Provider: "MaxMind RegisteredCountry", Country: "SG"}},
+			want: "unknown",
+		},
+		{
+			name: "two foreign registration sources identify broadcast",
+			actual: []profileCountryEvidence{{Provider: "ipwho.is", Country: "SG"}, {Provider: "ipapi.is", Country: "SG"}},
+			registered: []profileCountryEvidence{{Provider: "RDAP", Country: "US"}, {Provider: "BGP.Tools WHOIS", Country: "US"}},
+			want: "broadcast",
+		},
+		{
+			name: "conflicting registration sources stay unknown",
+			actual: []profileCountryEvidence{{Provider: "ipwho.is", Country: "SG"}},
+			registered: []profileCountryEvidence{{Provider: "MaxMind RegisteredCountry", Country: "SG"}, {Provider: "RDAP", Country: "US"}},
+			want: "unknown",
+		},
 	}
 	for _, tc := range cases {
-		if got := profileIPNature(tc.actual, tc.registered); got != tc.want {
-			t.Fatalf("profileIPNature(%q, %q)=%q want=%q", tc.actual, tc.registered, got, tc.want)
+		t.Run(tc.name, func(t *testing.T) {
+			got, _, _, _ := profileIPNatureFromEvidence(tc.actual, tc.registered)
+			if got != tc.want {
+				t.Fatalf("profileIPNatureFromEvidence()=%q want=%q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestProfileBGPToolsGraphPath(t *testing.T) {
+	cases := []struct {
+		body string
+		want string
+	}{
+		{`<img id="pathimg" src="/pathimg/rt-209.33.171.0_24?abc&amp;loggedin">`, "/pathimg/rt-209.33.171.0_24?abc&loggedin"},
+		{`<img class="x" src="https://bgp.tools/pathimg/rt-1.1.1.0_24?xyz" id="pathimg">`, "/pathimg/rt-1.1.1.0_24?xyz"},
+		{`<img id="other" src="/pathimg/nope">`, ""},
+	}
+	for _, tc := range cases {
+		if got := profileBGPToolsGraphPath(tc.body); got != tc.want {
+			t.Fatalf("profileBGPToolsGraphPath(%q)=%q want=%q", tc.body, got, tc.want)
 		}
 	}
 }
