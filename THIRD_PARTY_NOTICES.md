@@ -30,3 +30,17 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+
+## RegionRestrictionCheck stream probes
+
+- Upstream project: <https://github.com/1-stream/RegionRestrictionCheck>
+- Pinned revision: `ab6829eb07c4c592c1f8f3dac736d675667d1a08`
+- License: GNU Affero General Public License v3.0
+- Usage: a pinned copy of `check.sh` is embedded into the ForwardX Agent for
+  streaming / regional availability probes.
+- ForwardX modifications: the diagnostic copy never installs OS packages
+  automatically, and function mode honors the requested IPv4 / IPv6 family.
+
+The upstream source and ForwardX are both distributed under AGPL-3.0. The
+vendored script contains a prominent source and modification notice.
