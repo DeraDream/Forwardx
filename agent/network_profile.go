@@ -1048,6 +1048,30 @@ func profileProxyCheckSource(cfg Config, client *http.Client, ip string) profile
 }
 
 
+func profileMaxMindTypeSource(cfg Config, client *http.Client, ip string) profileRiskSource {
+	source := profileRiskSource{Name: "MaxMind"}
+	payload, err := profilePanelRiskProxy(cfg, ip, "maxmind-insights")
+	if err != nil {
+		source.Error = err.Error()
+		return source
+	}
+	traits := profileMap(payload["traits"])
+	anonymizer := profileMap(payload["anonymizer"])
+	country := profileMap(payload["country"])
+	source.Country = profileString(country["iso_code"])
+	source.NetworkType = firstNonEmpty(profileString(traits["user_type"]), profileString(traits["connection_type"]))
+	if hosting := profileBoolPtr(anonymizer["is_hosting_provider"]); hosting != nil {
+		source.IsDatacenter = hosting
+	}
+	source.IsProxy = profileBoolPtr(anonymizer["is_public_proxy"])
+	source.IsVPN = profileBoolPtr(anonymizer["is_anonymous_vpn"])
+	source.IsTor = profileBoolPtr(anonymizer["is_tor_exit_node"])
+	if source.Country == "" && source.NetworkType == "" && source.IsDatacenter == nil && source.IsProxy == nil && source.IsVPN == nil && source.IsTor == nil {
+		source.Error = "MaxMind Insights type data unavailable"
+	}
+	return source
+}
+
 func profileIPInfoSource(client *http.Client, ip string) profileRiskSource {
 	source := profileRiskSource{Name: "IPinfo"}
 	var payload map[string]any
@@ -1155,6 +1179,42 @@ var profileDBIPKeyPattern = regexp.MustCompile(`data-api-key=["']([^"']+)["']`)
 
 func profileDBIPSource(client *http.Client, ip string) profileRiskSource {
 	source := profileRiskSource{Name: "DB-IP"}
+
+	// DB-IP's own demo endpoint accepts an arbitrary IP and returns the vendor's
+	// usageType field (hosting/corporate/consumer/reserved) without borrowing a
+	// classification from another database.
+	if code, body, err := profileReadRetry(client, "https://db-ip.com/demo/home.php?s="+url.QueryEscape(ip), map[string]string{
+		"Accept": "application/json,text/plain,*/*",
+		"Referer": "https://db-ip.com/",
+	}, 2); err == nil && code >= 200 && code < 300 {
+		var wrapper map[string]any
+		if json.Unmarshal([]byte(body), &wrapper) == nil {
+			info := profileMap(wrapper["demoInfo"])
+			if info != nil {
+				returnedIP := profileString(info["ipAddress"])
+				if returnedIP == "" || returnedIP == ip {
+					source.Country = profileString(info["countryCode"])
+					source.NetworkType = profileString(info["usageType"])
+					source.IsProxy = profileBoolPtr(info["isProxy"])
+					source.IsBot = profileBoolPtr(info["isCrawler"])
+					switch strings.ToLower(profileString(info["threatLevel"])) {
+					case "low":
+						score := float64(0); source.Score = &score; source.Level = "low"
+					case "medium":
+						score := float64(50); source.Score = &score; source.Level = "medium"
+					case "high":
+						score := float64(100); source.Score = &score; source.Level = "high"
+					}
+					if source.Country != "" || source.NetworkType != "" || source.Score != nil || source.IsProxy != nil || source.IsBot != nil {
+						return source
+					}
+				}
+			}
+		}
+	}
+
+	// Keep the browser API as a fallback for environments where the demo endpoint
+	// is temporarily unavailable.
 	_, coreBody, err := profileReadRetry(client, "https://db-ip.com/api/core/", map[string]string{"Accept": "*/*"}, 2)
 	if err != nil {
 		source.Error = err.Error()
@@ -1187,8 +1247,6 @@ func profileDBIPSource(client *http.Client, ip string) profileRiskSource {
 		return source
 	}
 	source.Country = profileString(payload["countryCode"])
-	// DB-IP explicitly documents usageType as hosting/corporate/consumer/reserved.
-	// This is comparable to the “使用类型” row; do not invent a company type.
 	source.NetworkType = profileString(payload["usageType"])
 	source.IsProxy = profileBoolPtr(payload["isProxy"])
 	source.IsBot = profileBoolPtr(payload["isCrawler"])
@@ -1200,12 +1258,11 @@ func profileDBIPSource(client *http.Client, ip string) profileRiskSource {
 	case "high":
 		score := float64(100); source.Score = &score; source.Level = "high"
 	}
-	if source.Country == "" && source.Score == nil && source.IsProxy == nil && source.IsBot == nil {
-		source.Error = "DB-IP threat data unavailable"
+	if source.Country == "" && source.NetworkType == "" && source.Score == nil && source.IsProxy == nil && source.IsBot == nil {
+		source.Error = "DB-IP threat/type data unavailable"
 	}
 	return source
 }
-
 
 func profileAbuseIPDBSource(cfg Config, client *http.Client, ip string) profileRiskSource {
 	source := profileRiskSource{Name: "AbuseIPDB"}
@@ -1267,6 +1324,7 @@ func profileRisk(cfg Config, client *http.Client, ip string) map[string]any {
 	}{
 		{"ProxyCheck", func() profileRiskSource { return profileProxyCheckSource(cfg, client, ip) }},
 		{"IPinfo", func() profileRiskSource { return profileIPInfoSource(client, ip) }},
+		{"MaxMind", func() profileRiskSource { return profileMaxMindTypeSource(cfg, client, ip) }},
 		{"ipregistry", func() profileRiskSource { return profileIPRegistrySource(client, ip) }},
 		{"FFraud", func() profileRiskSource { return profileFFraudSource(client, ip) }},
 		{"IP99", func() profileRiskSource { return profileIP99Source(client, ip) }},
