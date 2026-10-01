@@ -14,6 +14,7 @@ const NETWORK_PROFILE_PROXY_CACHE_MS = 10 * 60_000;
 const NETWORK_PROFILE_PROXY_CACHE_LIMIT = 2_048;
 const NETWORK_PROFILE_PROXY_PROVIDERS = new Set([
   "maxmind",
+  "maxmind-insights",
   "proxycheck",
   "abuseipdb",
 ]);
@@ -29,6 +30,21 @@ function networkProfileProxyRequest(ip: string, provider: string) {
   const escapedIp = encodeURIComponent(ip);
   if (provider === "maxmind") {
     return { url: `https://ipinfo.check.place/${escapedIp}?lang=en`, headers: {} as Record<string, string> };
+  }
+  if (provider === "maxmind-insights") {
+    const accountId = ENV.maxMindAccountId.trim();
+    const licenseKey = ENV.maxMindLicenseKey.trim();
+    if (!accountId || !licenseKey) {
+      throw new Error("MaxMind Insights credentials are not configured");
+    }
+    const basic = Buffer.from(`${accountId}:${licenseKey}`, "utf8").toString("base64");
+    return {
+      url: `https://geoip.maxmind.com/geoip/v2.1/insights/${escapedIp}`,
+      headers: {
+        Authorization: `Basic ${basic}`,
+        Accept: "application/vnd.maxmind.com-insights+json; charset=UTF-8; version=2.1",
+      },
+    };
   }
   if (provider === "proxycheck") {
     return { url: `https://proxycheck.io/v2/${escapedIp}?vpn=1&asn=1&risk=1&days=7`, headers: {} as Record<string, string> };
