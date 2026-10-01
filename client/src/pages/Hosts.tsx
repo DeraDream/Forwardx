@@ -1459,7 +1459,7 @@ function HostsContent() {
   const ddnsProviderEnabled = Boolean(systemSettings?.ddns?.enabled && systemSettings?.ddns?.provider && systemSettings.ddns.provider !== "disabled");
   const telegramBotReady = Boolean(systemSettings?.telegram?.enabled && systemSettings?.telegram?.configured);
   const telegramBotSettingsLoaded = Boolean(systemSettings?.telegram);
-  const upgradingHosts = useRef<Map<number, string | null>>(new Map());
+  const upgradingHosts = useRef<Map<number, { targetVersion: string | null; requestedAt: number }>>(new Map());
 
   const [showDialog, setShowDialog] = useState(false);
   const [hostDialogTab, setHostDialogTab] = useState<HostDialogTab>("basic");
@@ -1781,7 +1781,9 @@ function HostsContent() {
       const skippedLatest = (data as any)?.skippedLatest || 0;
       const skippedOffline = (data as any)?.skippedOffline || 0;
       const scheduled = (data as any)?.scheduled || 0;
-      toast.success(`已安排 ${data?.requested || 0} 台 Agent 滚动升级，首批推送 ${data?.pushed || 0} 台${scheduled ? `，等待后续批次 ${scheduled} 台` : ""}${skippedLatest ? `，跳过 ${skippedLatest} 台最新版本` : ""}${skippedOffline ? `，跳过 ${skippedOffline} 台离线主机` : ""}`);
+      const waveSize = Number((data as any)?.waveSize || 0);
+      const waveIntervalSeconds = Number((data as any)?.waveIntervalSeconds || 0);
+      toast.success(`已安排 ${data?.requested || 0} 台 Agent 滚动升级，首批推送 ${data?.pushed || 0} 台${scheduled ? `，等待后续批次 ${scheduled} 台` : ""}${waveSize > 0 ? `（每批 ${waveSize} 台${waveIntervalSeconds > 0 ? ` / 间隔 ${waveIntervalSeconds}s` : ""}）` : ""}${skippedLatest ? `，跳过 ${skippedLatest} 台最新版本` : ""}${skippedOffline ? `，跳过 ${skippedOffline} 台离线主机` : ""}`);
     },
     onError: (err) => toast.error(err.message || "批量下发升级任务失败"),
   });
@@ -1790,15 +1792,35 @@ function HostsContent() {
     if (!displayHosts.length) return;
     const tracked = upgradingHosts.current;
     const currentIds = new Set<number>();
+    const now = Date.now();
     for (const host of displayHosts as any[]) {
-      currentIds.add(host.id);
+      const hostId = Number(host.id);
+      currentIds.add(hostId);
       if (host.agentUpgradeRequested) {
-        tracked.set(host.id, host.agentUpgradeTargetVersion || latestAgentVersion || null);
+        const requestedAt = host.agentUpgradeRequestedAt ? new Date(host.agentUpgradeRequestedAt).getTime() : now;
+        tracked.set(hostId, {
+          targetVersion: host.agentUpgradeTargetVersion || latestAgentVersion || null,
+          requestedAt: Number.isFinite(requestedAt) && requestedAt > 0 ? requestedAt : now,
+        });
         continue;
       }
-      if (tracked.has(host.id)) {
-        tracked.delete(host.id);
-        toast.success(`${host.name} Agent 升级成功，当前版本 ${host.agentVersion ? `v${host.agentVersion}` : "已上报"}`);
+      const pending = tracked.get(hostId);
+      if (!pending) continue;
+
+      const targetVersion = pending.targetVersion || latestAgentVersion || "";
+      const currentVersion = String(host.agentVersion || "");
+      if (targetVersion && currentVersion && compareVersions(currentVersion, targetVersion) >= 0) {
+        tracked.delete(hostId);
+        toast.success(`${host.name} Agent 升级成功，当前版本 v${currentVersion}`);
+        continue;
+      }
+
+      // Stale upgrade requests are cleared by the Panel after 10 minutes. Do
+      // not treat “pending disappeared” as success unless the reported version
+      // actually reached the requested target.
+      if (now - pending.requestedAt >= 10 * 60 * 1000) {
+        tracked.delete(hostId);
+        toast.error(`${host.name} Agent 升级超时，当前仍为 ${currentVersion ? `v${currentVersion}` : "未知版本"}，目标 ${targetVersion ? `v${targetVersion}` : "未知"}`);
       }
     }
     for (const hostId of Array.from(tracked.keys())) {
