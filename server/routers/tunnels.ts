@@ -1161,6 +1161,7 @@ export const tunnelsRouter = router({
           hopHostIds: _ignoredHopHostIds,
           hopConnectHosts: _ignoredHopConnectHosts,
           loadBalanceExits: _ignoredLoadBalanceExits,
+          listenPortExplicit: _listenPortExplicit,
           blockHttp: _ignoredBlockHttp,
           blockSocks: _ignoredBlockSocks,
           blockTls: _ignoredBlockTls,
