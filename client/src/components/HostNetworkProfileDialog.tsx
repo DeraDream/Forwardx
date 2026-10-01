@@ -111,16 +111,18 @@ function ipTypeLabel(value: unknown) {
   const code = raw.match(/^\(([A-Za-z]+)\)/)?.[1]?.toLowerCase() || "";
 
   if (code === "dch" || lower.includes("data center") || lower.includes("datacenter") || lower.includes("web hosting") || lower === "hosting") return "机房";
-  if (code === "isp" || code === "lin" || lower === "isp" || lower.includes("fixed line isp") || lower.includes("residential")) return "家宽";
-  if (code === "com" || lower === "business" || lower === "commercial" || lower.includes("commercial")) return "商业";
-  if (code === "mob" || lower.includes("mobile isp") || lower === "mobile") return "手机";
+  if (code === "isp" || code === "lin" || lower === "isp" || lower.includes("fixed line isp") || lower.includes("residential") || lower === "consumer") return "家宽";
+  if (code === "com" || lower === "business" || lower === "commercial" || lower.includes("commercial") || lower === "corporate") return "商业";
+  if (code === "mob" || lower.includes("mobile isp") || lower === "mobile" || lower === "cellular") return "手机";
   if (code === "cdn" || lower.includes("content delivery network") || lower === "cdn") return "CDN";
-  if (code === "edu" || lower === "education") return "教育";
+  if (code === "edu" || lower === "education" || lower === "college" || lower === "school") return "教育";
   if (code === "gov" || lower === "government") return "政府";
   if (code === "mil" || lower === "military") return "军队";
   if (code === "lib" || lower === "library") return "图书馆";
   if (code === "org" || lower === "organization") return "组织";
   if (code === "rsv" || lower === "reserved") return "保留";
+  if (lower === "traveler") return "漫游";
+  if (lower === "router") return "路由";
   if (code === "ses" || lower.includes("search engine spider")) return "蜘蛛";
   if (lower === "dyn" || lower === "dynamic") return "动态";
   if (lower === "banking") return "银行";
@@ -249,23 +251,16 @@ export function HostNetworkProfileDialog({
   const scoredRiskSources = riskOrder
     .map((name) => riskSources.find((item: any) => item?.name === name))
     .filter((source: any) => source && Number.isFinite(Number(source?.score)));
-  // Keep this matrix limited to provider fields that actually describe usage/company type.
-  // MaxMind contributes its Enterprise user_type when exposed by the lookup;
-  // DB-IP contributes its documented usageType. Neither field is synthesized.
-  const maxMindTypeSource = {
-    name: "MaxMind",
-    networkType: String(maxmind.userType || "").trim(),
-    companyType: "",
-    error: "",
-  };
+  // Always render the authoritative type databases the user selected. Missing
+  // data stays visibly attributable to that provider instead of making the
+  // entire column disappear, which previously made MaxMind / DB-IP look absent.
   const typeSources = [
     { name: "IPinfo", source: riskSources.find((item: any) => item?.name === "IPinfo") },
     { name: "ipregistry", source: riskSources.find((item: any) => item?.name === "ipregistry") },
-    { name: "MaxMind", source: maxMindTypeSource },
+    { name: "MaxMind", source: riskSources.find((item: any) => item?.name === "MaxMind") },
     { name: "DB-IP", source: riskSources.find((item: any) => item?.name === "DB-IP") },
     { name: "IP2Location", source: riskSources.find((item: any) => item?.name === "IP2Location") },
-    { name: "AbuseIPDB", source: riskSources.find((item: any) => item?.name === "AbuseIPDB") },
-  ].filter((item) => item.source && (item.source.networkType || item.source.companyType));
+  ];
   const mail = data.mail || {};
   const mailProviders = Array.isArray(mail.providers) ? mail.providers : [];
   const dnsbl = mail.dnsbl || {};
@@ -365,9 +360,11 @@ export function HostNetworkProfileDialog({
                               <div className="flex flex-col items-center gap-1">
                                 <Badge variant="outline" className={ipTypeBadgeClass(item.source.networkType)}>{ipTypeLabel(item.source.networkType)}</Badge>
                               </div>
-                            ) : item.source?.error
-                              ? <span className="text-[10px] text-red-600 dark:text-red-400" title={item.source.error}>检测失败</span>
-                              : <span className="text-[10px] text-muted-foreground">未返回</span>}
+                            ) : item.name === "MaxMind" && String(item.source?.error || "").includes("credentials")
+                              ? <span className="text-[10px] text-amber-700 dark:text-amber-300" title={item.source?.error}>需 Insights Key</span>
+                              : item.source?.error
+                                ? <span className="text-[10px] text-red-600 dark:text-red-400" title={item.source.error}>检测失败</span>
+                                : <span className="text-[10px] text-muted-foreground">未返回</span>}
                           </td>
                         ))}
                       </tr>
@@ -379,7 +376,7 @@ export function HostNetworkProfileDialog({
                               <div className="flex flex-col items-center gap-1">
                                 <Badge variant="outline" className={ipTypeBadgeClass(item.source.companyType)}>{ipTypeLabel(item.source.companyType)}</Badge>
                               </div>
-                            ) : item.name === "AbuseIPDB"
+                            ) : item.name === "MaxMind" || item.name === "DB-IP"
                               ? <span className="text-[10px] text-muted-foreground">接口不提供</span>
                               : item.source?.error
                                 ? <span className="text-[10px] text-red-600 dark:text-red-400" title={item.source.error}>检测失败</span>
@@ -554,7 +551,7 @@ export function HostNetworkProfileDialog({
               {(bgpGraphPath || bgpPrefix) ? (
                 bgpDisplayDataUrl ? (
                   <div className="overflow-auto rounded-md border bg-white p-2">
-                    <img src={bgpDisplayDataUrl} alt={`BGP 路由拓扑 ${bgpPrefix || detectedIp || ""}`} className="mx-auto h-auto min-w-[680px] max-w-none lg:min-w-0 lg:max-w-full" />
+                    <img src={bgpDisplayDataUrl} alt={`BGP 路由拓扑 ${bgpPrefix || detectedIp || ""}`} className="mx-auto block h-auto max-w-none" />
                   </div>
                 ) : bgpGraphQuery.isLoading ? (
                   <div className="flex min-h-40 items-center justify-center rounded-md border border-dashed text-xs text-muted-foreground">
@@ -570,7 +567,7 @@ export function HostNetworkProfileDialog({
                   当前未获得 Prefix，无法生成 BGP 拓扑图。
                 </div>
               )}
-              <div className="mt-2 text-[10px] text-muted-foreground">图像来自 BGP.Tools Connectivity；优先直接使用本次 Agent 回传的 SVG，新检测任务会自动失效旧缓存，Panel 仅作回退。</div>
+              <div className="mt-2 text-[10px] text-muted-foreground">图像来自 BGP.Tools Connectivity；直接按 SVG 原始尺寸渲染，避免把约 963pt 的矢量图强制压缩到卡片宽度；超出区域可横向滚动。</div>
             </div>
           </div>
         )}
