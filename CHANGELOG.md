@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.3.400] - 2026-10-02
+
+### 流媒体区域解锁改用 RegionRestrictionCheck 并支持双栈联检
+
+- AI 平台继续使用 ForwardX 自有检测：快速检测保留 ChatGPT / Claude / Gemini，完整检测额外包含 Grok / Perplexity；非 AI 流媒体改为参考并嵌入 `1-stream/RegionRestrictionCheck` 的检测实现。
+- 固定上游 `RegionRestrictionCheck` revision `ab6829eb07c4c592c1f8f3dac736d675667d1a08`，并记录 AGPL-3.0 来源；ForwardX 版本禁用上游自动 apt/yum/brew 安装依赖的行为，避免网络画像检测修改主机系统。
+- 流媒体完整检测根据机器实际使用地 `actualCountryCode` 自动选择区域组：日本、香港/澳门、台湾、韩国、北美、南美、欧洲、大洋洲、东南亚、非洲；无法归类或中国大陆时只执行跨国平台。
+- 跨国平台检测覆盖 Netflix、Disney+、YouTube Premium、Prime Video、Spotify、TikTok、Steam、Google Location、YouTube CDN、Netflix Preferred CDN 等上游当前启用项目；区域组同步展示当地专属平台及 Game / Read / Music / Forum 等子分类。
+- RegionRestrictionCheck 输出统一转换为结构化状态：解锁、屏蔽、部分解锁、不支持、检测错误、信息，并修复服务名本身含冒号（如 `Project Sekai: Colorful Stage`）与结果中 `Region:` 同时存在时的解析歧义。
+- 完整检测改为一次同时下发可用的 IPv4 / IPv6 两个独立任务；结果分别写入 IPv4、IPv6 页签。快速检测仍只检测当前选择的协议族。
+- 流媒体 / AI UI 按「AI 平台 / 跨国平台 / 当前区域平台 / 子分类」分组；移除此前容易被误解为网络 RTT 的“延迟”字段和每个卡片底部说明，并进一步压缩卡片高度。
+- 若主机缺少上游部分检测所需的 `jq` 或 `python/python3`，仅在 UI 给出提示，不自动安装软件；可正常解析的项目仍继续返回。
+- 已通过真实 GitHub Actions 外网验证：Global IPv4、Global IPv6、日本 IPv4 检测均成功执行；同时完成 Region 映射、输出解析、IPv4/IPv6 function-mode 隔离测试。临时外网验证 workflow 已删除。
+- Panel / APK Release 升级至 `2.3.400`；本次确实修改 Agent 的流媒体检测执行与上报逻辑，因此 Agent 升级至 `2.2.229`；ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.3.399] - 2026-10-01
 
 ### 网络画像 API 配置与 Agent 升级状态修复
