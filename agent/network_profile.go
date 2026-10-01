@@ -795,6 +795,22 @@ func profileRiskSourceHasUsefulData(source profileRiskSource) bool {
 		source.IsDatacenter != nil || source.IsAbuser != nil || source.IsBot != nil
 }
 
+func profileApplySharedRiskFallbacks(target *profileRiskSource, ffraud, ip99, proxyCheck profileRiskSource) {
+	fallbacks := []struct {
+		provider string
+		source   profileRiskSource
+	}{
+		{provider: "FFraud", source: ffraud},
+		{provider: "IP99", source: ip99},
+		{provider: "ProxyCheck", source: proxyCheck},
+	}
+	for _, fallback := range fallbacks {
+		if profileRiskSourceHasUsefulData(fallback.source) {
+			profileMergeRiskSourceFallback(target, fallback.source, fallback.provider)
+		}
+	}
+}
+
 func profileFFraudFallbackSource(client *http.Client, ip string) profileRiskSource {
 	source := profileRiskSource{Name: "FFraud"}
 	var payload map[string]any
@@ -1511,38 +1527,40 @@ func profileRisk(cfg Config, client *http.Client, ip string) map[string]any {
 	ip99 := profileIP99FallbackSource(client, ip)
 
 	// ipapi: prefer the exact check.place response, then api.ipapi.is anonymous
-	// data, then FFraud/IP99 only for fields the anonymous tier does not expose.
+	// data. The anonymous tier can return only basic identity fields, so keep a
+	// transparent shared fallback chain for risk/type fields.
 	if strings.TrimSpace(sources[3].Error) != "" || !profileRiskSourceHasUsefulData(sources[3]) ||
 		sources[3].NetworkType == "" || sources[3].CompanyType == "" || sources[3].Score == nil {
 		direct := profileIPAPIDirectSource(client, ip)
 		if profileRiskSourceHasUsefulData(direct) {
 			profileMergeRiskSourceFallback(&sources[3], direct, "ipapi.is")
 		}
-		if profileRiskSourceHasUsefulData(ffraud) {
-			profileMergeRiskSourceFallback(&sources[3], ffraud, "FFraud")
-		}
-		if profileRiskSourceHasUsefulData(ip99) {
-			profileMergeRiskSourceFallback(&sources[3], ip99, "IP99")
+		profileApplySharedRiskFallbacks(&sources[3], ffraud, ip99, sources[0])
+	}
+
+	// Scamalytics and IPQS are also served by check.place in the original
+	// IPQuality flow. Cloudflare can reject datacenter egress before either
+	// provider is reached. Preserve exact data when available; otherwise fill
+	// the row from independent public reputation sources and label that fallback
+	// explicitly in the UI instead of leaving a permanent dash.
+	for _, index := range []int{5, 6} {
+		if strings.TrimSpace(sources[index].Error) != "" || !profileRiskSourceHasUsefulData(sources[index]) || sources[index].Score == nil {
+			profileApplySharedRiskFallbacks(&sources[index], ffraud, ip99, sources[0])
 		}
 	}
 
-	// AbuseIPDB requires a key for its official API. When check.place is
-	// unavailable, FFraud's public abuse/reputation feed is the closest
-	// no-key substitute; IP99 is the final safety net.
+	// AbuseIPDB's official API is used when ABUSEIPDB_API_KEY is configured.
+	// Without a key (or when the request fails), keep the same transparent
+	// fallback chain so the row remains useful.
 	if strings.TrimSpace(sources[7].Error) != "" || !profileRiskSourceHasUsefulData(sources[7]) ||
 		sources[7].NetworkType == "" || sources[7].Score == nil {
-		if profileRiskSourceHasUsefulData(ffraud) {
-			profileMergeRiskSourceFallback(&sources[7], ffraud, "FFraud")
-		}
-		if profileRiskSourceHasUsefulData(ip99) {
-			profileMergeRiskSourceFallback(&sources[7], ip99, "IP99")
-		}
+		profileApplySharedRiskFallbacks(&sources[7], ffraud, ip99, sources[0])
 	}
 
 	// IP2Location: if check.place is blocked, scrape the provider's public demo
 	// first because it exposes Usage Type / AS Usage Type / Fraud Score without
-	// an API key. The keyless JSON endpoint and generic public feeds are only
-	// later fallbacks.
+	// an API key. The keyless JSON endpoint and shared reputation sources fill
+	// only fields still missing after the same-provider demo.
 	if strings.TrimSpace(sources[8].Error) != "" || !profileRiskSourceHasUsefulData(sources[8]) ||
 		sources[8].NetworkType == "" || sources[8].CompanyType == "" || sources[8].Score == nil {
 		demo := profileIP2LocationDemoSource(client, ip)
@@ -1553,12 +1571,7 @@ func profileRisk(cfg Config, client *http.Client, ip string) map[string]any {
 		if profileRiskSourceHasUsefulData(direct) {
 			profileMergeRiskSourceFallback(&sources[8], direct, "IP2Location.io")
 		}
-		if profileRiskSourceHasUsefulData(ffraud) {
-			profileMergeRiskSourceFallback(&sources[8], ffraud, "FFraud")
-		}
-		if profileRiskSourceHasUsefulData(ip99) {
-			profileMergeRiskSourceFallback(&sources[8], ip99, "IP99")
-		}
+		profileApplySharedRiskFallbacks(&sources[8], ffraud, ip99, sources[0])
 	}
 
 	var scoreTotal float64
