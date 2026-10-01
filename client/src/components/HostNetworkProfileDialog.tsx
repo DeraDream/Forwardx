@@ -54,6 +54,39 @@ function riskScoreText(source: any) {
   return Number.isInteger(score) ? String(score) : score.toFixed(1);
 }
 
+function normalizeRegionCode(value: unknown) {
+  const raw = String(value || "").trim().toUpperCase();
+  if (!raw) return "";
+  if (/^[A-Z]{2}$/.test(raw)) return raw;
+
+  const alpha3: Record<string, string> = {
+    SGP: "SG", USA: "US", HKG: "HK", CHN: "CN", JPN: "JP", KOR: "KR",
+    TWN: "TW", GBR: "GB", DEU: "DE", CAN: "CA", AUS: "AU", FRA: "FR",
+    IND: "IN", NLD: "NL", CHE: "CH", SWE: "SE", NOR: "NO", FIN: "FI",
+  };
+  if (alpha3[raw]) return alpha3[raw];
+
+  const names: Array<[RegExp, string]> = [
+    [/^SINGAPORE\b/, "SG"],
+    [/^UNITED STATES\b|^USA\b/, "US"],
+    [/^HONG KONG\b/, "HK"],
+    [/^CHINA\b/, "CN"],
+    [/^JAPAN\b/, "JP"],
+    [/^SOUTH KOREA\b|^KOREA\b/, "KR"],
+    [/^TAIWAN\b/, "TW"],
+    [/^UNITED KINGDOM\b|^GREAT BRITAIN\b/, "GB"],
+    [/^GERMANY\b/, "DE"],
+    [/^CANADA\b/, "CA"],
+    [/^AUSTRALIA\b/, "AU"],
+    [/^FRANCE\b/, "FR"],
+    [/^INDIA\b/, "IN"],
+  ];
+  for (const [pattern, code] of names) {
+    if (pattern.test(raw)) return code;
+  }
+  return "";
+}
+
 function appRegionClass(region: unknown, baseCountry: string, status: string) {
   const code = String(region || "").trim().toUpperCase();
   if (!/^[A-Z]{2}$/.test(code)) return "text-muted-foreground";
@@ -142,15 +175,18 @@ export function HostNetworkProfileDialog({
   const risk = data.risk || {};
   const bgpGraphPath = String(data.network?.bgpGraphPath || "").trim();
   const bgpPrefix = String(data.network?.prefix || "").trim();
+  const embeddedBGPGraphDataUrl = String(data.network?.bgpGraphDataUrl || "").trim();
+  const bgpRevision = String(current?.taskId || current?.updatedAt || "");
   const bgpGraphQuery = trpc.networkProfile.bgpGraph.useQuery(
-    { hostId, family },
+    { hostId, family, revision: bgpRevision },
     {
-      enabled: open && hostId > 0 && !!(bgpGraphPath || bgpPrefix),
-      staleTime: 6 * 60 * 60 * 1000,
+      enabled: open && hostId > 0 && !embeddedBGPGraphDataUrl && !!(bgpGraphPath || bgpPrefix),
+      staleTime: 0,
       refetchOnWindowFocus: false,
       retry: 1,
     },
   );
+  const bgpDisplayDataUrl = embeddedBGPGraphDataUrl || String(bgpGraphQuery.data?.dataUrl || "");
   const apps = useMemo(() => Object.values(data.apps || {}) as any[], [data.apps]);
   const steps = current?.steps || {};
   const completed = Object.values(steps).filter((item: any) => ["success", "error", "skip"].includes(item?.status)).length;
@@ -213,14 +249,23 @@ export function HostNetworkProfileDialog({
   const scoredRiskSources = riskOrder
     .map((name) => riskSources.find((item: any) => item?.name === name))
     .filter((source: any) => source && Number.isFinite(Number(source?.score)));
-  // Only databases whose fields are actually comparable to IPQuality's
-  // “使用类型 / 公司类型” semantics belong in this matrix. FFraud/IP99/ProxyCheck
-  // expose different classification concepts and can be objectively wrong for
-  // routing blocks (e.g. classifying a VPS prefix as Residential/Business).
-  const typeSourceNames = ["IPinfo", "ipregistry", "IP2Location", "AbuseIPDB"];
-  const typeSources = typeSourceNames
-    .map((name) => ({ name, source: riskSources.find((item: any) => item?.name === name) }))
-    .filter((item) => item.source && (item.source.networkType || item.source.companyType));
+  // Keep this matrix limited to provider fields that actually describe usage/company type.
+  // MaxMind contributes its Enterprise user_type when exposed by the lookup;
+  // DB-IP contributes its documented usageType. Neither field is synthesized.
+  const maxMindTypeSource = {
+    name: "MaxMind",
+    networkType: String(maxmind.userType || "").trim(),
+    companyType: "",
+    error: "",
+  };
+  const typeSources = [
+    { name: "IPinfo", source: riskSources.find((item: any) => item?.name === "IPinfo") },
+    { name: "ipregistry", source: riskSources.find((item: any) => item?.name === "ipregistry") },
+    { name: "MaxMind", source: maxMindTypeSource },
+    { name: "DB-IP", source: riskSources.find((item: any) => item?.name === "DB-IP") },
+    { name: "IP2Location", source: riskSources.find((item: any) => item?.name === "IP2Location") },
+    { name: "AbuseIPDB", source: riskSources.find((item: any) => item?.name === "AbuseIPDB") },
+  ].filter((item) => item.source && (item.source.networkType || item.source.companyType));
   const mail = data.mail || {};
   const mailProviders = Array.isArray(mail.providers) ? mail.providers : [];
   const dnsbl = mail.dnsbl || {};
@@ -353,46 +398,54 @@ export function HostNetworkProfileDialog({
                 <div className="flex items-center gap-2 text-sm font-medium text-amber-700 dark:text-amber-300"><ShieldCheck className="h-4 w-4" />IP 风险</div>
                 <span className="text-[10px] text-muted-foreground">仅展示真实直连数据库评分；无评分来源自动隐藏</span>
               </div>
-              <div className="mb-3">
-                <div className="grid grid-cols-5 text-center text-[10px] text-muted-foreground">
-                  <span>极低</span><span>低</span><span>中等</span><span>高</span><span>极高</span>
-                </div>
-                <div className="mt-1 flex h-2 overflow-hidden rounded-full">
-                  <span className="w-1/5 bg-emerald-500/70" />
-                  <span className="w-1/5 bg-emerald-400/70" />
-                  <span className="w-1/5 bg-amber-400/80" />
-                  <span className="w-1/5 bg-orange-500/80" />
-                  <span className="w-1/5 bg-red-500/80" />
-                </div>
-              </div>
-              <div className="space-y-2.5">
-                {scoredRiskSources.length === 0 ? (
-                  <div className="rounded-md border border-dashed py-4 text-center text-xs text-muted-foreground">暂无可用风险评分</div>
-                ) : scoredRiskSources.map((source: any) => {
-                  const score = Number(source?.score);
-                  const hasScore = Number.isFinite(score);
-                  const marker = hasScore ? Math.max(0, Math.min(100, score)) : 0;
-                  return (
-                    <div key={source.name} className="grid grid-cols-[96px_minmax(0,1fr)_54px_auto] items-center gap-2 text-xs">
-                      <div className="min-w-0">
-                        <div className="font-medium">{source.name}</div>
-                      </div>
-                      <div className="relative h-2 overflow-visible rounded-full bg-muted">
-                        <div className="absolute inset-0 flex overflow-hidden rounded-full opacity-70">
-                          <span className="w-1/5 bg-emerald-500/70" />
-                          <span className="w-1/5 bg-emerald-400/70" />
-                          <span className="w-1/5 bg-amber-400/80" />
-                          <span className="w-1/5 bg-orange-500/80" />
-                          <span className="w-1/5 bg-red-500/80" />
-                        </div>
-                        {hasScore ? <span className="absolute top-1/2 h-3.5 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-foreground shadow-sm" style={{ left: `${marker}%` }} /> : null}
-                      </div>
-                      <div className="text-right font-mono">{riskScoreText(source)}</div>
-                      <Badge variant="outline" title={source.error || ""} className={riskLevelBadgeClass(source.level)}>{riskLevelText(source.level)}</Badge>
+              {scoredRiskSources.length === 0 ? (
+                <div className="rounded-md border border-dashed py-4 text-center text-xs text-muted-foreground">暂无可用风险评分</div>
+              ) : (
+                <div className="grid grid-cols-[96px_minmax(0,1fr)_54px_72px] items-center gap-x-2 gap-y-2.5 text-xs">
+                  <div />
+                  <div>
+                    <div className="grid grid-cols-5 text-center text-[10px] text-muted-foreground">
+                      <span>极低</span><span>低</span><span>中等</span><span>高</span><span>极高</span>
                     </div>
-                  );
-                })}
-              </div>
+                    <div className="mt-1 flex h-3 overflow-hidden rounded-full">
+                      <span className="w-1/5 bg-emerald-500/70" />
+                      <span className="w-1/5 bg-emerald-400/70" />
+                      <span className="w-1/5 bg-amber-400/80" />
+                      <span className="w-1/5 bg-orange-500/80" />
+                      <span className="w-1/5 bg-red-500/80" />
+                    </div>
+                  </div>
+                  <div />
+                  <div />
+                  {scoredRiskSources.map((source: any) => {
+                    const score = Number(source?.score);
+                    const hasScore = Number.isFinite(score);
+                    const marker = hasScore ? Math.max(0, Math.min(100, score)) : 0;
+                    return (
+                      <div key={source.name} className="contents">
+                        <div className="min-w-0 font-medium">{source.name}</div>
+                        <div className="relative h-3 rounded-full bg-muted">
+                          <div className="absolute inset-0 flex overflow-hidden rounded-full opacity-70">
+                            <span className="w-1/5 bg-emerald-500/70" />
+                            <span className="w-1/5 bg-emerald-400/70" />
+                            <span className="w-1/5 bg-amber-400/80" />
+                            <span className="w-1/5 bg-orange-500/80" />
+                            <span className="w-1/5 bg-red-500/80" />
+                          </div>
+                          {hasScore ? (
+                            <>
+                              <span className="absolute inset-y-0 right-0 rounded-r-full bg-muted" style={{ width: `${100 - marker}%` }} />
+                              <span className="absolute top-1/2 h-4 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-foreground shadow-sm" style={{ left: `${marker}%` }} />
+                            </>
+                          ) : null}
+                        </div>
+                        <div className="text-right font-mono">{riskScoreText(source)}</div>
+                        <Badge variant="outline" title={source.error || ""} className={`justify-self-end ${riskLevelBadgeClass(source.level)}`}>{riskLevelText(source.level)}</Badge>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
             <div className="rounded-lg border border-violet-200/60 bg-violet-500/[0.025] p-3">
@@ -401,21 +454,22 @@ export function HostNetworkProfileDialog({
               <div className="grid gap-2 sm:grid-cols-2 md:grid-cols-3">
                 {apps.map((app: any) => {
                   const status = String(app.status || "unknown");
-                  const region = String(app.region || "").trim().toUpperCase();
+                  const region = normalizeRegionCode(app.region);
                   return (
-                    <div key={app.id} className={`min-h-20 rounded-md border px-2.5 py-2 ${statusCardClass(status)}`}>
+                    <div key={app.id} className={`min-h-36 rounded-md border px-3 py-2.5 ${statusCardClass(status)}`}>
                       <div className="flex items-center justify-between gap-2">
                         <div className="truncate text-sm font-medium">{app.name || app.id}</div>
                         {statusBadge(status)}
                       </div>
-                      <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px]">
-                        <span className="text-muted-foreground">地区：</span>
-                        <span className={appRegionClass(region, baseCountry, status)}>{region || "—"}</span>
-                        <span className="text-muted-foreground">方式：</span>
-                        {unlockMethodBadge(app.unlockMethod)}
-                        {app.latencyMs != null ? <span className="text-muted-foreground">{app.latencyMs} ms</span> : null}
+                      <div className="mt-2.5 space-y-1.5 text-[10px] leading-5">
+                        <div><span className="inline-block w-11 text-muted-foreground">地区</span><span className={appRegionClass(region, baseCountry, status)}>{region || "—"}</span></div>
+                        <div className="flex items-center"><span className="inline-block w-11 shrink-0 text-muted-foreground">方式</span>{unlockMethodBadge(app.unlockMethod)}</div>
+                        <div><span className="inline-block w-11 text-muted-foreground">延迟</span><span>{app.latencyMs != null ? `${app.latencyMs} ms` : "—"}</span></div>
+                        <div className="border-t border-current/10 pt-1.5 text-muted-foreground">
+                          <span className="mr-1.5">说明</span>
+                          <span className="break-words" title={app.note || app.message || ""}>{app.note || app.message || "—"}</span>
+                        </div>
                       </div>
-                      {(app.note || app.message) ? <div className="mt-1 truncate text-[10px] text-muted-foreground" title={app.note || app.message}>{app.note || app.message}</div> : null}
                     </div>
                   );
                 })}
@@ -498,17 +552,17 @@ export function HostNetworkProfileDialog({
                 ) : null}
               </div>
               {(bgpGraphPath || bgpPrefix) ? (
-                bgpGraphQuery.isLoading ? (
+                bgpDisplayDataUrl ? (
+                  <div className="overflow-auto rounded-md border bg-white p-2">
+                    <img src={bgpDisplayDataUrl} alt={`BGP 路由拓扑 ${bgpPrefix || detectedIp || ""}`} className="mx-auto h-auto min-w-[680px] max-w-none lg:min-w-0 lg:max-w-full" />
+                  </div>
+                ) : bgpGraphQuery.isLoading ? (
                   <div className="flex min-h-40 items-center justify-center rounded-md border border-dashed text-xs text-muted-foreground">
                     <Activity className="mr-2 h-4 w-4 animate-spin" />正在加载 BGP 拓扑图…
                   </div>
-                ) : bgpGraphQuery.data?.available && bgpGraphQuery.data.dataUrl ? (
-                  <div className="overflow-auto rounded-md border bg-white p-2">
-                    <img src={bgpGraphQuery.data.dataUrl} alt={`BGP 路由拓扑 ${bgpPrefix || detectedIp || ""}`} className="mx-auto h-auto min-w-[680px] max-w-none lg:min-w-0 lg:max-w-full" />
-                  </div>
                 ) : (
                   <div className="rounded-md border border-dashed px-3 py-8 text-center text-xs text-muted-foreground">
-                    BGP 拓扑获取失败{bgpGraphQuery.data?.error ? `：${bgpGraphQuery.data.error}` : ""}
+                    BGP 拓扑获取失败{bgpGraphQuery.data?.error ? `：${bgpGraphQuery.data.error}` : data.network?.bgpGraphError ? `：Agent ${data.network.bgpGraphError}` : ""}
                   </div>
                 )
               ) : (
@@ -516,7 +570,7 @@ export function HostNetworkProfileDialog({
                   当前未获得 Prefix，无法生成 BGP 拓扑图。
                 </div>
               )}
-              <div className="mt-2 text-[10px] text-muted-foreground">图像来自 BGP.Tools Connectivity；新版由 Agent 使用目标机出口直接获取 SVG，Panel 仅作为旧数据回退。</div>
+              <div className="mt-2 text-[10px] text-muted-foreground">图像来自 BGP.Tools Connectivity；优先直接使用本次 Agent 回传的 SVG，新检测任务会自动失效旧缓存，Panel 仅作回退。</div>
             </div>
           </div>
         )}
