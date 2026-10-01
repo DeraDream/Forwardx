@@ -15,11 +15,7 @@ const NETWORK_PROFILE_PROXY_CACHE_LIMIT = 2_048;
 const NETWORK_PROFILE_PROXY_PROVIDERS = new Set([
   "maxmind",
   "proxycheck",
-  "scamalytics",
-  "ipqualityscore",
-  "ipapi",
   "abuseipdb",
-  "ip2location",
 ]);
 
 type NetworkProfileProxyCacheEntry = {
@@ -37,19 +33,20 @@ function networkProfileProxyRequest(ip: string, provider: string) {
   if (provider === "proxycheck") {
     return { url: `https://proxycheck.io/v2/${escapedIp}?vpn=1&asn=1&risk=1&days=7`, headers: {} as Record<string, string> };
   }
-  if (provider === "abuseipdb" && ENV.abuseIpdbApiKey.trim()) {
+  if (provider === "abuseipdb") {
+    const apiKey = ENV.abuseIpdbApiKey.trim();
+    if (!apiKey) {
+      throw new Error("AbuseIPDB API key is not configured");
+    }
     return {
       url: `https://api.abuseipdb.com/api/v2/check?ipAddress=${escapedIp}&maxAgeInDays=90&verbose=`,
       headers: {
-        Key: ENV.abuseIpdbApiKey.trim(),
+        Key: apiKey,
         Accept: "application/json",
       },
     };
   }
-  return {
-    url: `https://ipinfo.check.place/${escapedIp}?db=${encodeURIComponent(provider)}`,
-    headers: {} as Record<string, string>,
-  };
+  throw new Error("unsupported network profile proxy provider");
 }
 
 function pruneNetworkProfileProxyCache(now = Date.now()) {
