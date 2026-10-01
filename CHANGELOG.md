@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.3.391] - 2026-10-01
+
+### 网络画像 BGP 拓扑、原生/广播判定与 IP 类型信息增强
+
+- 网络画像新增 BGP.Tools Connectivity 拓扑图，Agent 复用 Prefix 页面解析拓扑 SVG 路径，Panel 代理并缓存 6 小时，减少重复请求。
+- “原生 IP / 广播 IP”判定改为多源证据：ipwho.is / ipapi.is / MaxMind GeoIP 作为实际地区，MaxMind RegisteredCountry / RDAP / BGP.Tools WHOIS 作为注册/分配地区；证据不足或互相冲突时保守显示“待确认”。
+- 新增 MaxMind 基础信息展示：自治系统号、组织、坐标、地图、城市、使用地、注册地、时区和 IP 类型。
+- 新增 IPinfo、ipregistry、ipapi、IP2Location 的“使用类型 / 公司类型”矩阵，按各数据库自身分类口径展示。
+- 修正顶部“使用类型”来源：不再把 ProxyCheck 的 VPN/Proxy 安全分类当成网络使用类型；网络域名单独展示。
+- Panel / APK Release 升级至 `2.3.391`；Agent 升级至 `2.2.221`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.3.390] - 2026-10-01
 
 ### 同步上游稳定性修复与延迟探测重构
