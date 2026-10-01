@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	_ "embed"
 	"encoding/base64"
@@ -12,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os/exec"
 	"regexp"
 	"sort"
 	"strconv"
@@ -39,6 +41,13 @@ type networkProfileReport struct {
 
 //go:embed dnsbl.list
 var profileDNSBLList string
+
+//go:embed region_restriction_check.sh
+var profileRRCScript string
+
+const profileRRCSourceCommit = "ab6829eb07c4c592c1f8f3dac736d675667d1a08"
+
+var profileRRCExecSemaphore = make(chan struct{}, 1)
 
 
 func profileHTTPClient(family string, timeout time.Duration) *http.Client {
@@ -2393,6 +2402,268 @@ func profileGenericAppCheck(client *http.Client, id, name, target string) map[st
 	}
 }
 
+
+type profileRRCRegionPlan struct {
+	Function string
+	Label    string
+}
+
+var profileRRCANSI = regexp.MustCompile("\x1b\\[[0-9;?]*[ -/]*[@-~]")
+var profileRRCResultLine = regexp.MustCompile("^(.+?):\\s+(.+)$")
+var profileRRCRegionPattern = regexp.MustCompile("(?i)Region:\\s*([A-Za-z]{2,3})")
+var profileRRCHeadingPattern = regexp.MustCompile("\\[\\s*([^\\]]+?)\\s*\\]")
+
+func profileRRCRegionForCountry(country string) profileRRCRegionPlan {
+	code := strings.ToUpper(strings.TrimSpace(country))
+	switch code {
+	case "TW":
+		return profileRRCRegionPlan{Function: "TW_UnlockTest", Label: "台湾平台"}
+	case "HK", "MO":
+		return profileRRCRegionPlan{Function: "HK_UnlockTest", Label: "香港平台"}
+	case "JP":
+		return profileRRCRegionPlan{Function: "JP_UnlockTest", Label: "日本平台"}
+	case "KR":
+		return profileRRCRegionPlan{Function: "KR_UnlockTest", Label: "韩国平台"}
+	}
+	northAmerica := map[string]bool{"US": true, "CA": true, "MX": true}
+	southAmerica := map[string]bool{
+		"AR": true, "BO": true, "BR": true, "CL": true, "CO": true, "EC": true,
+		"GY": true, "PY": true, "PE": true, "SR": true, "UY": true, "VE": true,
+	}
+	europe := map[string]bool{
+		"AL": true, "AD": true, "AT": true, "BY": true, "BE": true, "BA": true, "BG": true,
+		"HR": true, "CY": true, "CZ": true, "DK": true, "EE": true, "FI": true, "FR": true,
+		"DE": true, "GR": true, "HU": true, "IS": true, "IE": true, "IT": true, "LV": true,
+		"LI": true, "LT": true, "LU": true, "MT": true, "MD": true, "MC": true, "ME": true,
+		"NL": true, "MK": true, "NO": true, "PL": true, "PT": true, "RO": true, "RU": true,
+		"SM": true, "RS": true, "SK": true, "SI": true, "ES": true, "SE": true, "CH": true,
+		"UA": true, "GB": true, "VA": true,
+	}
+	oceania := map[string]bool{
+		"AU": true, "NZ": true, "FJ": true, "PG": true, "SB": true, "VU": true, "WS": true,
+		"TO": true, "FM": true, "MH": true, "PW": true, "KI": true, "NR": true, "TV": true,
+	}
+	southeastAsia := map[string]bool{
+		"SG": true, "MY": true, "TH": true, "VN": true, "ID": true, "PH": true,
+		"BN": true, "KH": true, "LA": true, "MM": true, "TL": true,
+	}
+	africa := map[string]bool{
+		"DZ": true, "AO": true, "BJ": true, "BW": true, "BF": true, "BI": true, "CV": true,
+		"CM": true, "CF": true, "TD": true, "KM": true, "CD": true, "CG": true, "CI": true,
+		"DJ": true, "EG": true, "GQ": true, "ER": true, "SZ": true, "ET": true, "GA": true,
+		"GM": true, "GH": true, "GN": true, "GW": true, "KE": true, "LS": true, "LR": true,
+		"LY": true, "MG": true, "MW": true, "ML": true, "MR": true, "MU": true, "MA": true,
+		"MZ": true, "NA": true, "NE": true, "NG": true, "RW": true, "ST": true, "SN": true,
+		"SC": true, "SL": true, "SO": true, "ZA": true, "SS": true, "SD": true, "TZ": true,
+		"TG": true, "TN": true, "UG": true, "ZM": true, "ZW": true,
+	}
+	switch {
+	case northAmerica[code]:
+		return profileRRCRegionPlan{Function: "NA_UnlockTest", Label: "北美平台"}
+	case southAmerica[code]:
+		return profileRRCRegionPlan{Function: "SA_UnlockTest", Label: "南美平台"}
+	case europe[code]:
+		return profileRRCRegionPlan{Function: "EU_UnlockTest", Label: "欧洲平台"}
+	case oceania[code]:
+		return profileRRCRegionPlan{Function: "OA_UnlockTest", Label: "大洋洲平台"}
+	case southeastAsia[code]:
+		return profileRRCRegionPlan{Function: "SEA_UnlockTest", Label: "东南亚平台"}
+	case africa[code]:
+		return profileRRCRegionPlan{Function: "AF_UnlockTest", Label: "非洲平台"}
+	default:
+		return profileRRCRegionPlan{}
+	}
+}
+
+func profileRRCSlug(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	var b strings.Builder
+	lastDash := false
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if !lastDash {
+			b.WriteByte('-')
+			lastDash = true
+		}
+	}
+	result := strings.Trim(b.String(), "-")
+	if result == "" {
+		result = "item"
+	}
+	if len(result) > 38 {
+		result = result[:38]
+	}
+	return result
+}
+
+func profileRRCStatus(value string) string {
+	lower := strings.ToLower(strings.TrimSpace(value))
+	switch {
+	case strings.Contains(lower, "ipv6 not support"), strings.Contains(lower, "not supported"), strings.Contains(lower, "unsupported"):
+		return "unsupported"
+	case strings.HasPrefix(lower, "failed"), strings.Contains(lower, "network connection"):
+		return "error"
+	case strings.Contains(lower, "originals only"), strings.Contains(lower, "oversea only"), strings.Contains(lower, "partial"):
+		return "partial"
+	case strings.HasPrefix(lower, "yes"), strings.HasPrefix(lower, "serviced by"):
+		return "unlocked"
+	case lower == "no", strings.HasPrefix(lower, "no "), strings.Contains(lower, "not available"):
+		return "blocked"
+	default:
+		return "info"
+	}
+}
+
+func profileRRCRegionFromValue(value string) string {
+	if match := profileRRCRegionPattern.FindStringSubmatch(value); len(match) > 1 {
+		code := strings.ToUpper(strings.TrimSpace(match[1]))
+		if len(code) == 2 || len(code) == 3 {
+			return code
+		}
+	}
+	return ""
+}
+
+func profileRRCBaseHeading(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "multination", "japan", "hong kong", "taiwan", "north america", "south america",
+		"europe", "oceania", "korean", "southeast asia", "africa":
+		return true
+	default:
+		return false
+	}
+}
+
+func profileRRCParseOutput(raw, category, group string) []map[string]any {
+	cleaned := profileRRCANSI.ReplaceAllString(strings.ReplaceAll(raw, "\r", "\n"), "")
+	subgroup := ""
+	results := make([]map[string]any, 0, 32)
+	seen := map[string]int{}
+	for _, rawLine := range strings.Split(cleaned, "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "" || strings.HasPrefix(line, "jq: parse error") || strings.HasPrefix(line, "curl:") {
+			continue
+		}
+		if strings.HasPrefix(line, "---") && strings.HasSuffix(line, "---") {
+			name := strings.Trim(strings.TrimSpace(line), "-")
+			if name != "" {
+				subgroup = name
+			}
+			continue
+		}
+		if match := profileRRCHeadingPattern.FindStringSubmatch(line); len(match) > 1 {
+			heading := strings.TrimSpace(match[1])
+			if heading != "" && !profileRRCBaseHeading(heading) {
+				subgroup = heading
+			}
+			continue
+		}
+		match := profileRRCResultLine.FindStringSubmatch(line)
+		if len(match) < 3 {
+			continue
+		}
+		name := strings.TrimSpace(match[1])
+		value := strings.TrimSpace(match[2])
+		if name == "" || value == "" || name == "IPv4" || name == "IPv6" {
+			continue
+		}
+		status := profileRRCStatus(value)
+		region := profileRRCRegionFromValue(value)
+		if region == "" {
+			switch strings.ToLower(name) {
+			case "spotify region", "google location":
+				region = value
+			}
+		}
+		baseID := "rrc-" + profileRRCSlug(category) + "-" + profileRRCSlug(name)
+		seen[baseID]++
+		id := baseID
+		if seen[baseID] > 1 {
+			id = fmt.Sprintf("%s-%d", baseID, seen[baseID])
+		}
+		item := map[string]any{
+			"id": id, "name": name, "status": status, "region": region,
+			"category": category, "group": group, "source": "RegionRestrictionCheck",
+			"sourceCommit": profileRRCSourceCommit,
+		}
+		if subgroup != "" {
+			item["subgroup"] = subgroup
+		}
+		if status == "info" || status == "partial" || status == "error" || status == "unsupported" {
+			item["value"] = value
+		}
+		results = append(results, item)
+	}
+	return results
+}
+
+func profileRunRRCFunction(functionName, family, category, group string, timeout time.Duration) ([]map[string]any, error) {
+	if strings.TrimSpace(functionName) == "" {
+		return nil, nil
+	}
+	familyArg := "4"
+	if strings.EqualFold(strings.TrimSpace(family), "ipv6") {
+		familyArg = "6"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	profileRRCExecSemaphore <- struct{}{}
+	defer func() { <-profileRRCExecSemaphore }()
+
+	cmd := exec.CommandContext(ctx, "bash", "-s", "--", "-E", "-M", familyArg, "-F", functionName)
+	cmd.Stdin = strings.NewReader(profileRRCScript)
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	err := cmd.Run()
+	items := profileRRCParseOutput(output.String(), category, group)
+	if len(items) > 0 {
+		return items, nil
+	}
+	if ctx.Err() != nil {
+		return nil, fmt.Errorf("%s timeout: %w", functionName, ctx.Err())
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%s failed: %w", functionName, err)
+	}
+	return nil, fmt.Errorf("%s returned no parseable results", functionName)
+}
+
+func profileRunRRCStreams(family, actualCountry string, full bool) ([]map[string]any, []string) {
+	items := make([]map[string]any, 0, 48)
+	warnings := make([]string, 0, 2)
+	global, err := profileRunRRCFunction("Global_UnlockTest", family, "global", "跨国平台", 90*time.Second)
+	if err != nil {
+		warnings = append(warnings, err.Error())
+	} else {
+		items = append(items, global...)
+	}
+	if full {
+		plan := profileRRCRegionForCountry(actualCountry)
+		if plan.Function != "" {
+			regional, regionalErr := profileRunRRCFunction(plan.Function, family, "regional", plan.Label, 150*time.Second)
+			if regionalErr != nil {
+				warnings = append(warnings, regionalErr.Error())
+			} else {
+				items = append(items, regional...)
+			}
+		}
+	}
+	return items, warnings
+}
+
+func profileAICheck(client *http.Client, id, name, target string) map[string]any {
+	result := profileAppCheck(client, id, name, target)
+	result["category"] = "ai"
+	result["group"] = "AI 平台"
+	return result
+}
+
 func profileAppCheck(client *http.Client, id, name, target string) map[string]any {
 	switch id {
 	case "netflix":
@@ -2499,40 +2770,28 @@ func runNetworkProfile(cfg Config, request networkProfileRequest) {
 	}
 	report("risk", "success", risk, "")
 
-	apps := []struct{ id, name, target string }{
+	aiApps := []struct{ id, name, target string }{
 		{"chatgpt", "ChatGPT", "https://chatgpt.com/"},
 		{"claude", "Claude", "https://claude.ai/"},
 		{"gemini", "Gemini", "https://gemini.google.com/"},
-		{"youtube", "YouTube", "https://www.youtube.com/premium"},
-		{"netflix", "Netflix", "https://www.netflix.com/"},
-		{"disney", "Disney+", "https://www.disneyplus.com/"},
-		{"tiktok", "TikTok", "https://www.tiktok.com/"},
-		{"reddit", "Reddit", "https://www.reddit.com/"},
 	}
 	if request.Mode == "full" {
-		apps = append(apps,
-			struct{ id, name, target string }{"prime", "Prime Video", "https://www.primevideo.com/"},
-			struct{ id, name, target string }{"max", "Max", "https://www.max.com/"},
-			struct{ id, name, target string }{"spotify", "Spotify", "https://www.spotify.com/"},
+		aiApps = append(aiApps,
 			struct{ id, name, target string }{"grok", "Grok", "https://grok.com/"},
 			struct{ id, name, target string }{"perplexity", "Perplexity", "https://www.perplexity.ai/"},
-			struct{ id, name, target string }{"steam", "Steam", "https://store.steampowered.com/"},
-			struct{ id, name, target string }{"apple", "Apple Region", "https://gspe1-ssl.ls.apple.com/pep/gcc"},
-			struct{ id, name, target string }{"googleplay", "Google Play", "https://play.google.com/"},
-			struct{ id, name, target string }{"bilibili_hmt", "Bilibili 港澳台", "https://api.bilibili.com/"},
 		)
 	}
 
-	report("unlock", "running", map[string]any{"total": len(apps)}, "")
+	report("unlock", "running", map[string]any{"ai": len(aiApps), "source": "RegionRestrictionCheck", "sourceCommit": profileRRCSourceCommit}, "")
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 5)
-	for _, item := range apps {
+	for _, item := range aiApps {
 		item := item
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			sem <- struct{}{}
-			result := profileAppCheck(client, item.id, item.name, item.target)
+			result := profileAICheck(client, item.id, item.name, item.target)
 			if statusText := profileString(result["status"]); statusText != "blocked" && statusText != "error" {
 				result["unlockMethod"] = profileUnlockMethod(item.target, request.Family, ip)
 			}
@@ -2545,7 +2804,32 @@ func runNetworkProfile(cfg Config, request networkProfileRequest) {
 		}()
 	}
 	wg.Wait()
-	report("unlock", "success", map[string]any{"total": len(apps)}, "")
+
+	actualCountry := profileCountryCode(identity["actualCountryCode"])
+	if actualCountry == "" {
+		actualCountry = profileCountryCode(identity["countryCode"])
+	}
+	streamItems, streamWarnings := profileRunRRCStreams(request.Family, actualCountry, request.Mode == "full")
+	for _, streamItem := range streamItems {
+		id := profileString(streamItem["id"])
+		if id == "" {
+			continue
+		}
+		status := "success"
+		if profileString(streamItem["status"]) == "error" {
+			status = "error"
+		}
+		report("app:"+id, status, streamItem, "")
+	}
+	report("unlock", "success", map[string]any{
+		"ai": len(aiApps),
+		"streaming": len(streamItems),
+		"country": actualCountry,
+		"regionGroup": profileRRCRegionForCountry(actualCountry).Label,
+		"warnings": streamWarnings,
+		"source": "RegionRestrictionCheck",
+		"sourceCommit": profileRRCSourceCommit,
+	}, "")
 
 	if request.Mode == "full" {
 		report("mail", "running", nil, "")
