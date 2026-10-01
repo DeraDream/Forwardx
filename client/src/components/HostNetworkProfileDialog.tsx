@@ -367,7 +367,7 @@ export function HostNetworkProfileDialog({
             <div className="rounded-lg border border-amber-200/70 bg-amber-500/[0.025] p-3">
               <div className="mb-3 flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 text-sm font-medium text-amber-700 dark:text-amber-300"><ShieldCheck className="h-4 w-4" />IP 风险</div>
-                <span className="text-[10px] text-muted-foreground">各数据库按自身口径独立评分</span>
+                <span className="text-[10px] text-muted-foreground">主数据源优先；受限时明确标注备用源评分</span>
               </div>
               <div className="mb-3">
                 <div className="grid grid-cols-5 text-center text-[10px] text-muted-foreground">
