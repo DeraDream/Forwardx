@@ -11,7 +11,7 @@ import {
   type NetworkProfileFamily,
 } from "../hostNetworkProfileState";
 
-export const NETWORK_PROFILE_AGENT_VERSION = "2.2.222";
+export const NETWORK_PROFILE_AGENT_VERSION = "2.2.225";
 
 const BGP_GRAPH_CACHE_MS = 6 * 60 * 60_000;
 const BGP_GRAPH_CACHE_LIMIT = 128;
@@ -200,19 +200,25 @@ export const networkProfileRouter = router({
       const graphPath = String(network?.bgpGraphPath || "").trim() || bgpGraphPathFromPrefix(prefix);
       const pageUrl = String(network?.bgpGraphPageUrl || "").trim()
         || (prefix ? `https://bgp.tools/prefix/${prefix}#connectivity` : "");
+      const embeddedDataUrl = String(network?.bgpGraphDataUrl || "").trim();
+      if (embeddedDataUrl.startsWith("data:image/svg+xml;base64,")) {
+        return { available: true as const, prefix, pageUrl, dataUrl: embeddedDataUrl, source: "agent" as const };
+      }
       if (!graphPath) {
         return { available: false as const, prefix, pageUrl, dataUrl: null };
       }
       try {
         const dataUrl = await fetchBGPGraphDataUrl(graphPath);
-        return { available: true as const, prefix, pageUrl, dataUrl };
+        return { available: true as const, prefix, pageUrl, dataUrl, source: "panel-fallback" as const };
       } catch (error) {
+        const agentError = String(network?.bgpGraphError || "").trim();
+        const panelError = error instanceof Error ? error.message : String(error);
         return {
           available: false as const,
           prefix,
           pageUrl,
           dataUrl: null,
-          error: error instanceof Error ? error.message : String(error),
+          error: agentError ? `Agent: ${agentError}; Panel: ${panelError}` : panelError,
         };
       }
     }),
