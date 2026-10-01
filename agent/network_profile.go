@@ -520,7 +520,9 @@ func profileIdentity(cfg Config, client *http.Client, ip string) (map[string]any
 		if profileString(maxmind["timezone"]) != "" {
 			result["maxmindTimezone"] = maxmind["timezone"]
 		}
-		result["basicProvider"] = "MaxMind"
+		if profileASNNumber(maxmind["asn"]) > 0 || profileCountryCode(maxmind["countryCode"]) != "" || profileString(maxmind["city"]) != "" {
+			result["basicProvider"] = "MaxMind"
+		}
 	}
 	if profileString(result["basicProvider"]) == "" && len(ipinfoBasic) > 0 {
 		result["basicProvider"] = "IPinfo"
