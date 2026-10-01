@@ -365,6 +365,9 @@ func profileIdentity(cfg Config, client *http.Client, ip string) (map[string]any
 			result["countryCode"] = profileString(who["country_code"])
 			result["continent"] = profileString(who["continent"])
 			result["timezone"] = profileString(timezone["id"])
+			result["latitude"] = who["latitude"]
+			result["longitude"] = who["longitude"]
+			result["postalCode"] = profileString(who["postal"])
 			result["flag"] = profileString(flag["emoji"])
 			result["identityProvider"] = "ipwho.is"
 			actualEvidence = profileAddCountryEvidence(actualEvidence, "ipwho.is", who["country_code"])
@@ -407,12 +410,22 @@ func profileIdentity(cfg Config, client *http.Client, ip string) (map[string]any
 		maxmindPayload = payload
 	}
 	if maxmindPayload != nil {
+		asnInfo := profileMap(maxmindPayload["ASN"])
 		country := profileMap(maxmindPayload["Country"])
 		registered := profileMap(country["RegisteredCountry"])
+		city := profileMap(maxmindPayload["City"])
+		cityCountry := profileMap(city["Country"])
+		cityContinent := profileMap(city["Continent"])
+		cityLocation := profileMap(city["Location"])
+		subdivisionName := ""
+		subdivisionCode := ""
+		if subdivisions, ok := city["Subdivisions"].([]any); ok && len(subdivisions) > 0 {
+			subdivision := profileMap(subdivisions[0])
+			subdivisionName = profileString(subdivision["Name"])
+			subdivisionCode = profileString(subdivision["IsoCode"])
+		}
 		actualCode := profileCountryCode(country["IsoCode"])
 		if actualCode == "" {
-			city := profileMap(maxmindPayload["City"])
-			cityCountry := profileMap(city["Country"])
 			actualCode = profileCountryCode(cityCountry["IsoCode"])
 		}
 		if actualCode == "" {
@@ -420,6 +433,38 @@ func profileIdentity(cfg Config, client *http.Client, ip string) (map[string]any
 		}
 		actualEvidence = profileAddCountryEvidence(actualEvidence, "MaxMind GeoIP", actualCode)
 		registeredEvidence = profileAddCountryEvidence(registeredEvidence, "MaxMind RegisteredCountry", registered["IsoCode"])
+
+		maxmind := map[string]any{
+			"asn": profileASNNumber(asnInfo["AutonomousSystemNumber"]),
+			"organization": profileString(asnInfo["AutonomousSystemOrganization"]),
+			"city": profileString(city["Name"]),
+			"postalCode": profileString(city["PostalCode"]),
+			"latitude": city["Latitude"],
+			"longitude": city["Longitude"],
+			"accuracyRadius": city["AccuracyRadius"],
+			"continentCode": profileString(cityContinent["Code"]),
+			"continent": profileString(cityContinent["Name"]),
+			"countryCode": profileString(cityCountry["IsoCode"]),
+			"country": profileString(cityCountry["Name"]),
+			"registeredCountryCode": profileString(registered["IsoCode"]),
+			"registeredCountry": profileString(registered["Name"]),
+			"timezone": profileString(cityLocation["TimeZone"]),
+			"subdivisionCode": subdivisionCode,
+			"subdivision": subdivisionName,
+		}
+		result["maxmind"] = maxmind
+		// Prefer MaxMind basic fields for the detailed basic-information section,
+		// but keep ipwho.is as fallback so the card remains useful if check.place
+		// is missing individual fields.
+		if profileString(maxmind["organization"]) != "" {
+			result["maxmindOrganization"] = maxmind["organization"]
+		}
+		if profileString(maxmind["city"]) != "" {
+			result["maxmindCity"] = maxmind["city"]
+		}
+		if profileString(maxmind["timezone"]) != "" {
+			result["maxmindTimezone"] = maxmind["timezone"]
+		}
 	}
 
 	// RDAP is queried even when MaxMind is available. A single provider matching
@@ -532,6 +577,7 @@ type profileRiskSource struct {
 	IsAbuser     *bool `json:"isAbuser,omitempty"`
 	IsBot        *bool `json:"isBot,omitempty"`
 	NetworkType  string `json:"networkType,omitempty"`
+	CompanyType  string `json:"companyType,omitempty"`
 	Error        string `json:"error,omitempty"`
 }
 
@@ -603,8 +649,10 @@ func profileIPInfoSource(client *http.Client, ip string) profileRiskSource {
 	}
 	privacy := profileMap(data["privacy"])
 	asn := profileMap(data["asn"])
+	company := profileMap(data["company"])
 	source.Country = profileString(data["country"])
 	source.NetworkType = profileString(asn["type"])
+	source.CompanyType = profileString(company["type"])
 	source.IsProxy = profileBoolPtr(privacy["proxy"])
 	source.IsVPN = profileBoolPtr(privacy["vpn"])
 	source.IsTor = profileBoolPtr(privacy["tor"])
@@ -648,8 +696,10 @@ func profileIPRegistrySource(client *http.Client, ip string) profileRiskSource {
 	country := profileMap(location["country"])
 	security := profileMap(payload["security"])
 	connection := profileMap(payload["connection"])
+	company := profileMap(payload["company"])
 	source.Country = profileString(country["code"])
 	source.NetworkType = profileString(connection["type"])
+	source.CompanyType = profileString(company["type"])
 	source.IsProxy = profileBoolPtr(security["is_proxy"])
 	source.IsVPN = profileBoolPtr(security["is_vpn"])
 	tor := profileBoolPtr(security["is_tor"])
@@ -752,7 +802,8 @@ func profileIPAPIDirectSource(client *http.Client, ip string) profileRiskSource 
 	company := profileMap(payload["company"])
 	asn := profileMap(payload["asn"])
 	source.Country = profileString(location["country_code"])
-	source.NetworkType = firstNonEmpty(profileString(asn["type"]), profileString(company["type"]))
+	source.NetworkType = profileString(asn["type"])
+	source.CompanyType = profileString(company["type"])
 	source.IsProxy = profileBoolPtr(payload["is_proxy"])
 	source.IsVPN = profileBoolPtr(payload["is_vpn"])
 	source.IsTor = profileBoolPtr(payload["is_tor"])
@@ -849,6 +900,9 @@ func profileIPAPISource(cfg Config, client *http.Client, ip string) profileRiskS
 	}
 	location := profileMap(payload["location"])
 	source.Country = profileString(location["country_code"])
+	asn := profileMap(payload["asn"])
+	source.NetworkType = profileString(asn["type"])
+	source.CompanyType = profileString(company["type"])
 	source.IsProxy = profileBoolPtr(payload["is_proxy"])
 	source.IsVPN = profileBoolPtr(payload["is_vpn"])
 	source.IsTor = profileBoolPtr(payload["is_tor"])
@@ -886,6 +940,8 @@ func profileIP2LocationSource(cfg Config, client *http.Client, ip string) profil
 	}
 	source.Country = profileString(payload["country_code"])
 	source.NetworkType = profileString(payload["usage_type"])
+	asInfo := profileMap(payload["as_info"])
+	source.CompanyType = profileString(asInfo["as_usage_type"])
 	proxyType := strings.ToUpper(profileString(payload["proxy_type"]))
 	if proxyType != "" && proxyType != "-" {
 		proxy := true
@@ -961,12 +1017,20 @@ func profileRisk(cfg Config, client *http.Client, ip string) map[string]any {
 	var scoreTotal float64
 	scoreCount := 0
 	networkType := ""
+	preferredTypeSources := map[string]bool{
+		"IPinfo": true,
+		"ipregistry": true,
+		"ipapi.is": true,
+		"ipapi": true,
+		"IP2Location": true,
+		"AbuseIPDB": true,
+	}
 	for _, source := range sources {
 		if source.Score != nil {
 			scoreTotal += *source.Score
 			scoreCount++
 		}
-		if networkType == "" && source.NetworkType != "" {
+		if networkType == "" && preferredTypeSources[source.Name] && strings.TrimSpace(source.NetworkType) != "" {
 			networkType = source.NetworkType
 		}
 	}
