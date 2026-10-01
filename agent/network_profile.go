@@ -795,21 +795,6 @@ func profileRiskSourceHasUsefulData(source profileRiskSource) bool {
 		source.IsDatacenter != nil || source.IsAbuser != nil || source.IsBot != nil
 }
 
-func profileApplySharedRiskFallbacks(target *profileRiskSource, ffraud, ip99, proxyCheck profileRiskSource) {
-	fallbacks := []struct {
-		provider string
-		source   profileRiskSource
-	}{
-		{provider: "FFraud", source: ffraud},
-		{provider: "IP99", source: ip99},
-		{provider: "ProxyCheck", source: proxyCheck},
-	}
-	for _, fallback := range fallbacks {
-		if profileRiskSourceHasUsefulData(fallback.source) {
-			profileMergeRiskSourceFallback(target, fallback.source, fallback.provider)
-		}
-	}
-}
 
 func profileFFraudFallbackSource(client *http.Client, ip string) profileRiskSource {
 	source := profileRiskSource{Name: "FFraud"}
@@ -985,6 +970,28 @@ func profileIP2LocationDirectSource(client *http.Client, ip string) profileRiskS
 	source.IsProxy = profileBoolPtr(payload["is_proxy"])
 	if !profileRiskSourceHasUsefulData(source) {
 		source.Error = "IP2Location.io data unavailable"
+	}
+	return source
+}
+
+func profileIP2LocationPrimarySource(client *http.Client, ip string) profileRiskSource {
+	// Keep IP2Location data attributable to IP2Location itself. The public demo
+	// exposes Usage Type / AS Usage Type / Fraud Score, while the keyless JSON
+	// endpoint can supplement country/proxy fields. Never fill this row with a
+	// different provider's score.
+	source := profileIP2LocationDemoSource(client, ip)
+	source.Name = "IP2Location"
+	if !profileRiskSourceHasUsefulData(source) || source.Country == "" || source.IsProxy == nil {
+		direct := profileIP2LocationDirectSource(client, ip)
+		if profileRiskSourceHasUsefulData(direct) {
+			profileMergeRiskSourceFallback(&source, direct, "IP2Location.io")
+		}
+	}
+	// Both lookups above are official IP2Location surfaces, so expose them as one
+	// provider instead of presenting the second surface as a cross-provider fallback.
+	source.FallbackProvider = ""
+	if !profileRiskSourceHasUsefulData(source) {
+		source.Error = firstNonEmpty(source.Error, "IP2Location data unavailable")
 	}
 	return source
 }
@@ -1359,7 +1366,9 @@ func profileIPAPISource(cfg Config, client *http.Client, ip string) profileRiskS
 
 func profileAbuseIPDBSource(cfg Config, client *http.Client, ip string) profileRiskSource {
 	source := profileRiskSource{Name: "AbuseIPDB"}
-	payload, err := profileRiskFromCheckPlace(cfg, client, ip, "abuseipdb")
+	// AbuseIPDB has no anonymous endpoint suitable for this query. The panel
+	// proxy calls the official API only when ABUSEIPDB_API_KEY is configured.
+	payload, err := profilePanelRiskProxy(cfg, ip, "abuseipdb")
 	if err != nil {
 		source.Error = err.Error()
 		return source
@@ -1461,117 +1470,54 @@ func profileRiskAnyTrue(sources []profileRiskSource, selector func(profileRiskSo
 }
 
 func profileRisk(cfg Config, client *http.Client, ip string) map[string]any {
-	sources := make([]profileRiskSource, 9)
-
-	// Independent providers can run in parallel.
-	directChecks := []struct {
-		index int
+	// Risk rows must represent the provider named on the row. Do not synthesize
+	// Scamalytics/IPQS/ipapi/AbuseIPDB values from unrelated fallback scores.
+	// All providers below are queried directly, except AbuseIPDB which is proxied
+	// through the panel only to keep its optional API key off the Agent.
+	checks := []struct {
+		name  string
 		check func() profileRiskSource
 	}{
-		{0, func() profileRiskSource { return profileProxyCheckSource(cfg, client, ip) }},
-		{1, func() profileRiskSource { return profileIPInfoSource(client, ip) }},
-		{2, func() profileRiskSource { return profileIPRegistrySource(client, ip) }},
-		{4, func() profileRiskSource { return profileDBIPSource(client, ip) }},
+		{"ProxyCheck", func() profileRiskSource { return profileProxyCheckSource(cfg, client, ip) }},
+		{"IPinfo", func() profileRiskSource { return profileIPInfoSource(client, ip) }},
+		{"ipregistry", func() profileRiskSource { return profileIPRegistrySource(client, ip) }},
+		{"FFraud", func() profileRiskSource { return profileFFraudFallbackSource(client, ip) }},
+		{"IP99", func() profileRiskSource { return profileIP99FallbackSource(client, ip) }},
+		{"DB-IP", func() profileRiskSource { return profileDBIPSource(client, ip) }},
+		{"IP2Location", func() profileRiskSource { return profileIP2LocationPrimarySource(client, ip) }},
+		{"AbuseIPDB", func() profileRiskSource { return profileAbuseIPDBSource(cfg, client, ip) }},
 	}
+
+	sources := make([]profileRiskSource, len(checks))
 	var wg sync.WaitGroup
-	for _, item := range directChecks {
-		item := item
+	for index, item := range checks {
+		index, item := index, item
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sources[item.index] = item.check()
+			sources[index] = item.check()
+			if strings.TrimSpace(sources[index].Name) == "" {
+				sources[index].Name = item.name
+			}
 		}()
 	}
 	wg.Wait()
 
-	// IPQuality queries check.place databases one by one. Do the same here:
-	// it is slower than a burst, but substantially more reliable on VPS egress IPs.
-	checkPlaceChecks := []struct {
-		index int
-		check func() profileRiskSource
-	}{
-		{3, func() profileRiskSource { return profileIPAPISource(cfg, client, ip) }},
-		{5, func() profileRiskSource { return profileScamalyticsSource(cfg, client, ip) }},
-		{6, func() profileRiskSource { return profileIPQSSource(cfg, client, ip) }},
-		{7, func() profileRiskSource { return profileAbuseIPDBSource(cfg, client, ip) }},
-		{8, func() profileRiskSource { return profileIP2LocationSource(cfg, client, ip) }},
-	}
-	for _, item := range checkPlaceChecks {
-		sources[item.index] = item.check()
-		if strings.TrimSpace(sources[item.index].Error) != "" {
-			time.Sleep(450 * time.Millisecond)
-			retry := item.check()
-			if strings.TrimSpace(retry.Error) == "" {
-				sources[item.index] = retry
-			}
-		}
-		time.Sleep(220 * time.Millisecond)
-	}
-
-	// Retry failed independent providers once, also sequentially.
-	for _, item := range directChecks {
-		if strings.TrimSpace(sources[item.index].Error) == "" {
+	// Retry transient failures once. A missing AbuseIPDB key remains a clean
+	// unavailable source and is hidden by the UI rather than replaced by another
+	// database's score.
+	for index, item := range checks {
+		if strings.TrimSpace(sources[index].Error) == "" {
 			continue
 		}
-		time.Sleep(350 * time.Millisecond)
+		if item.name == "AbuseIPDB" && strings.Contains(strings.ToLower(sources[index].Error), "api key") {
+			continue
+		}
+		time.Sleep(250 * time.Millisecond)
 		retry := item.check()
-		if strings.TrimSpace(retry.Error) == "" {
-			sources[item.index] = retry
+		if profileRiskSourceHasUsefulData(retry) || strings.TrimSpace(retry.Error) == "" {
+			sources[index] = retry
 		}
-	}
-
-	// check.place may be blocked by Cloudflare for datacenter egress. Keep the
-	// exact provider as primary, then fill missing fields from public, no-key
-	// endpoints so the profile remains useful instead of rendering empty cells.
-	ffraud := profileFFraudFallbackSource(client, ip)
-	ip99 := profileIP99FallbackSource(client, ip)
-
-	// ipapi: prefer the exact check.place response, then api.ipapi.is anonymous
-	// data. The anonymous tier can return only basic identity fields, so keep a
-	// transparent shared fallback chain for risk/type fields.
-	if strings.TrimSpace(sources[3].Error) != "" || !profileRiskSourceHasUsefulData(sources[3]) ||
-		sources[3].NetworkType == "" || sources[3].CompanyType == "" || sources[3].Score == nil {
-		direct := profileIPAPIDirectSource(client, ip)
-		if profileRiskSourceHasUsefulData(direct) {
-			profileMergeRiskSourceFallback(&sources[3], direct, "ipapi.is")
-		}
-		profileApplySharedRiskFallbacks(&sources[3], ffraud, ip99, sources[0])
-	}
-
-	// Scamalytics and IPQS are also served by check.place in the original
-	// IPQuality flow. Cloudflare can reject datacenter egress before either
-	// provider is reached. Preserve exact data when available; otherwise fill
-	// the row from independent public reputation sources and label that fallback
-	// explicitly in the UI instead of leaving a permanent dash.
-	for _, index := range []int{5, 6} {
-		if strings.TrimSpace(sources[index].Error) != "" || !profileRiskSourceHasUsefulData(sources[index]) || sources[index].Score == nil {
-			profileApplySharedRiskFallbacks(&sources[index], ffraud, ip99, sources[0])
-		}
-	}
-
-	// AbuseIPDB's official API is used when ABUSEIPDB_API_KEY is configured.
-	// Without a key (or when the request fails), keep the same transparent
-	// fallback chain so the row remains useful.
-	if strings.TrimSpace(sources[7].Error) != "" || !profileRiskSourceHasUsefulData(sources[7]) ||
-		sources[7].NetworkType == "" || sources[7].Score == nil {
-		profileApplySharedRiskFallbacks(&sources[7], ffraud, ip99, sources[0])
-	}
-
-	// IP2Location: if check.place is blocked, scrape the provider's public demo
-	// first because it exposes Usage Type / AS Usage Type / Fraud Score without
-	// an API key. The keyless JSON endpoint and shared reputation sources fill
-	// only fields still missing after the same-provider demo.
-	if strings.TrimSpace(sources[8].Error) != "" || !profileRiskSourceHasUsefulData(sources[8]) ||
-		sources[8].NetworkType == "" || sources[8].CompanyType == "" || sources[8].Score == nil {
-		demo := profileIP2LocationDemoSource(client, ip)
-		if profileRiskSourceHasUsefulData(demo) {
-			profileMergeRiskSourceFallback(&sources[8], demo, "IP2Location Demo")
-		}
-		direct := profileIP2LocationDirectSource(client, ip)
-		if profileRiskSourceHasUsefulData(direct) {
-			profileMergeRiskSourceFallback(&sources[8], direct, "IP2Location.io")
-		}
-		profileApplySharedRiskFallbacks(&sources[8], ffraud, ip99, sources[0])
 	}
 
 	var scoreTotal float64
@@ -1580,9 +1526,10 @@ func profileRisk(cfg Config, client *http.Client, ip string) map[string]any {
 	preferredTypeSources := map[string]bool{
 		"IPinfo": true,
 		"ipregistry": true,
-		"ipapi": true,
+		"FFraud": true,
 		"IP2Location": true,
 		"AbuseIPDB": true,
+		"ProxyCheck": true,
 	}
 	for _, source := range sources {
 		if source.Score != nil {
@@ -1593,6 +1540,7 @@ func profileRisk(cfg Config, client *http.Client, ip string) map[string]any {
 			networkType = source.NetworkType
 		}
 	}
+
 	var score any
 	level := "unknown"
 	if scoreCount > 0 {
@@ -1602,7 +1550,7 @@ func profileRisk(cfg Config, client *http.Client, ip string) map[string]any {
 	}
 
 	return map[string]any{
-		"provider": "multi-source",
+		"provider": "direct-multi-source",
 		"score": score,
 		"level": level,
 		"networkType": networkType,
