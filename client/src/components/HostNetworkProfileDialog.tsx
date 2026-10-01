@@ -82,7 +82,11 @@ function ipTypeLabel(value: unknown) {
     "fixed line isp": "家宽",
     hosting: "机房",
     dch: "机房",
+    "data center": "机房",
+    datacenter: "机房",
     "data center/web hosting/transit": "机房",
+    dyn: "动态",
+    dynamic: "动态",
     education: "教育",
     edu: "教育",
     government: "政府",
@@ -326,11 +330,14 @@ export function HostNetworkProfileDialog({
                         <td className="py-2 text-muted-foreground">使用类型</td>
                         {typeSources.map((item) => (
                           <td key={item.name} className="px-2 py-2 text-center">
-                            {item.source?.networkType
-                              ? <Badge variant="outline" className={ipTypeBadgeClass(item.source.networkType)}>{ipTypeLabel(item.source.networkType)}</Badge>
-                              : item.source?.error
-                                ? <span className="text-[10px] text-red-600 dark:text-red-400" title={item.source.error}>检测失败</span>
-                                : <span className="text-[10px] text-muted-foreground">未返回</span>}
+                            {item.source?.networkType ? (
+                              <div className="flex flex-col items-center gap-1">
+                                <Badge variant="outline" className={ipTypeBadgeClass(item.source.networkType)}>{ipTypeLabel(item.source.networkType)}</Badge>
+                                {item.source?.fallbackProvider ? <span className="text-[9px] text-muted-foreground" title={`主数据源不可用，使用 ${item.source.fallbackProvider} 补齐`}>回退 {item.source.fallbackProvider}</span> : null}
+                              </div>
+                            ) : item.source?.error
+                              ? <span className="text-[10px] text-red-600 dark:text-red-400" title={item.source.error}>检测失败</span>
+                              : <span className="text-[10px] text-muted-foreground">未返回</span>}
                           </td>
                         ))}
                       </tr>
@@ -338,13 +345,16 @@ export function HostNetworkProfileDialog({
                         <td className="py-2 text-muted-foreground">公司类型</td>
                         {typeSources.map((item) => (
                           <td key={item.name} className="px-2 py-2 text-center">
-                            {item.source?.companyType
-                              ? <Badge variant="outline" className={ipTypeBadgeClass(item.source.companyType)}>{ipTypeLabel(item.source.companyType)}</Badge>
-                              : item.name === "AbuseIPDB"
-                                ? <span className="text-[10px] text-muted-foreground">接口不提供</span>
-                                : item.source?.error
-                                  ? <span className="text-[10px] text-red-600 dark:text-red-400" title={item.source.error}>检测失败</span>
-                                  : <span className="text-[10px] text-muted-foreground">未返回</span>}
+                            {item.source?.companyType ? (
+                              <div className="flex flex-col items-center gap-1">
+                                <Badge variant="outline" className={ipTypeBadgeClass(item.source.companyType)}>{ipTypeLabel(item.source.companyType)}</Badge>
+                                {item.source?.fallbackProvider ? <span className="text-[9px] text-muted-foreground" title={`主数据源不可用，使用 ${item.source.fallbackProvider} 补齐`}>回退 {item.source.fallbackProvider}</span> : null}
+                              </div>
+                            ) : item.name === "AbuseIPDB"
+                              ? <span className="text-[10px] text-muted-foreground">接口不提供</span>
+                              : item.source?.error
+                                ? <span className="text-[10px] text-red-600 dark:text-red-400" title={item.source.error}>检测失败</span>
+                                : <span className="text-[10px] text-muted-foreground">未返回</span>}
                           </td>
                         ))}
                       </tr>
@@ -378,7 +388,10 @@ export function HostNetworkProfileDialog({
                   const marker = hasScore ? Math.max(0, Math.min(100, score)) : 0;
                   return (
                     <div key={source.name} className="grid grid-cols-[96px_minmax(0,1fr)_54px_auto] items-center gap-2 text-xs">
-                      <div className="font-medium">{source.displayName || source.name}</div>
+                      <div className="min-w-0">
+                        <div className="font-medium">{source.displayName || source.name}</div>
+                        {source.fallbackProvider ? <div className="truncate text-[9px] text-muted-foreground" title={`主数据源不可用，使用 ${source.fallbackProvider} 补齐`}>回退 {source.fallbackProvider}</div> : null}
+                      </div>
                       <div className="relative h-2 overflow-visible rounded-full bg-muted">
                         <div className="absolute inset-0 flex overflow-hidden rounded-full opacity-70">
                           <span className="w-1/5 bg-emerald-500/70" />
@@ -390,7 +403,7 @@ export function HostNetworkProfileDialog({
                         {hasScore ? <span className="absolute top-1/2 h-3.5 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-foreground shadow-sm" style={{ left: `${marker}%` }} /> : null}
                       </div>
                       <div className="text-right font-mono">{riskScoreText(source)}</div>
-                      <Badge variant="outline" title={source.error || ""} className={riskLevelBadgeClass(source.level)}>{riskLevelText(source.level)}</Badge>
+                      <Badge variant="outline" title={source.fallbackProvider ? `回退数据源：${source.fallbackProvider}` : (source.error || "")} className={riskLevelBadgeClass(source.level)}>{riskLevelText(source.level)}</Badge>
                     </div>
                   );
                 })}
