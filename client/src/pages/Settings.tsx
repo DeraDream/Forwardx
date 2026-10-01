@@ -3052,7 +3052,9 @@ type SystemSettingsSaveKey =
   | "hostMonitor"
   | "forwardProtocols"
   | "sidebarMenu"
-  | "agentInstall";
+  | "agentInstall"
+  | "networkProfileApi"
+  | "agentUpgradeRollout";
 
 function isValidWebPort(value: string | number) {
   const port = Math.floor(Number(value));
@@ -4237,6 +4239,10 @@ function SystemInfoSection() {
   const [githubAcceleratorPanelUpdateEnabled, setGithubAcceleratorPanelUpdateEnabled] = useState(false);
   const [githubAcceleratorUrlInput, setGithubAcceleratorUrlInput] = useState(defaultGithubAcceleratorUrl);
   const [agentPreferPanelInstall, setAgentPreferPanelInstall] = useState(false);
+  const [networkProfileIpapiKey, setNetworkProfileIpapiKey] = useState("");
+  const [networkProfileAbuseIpdbKey, setNetworkProfileAbuseIpdbKey] = useState("");
+  const [agentUpgradeWaveSize, setAgentUpgradeWaveSize] = useState("5");
+  const [agentUpgradeWaveIntervalSeconds, setAgentUpgradeWaveIntervalSeconds] = useState("15");
   const [ddnsEnabled, setDdnsEnabled] = useState(false);
   const [ddnsProvider, setDdnsProvider] = useState<DdnsProvider>("disabled");
   const [ddnsTtl, setDdnsTtl] = useState("600");
@@ -4307,6 +4313,8 @@ function SystemInfoSection() {
       setGithubAcceleratorPanelUpdateEnabled(!!settings.githubAccelerator?.panelUpdateEnabled);
       setGithubAcceleratorUrlInput(settings.githubAccelerator?.url || "");
       setAgentPreferPanelInstall(!!settings.agentPreferPanelInstall);
+      setAgentUpgradeWaveSize(String(settings.agentUpgradeRollout?.waveSize || 5));
+      setAgentUpgradeWaveIntervalSeconds(String(settings.agentUpgradeRollout?.waveIntervalSeconds || 15));
       setDdnsEnabled(!!settings.ddns?.enabled);
       setDdnsProvider(isDdnsProvider(settings.ddns?.provider) ? settings.ddns.provider : "disabled");
       const ddnsUnifiedTtl = String(settings.ddns?.ttl || settings.ddns?.huaweicloudTtl || settings.ddns?.aliyunTtl || settings.ddns?.tencentcloudTtl || 600);
@@ -4721,6 +4729,57 @@ function SystemInfoSection() {
     );
   };
 
+  const handleSaveNetworkProfileApi = () => {
+    const ipapiApiKey = networkProfileIpapiKey.trim();
+    const abuseIpdbApiKey = networkProfileAbuseIpdbKey.trim();
+    if (!ipapiApiKey && !abuseIpdbApiKey) {
+      toast.info("请输入需要保存的 API Key");
+      return;
+    }
+    saveSystemSettings("networkProfileApi", {
+      networkProfileApi: {
+        ipapiApiKey: ipapiApiKey || undefined,
+        abuseIpdbApiKey: abuseIpdbApiKey || undefined,
+      },
+    }, {
+      onSuccess: () => {
+        setNetworkProfileIpapiKey("");
+        setNetworkProfileAbuseIpdbKey("");
+        utils.system.getSettings.invalidate();
+      },
+    });
+  };
+
+  const handleClearNetworkProfileApiKey = (provider: "ipapi" | "abuseipdb") => {
+    saveSystemSettings("networkProfileApi", {
+      networkProfileApi: provider === "ipapi"
+        ? { clearIpapiApiKey: true }
+        : { clearAbuseIpdbApiKey: true },
+    }, {
+      onSuccess: () => {
+        if (provider === "ipapi") setNetworkProfileIpapiKey("");
+        else setNetworkProfileAbuseIpdbKey("");
+        utils.system.getSettings.invalidate();
+      },
+    });
+  };
+
+  const handleSaveAgentUpgradeRollout = () => {
+    const waveSize = Math.floor(Number(agentUpgradeWaveSize));
+    const waveIntervalSeconds = Math.floor(Number(agentUpgradeWaveIntervalSeconds));
+    if (!Number.isFinite(waveSize) || waveSize < 1 || waveSize > 100) {
+      toast.error("每批升级数量需为 1-100");
+      return;
+    }
+    if (!Number.isFinite(waveIntervalSeconds) || waveIntervalSeconds < 1 || waveIntervalSeconds > 300) {
+      toast.error("批次间隔需为 1-300 秒");
+      return;
+    }
+    saveSystemSettings("agentUpgradeRollout", {
+      agentUpgradeRollout: { waveSize, waveIntervalSeconds },
+    });
+  };
+
   const handleSaveAgentInstall = () => {
     const inputUrl = normalizeConfigUrl(githubAcceleratorUrlInput);
     const acceleratorUrl = normalizeGithubAcceleratorUrl(inputUrl);
@@ -5003,6 +5062,137 @@ function SystemInfoSection() {
           </CardContent>
         </Card>
       </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card className="border-border/40 bg-card/60 backdrop-blur-md">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <KeyRound className="h-4 w-4 text-primary" />
+              网络画像 API
+            </CardTitle>
+            <CardDescription>
+              需要 Key 的数据库仅在这里保存凭据后调用，API Key 保存在 Panel，不下发给 Agent。
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <Label htmlFor="network-profile-ipapi-key">ipapi.is API Key</Label>
+                <Badge variant="outline">
+                  {settings?.networkProfileApi?.ipapiConfigured ? "已配置" : "未配置"}
+                </Badge>
+              </div>
+              <div className="flex gap-2">
+                <Input
+                  id="network-profile-ipapi-key"
+                  type="password"
+                  autoComplete="off"
+                  value={networkProfileIpapiKey}
+                  onChange={(event) => setNetworkProfileIpapiKey(event.target.value)}
+                  placeholder={settings?.networkProfileApi?.ipapiKeyMasked || "输入 ipapi.is API Key"}
+                />
+                {settings?.networkProfileApi?.ipapiConfigured ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => handleClearNetworkProfileApiKey("ipapi")}
+                    disabled={isSavingSetting("networkProfileApi")}
+                  >
+                    删除
+                  </Button>
+                ) : null}
+              </div>
+              <p className="text-xs text-muted-foreground">用于 IP 类型、机房 / VPN / Proxy / Tor 等分类字段。</p>
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <Label htmlFor="network-profile-abuseipdb-key">AbuseIPDB API Key</Label>
+                <Badge variant="outline">
+                  {settings?.networkProfileApi?.abuseIpdbConfigured ? "已配置" : "未配置"}
+                </Badge>
+              </div>
+              <div className="flex gap-2">
+                <Input
+                  id="network-profile-abuseipdb-key"
+                  type="password"
+                  autoComplete="off"
+                  value={networkProfileAbuseIpdbKey}
+                  onChange={(event) => setNetworkProfileAbuseIpdbKey(event.target.value)}
+                  placeholder={settings?.networkProfileApi?.abuseIpdbKeyMasked || "输入 AbuseIPDB API Key"}
+                />
+                {settings?.networkProfileApi?.abuseIpdbConfigured ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => handleClearNetworkProfileApiKey("abuseipdb")}
+                    disabled={isSavingSetting("networkProfileApi")}
+                  >
+                    删除
+                  </Button>
+                ) : null}
+              </div>
+              <p className="text-xs text-muted-foreground">用于 AbuseIPDB 官方风险评分；未配置时不会请求该接口。</p>
+            </div>
+
+            <div className="flex justify-end">
+              <Button onClick={handleSaveNetworkProfileApi} disabled={isSavingSetting("networkProfileApi")}>
+                保存 API Key
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="border-border/40 bg-card/60 backdrop-blur-md">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Rocket className="h-4 w-4 text-primary" />
+              Agent 批量升级
+            </CardTitle>
+            <CardDescription>
+              控制“全部升级”时的分批并发策略；同一批内并发下发。
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="agent-upgrade-wave-size">每批数量</Label>
+                <Input
+                  id="agent-upgrade-wave-size"
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={agentUpgradeWaveSize}
+                  onChange={(event) => setAgentUpgradeWaveSize(event.target.value.replace(/\D/g, "").slice(0, 3))}
+                />
+                <p className="text-xs text-muted-foreground">1-100 台，默认 5 台。</p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="agent-upgrade-wave-interval">批次间隔（秒）</Label>
+                <Input
+                  id="agent-upgrade-wave-interval"
+                  type="number"
+                  min={1}
+                  max={300}
+                  value={agentUpgradeWaveIntervalSeconds}
+                  onChange={(event) => setAgentUpgradeWaveIntervalSeconds(event.target.value.replace(/\D/g, "").slice(0, 3))}
+                />
+                <p className="text-xs text-muted-foreground">1-300 秒，默认 15 秒。</p>
+              </div>
+            </div>
+            <div className="rounded-lg border border-border/40 bg-muted/20 p-3 text-xs text-muted-foreground">
+              当前策略：每批 <span className="font-medium text-foreground">{agentUpgradeWaveSize || "-"}</span> 台，
+              批次间隔 <span className="font-medium text-foreground">{agentUpgradeWaveIntervalSeconds || "-"}</span> 秒。
+            </div>
+            <div className="flex justify-end">
+              <Button onClick={handleSaveAgentUpgradeRollout} disabled={isSavingSetting("agentUpgradeRollout")}>
+                保存升级策略
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
       <div className="grid gap-4 xl:grid-cols-2">
         {/* 面板公开访问地址 */}
         <Card className="border-border/40 bg-card/60 backdrop-blur-md">
