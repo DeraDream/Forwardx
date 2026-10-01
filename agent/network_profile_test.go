@@ -72,28 +72,28 @@ func TestProfileIPNatureFromEvidence(t *testing.T) {
 		want       string
 	}{
 		{
-			name: "native needs two agreeing registration sources",
-			actual: []profileCountryEvidence{{Provider: "ipwho.is", Country: "SG"}, {Provider: "ipapi.is", Country: "SG"}},
-			registered: []profileCountryEvidence{{Provider: "MaxMind RegisteredCountry", Country: "SG"}, {Provider: "RDAP", Country: "SG"}},
+			name: "maxmind same country is native like IPQuality",
+			actual: []profileCountryEvidence{{Provider: "MaxMind GeoIP", Country: "SG"}},
+			registered: []profileCountryEvidence{{Provider: "MaxMind RegisteredCountry", Country: "SG"}},
 			want: "native",
 		},
 		{
-			name: "single matching registration source stays unknown",
-			actual: []profileCountryEvidence{{Provider: "ipwho.is", Country: "SG"}},
-			registered: []profileCountryEvidence{{Provider: "MaxMind RegisteredCountry", Country: "SG"}},
-			want: "unknown",
-		},
-		{
-			name: "two foreign registration sources identify broadcast",
-			actual: []profileCountryEvidence{{Provider: "ipwho.is", Country: "SG"}, {Provider: "ipapi.is", Country: "SG"}},
-			registered: []profileCountryEvidence{{Provider: "RDAP", Country: "US"}, {Provider: "BGP.Tools WHOIS", Country: "US"}},
+			name: "maxmind different country is broadcast like IPQuality",
+			actual: []profileCountryEvidence{{Provider: "MaxMind GeoIP", Country: "SG"}},
+			registered: []profileCountryEvidence{{Provider: "MaxMind RegisteredCountry", Country: "HK"}},
 			want: "broadcast",
 		},
 		{
-			name: "conflicting registration sources stay unknown",
+			name: "ipinfo fallback same country is native",
+			actual: []profileCountryEvidence{{Provider: "IPinfo GeoIP", Country: "SG"}},
+			registered: []profileCountryEvidence{{Provider: "IPinfo Abuse Country", Country: "SG"}},
+			want: "native",
+		},
+		{
+			name: "consensus fallback compares countries",
 			actual: []profileCountryEvidence{{Provider: "ipwho.is", Country: "SG"}},
-			registered: []profileCountryEvidence{{Provider: "MaxMind RegisteredCountry", Country: "SG"}, {Provider: "RDAP", Country: "US"}},
-			want: "unknown",
+			registered: []profileCountryEvidence{{Provider: "RDAP", Country: "US"}},
+			want: "broadcast",
 		},
 	}
 	for _, tc := range cases {
@@ -119,6 +119,33 @@ func TestProfileBGPToolsGraphPath(t *testing.T) {
 		if got := profileBGPToolsGraphPath(tc.body); got != tc.want {
 			t.Fatalf("profileBGPToolsGraphPath(%q)=%q want=%q", tc.body, got, tc.want)
 		}
+	}
+}
+
+
+func TestProfileBGPToolsGraphPathFromPrefix(t *testing.T) {
+	cases := map[string]string{
+		"155.103.50.0/24": "/pathimg/rt-155.103.50.0_24",
+		"2401:a4a0:2:4bc::/64": "/pathimg/rt-2401:a4a0:2:4bc::_64",
+	}
+	for input, want := range cases {
+		if got := profileBGPToolsGraphPathFromPrefix(input); got != want {
+			t.Fatalf("profileBGPToolsGraphPathFromPrefix(%q)=%q want=%q", input, got, want)
+		}
+	}
+}
+
+func TestProfileDNSBLDomains(t *testing.T) {
+	domains := profileDNSBLDomains()
+	if len(domains) < 350 {
+		t.Fatalf("profileDNSBLDomains() returned only %d entries", len(domains))
+	}
+	seen := map[string]bool{}
+	for _, domain := range domains {
+		if seen[domain] {
+			t.Fatalf("duplicate DNSBL domain %q", domain)
+		}
+		seen[domain] = true
 	}
 }
 
