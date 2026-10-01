@@ -248,18 +248,16 @@ export function HostNetworkProfileDialog({
   ].filter(Boolean).join(" ");
   const baseCountry = usageCode;
   const riskSources = Array.isArray(risk.sources) ? risk.sources : [];
-  const riskOrder = ["ProxyCheck", "FFraud", "IP99", "IP2Location", "DB-IP", "AbuseIPDB"];
+  const riskOrder = ["ProxyCheck", "FFraud", "IP99", "IP2Location", "AbuseIPDB"];
   const scoredRiskSources = riskOrder
     .map((name) => riskSources.find((item: any) => item?.name === name))
     .filter((source: any) => source && Number.isFinite(Number(source?.score)));
-  // Always render the authoritative type databases the user selected. Missing
-  // data stays visibly attributable to that provider instead of making the
-  // entire column disappear, which previously made MaxMind / DB-IP look absent.
+  // Keep the type matrix to the selected practical sources. ipapi.is is
+  // queried only when its API key has been saved in System Settings.
   const typeSources = [
     { name: "IPinfo", source: riskSources.find((item: any) => item?.name === "IPinfo") },
     { name: "ipregistry", source: riskSources.find((item: any) => item?.name === "ipregistry") },
-    { name: "MaxMind", source: riskSources.find((item: any) => item?.name === "MaxMind") },
-    { name: "DB-IP", source: riskSources.find((item: any) => item?.name === "DB-IP") },
+    { name: "ipapi.is", source: riskSources.find((item: any) => item?.name === "ipapi.is") },
     { name: "IP2Location", source: riskSources.find((item: any) => item?.name === "IP2Location") },
   ];
   const mail = data.mail || {};
@@ -361,13 +359,11 @@ export function HostNetworkProfileDialog({
                               <div className="flex flex-col items-center gap-1">
                                 <Badge variant="outline" className={ipTypeBadgeClass(item.source.networkType)}>{ipTypeLabel(item.source.networkType)}</Badge>
                               </div>
-                            ) : item.name === "MaxMind" && String(item.source?.error || "").toLowerCase().includes("credentials")
-                              ? <span className="text-[10px] text-amber-700 dark:text-amber-300" title={item.source?.error}>需 Insights Key</span>
-                              : item.name === "DB-IP" && String(item.source?.error || "").toLowerCase().includes("api key")
-                                ? <span className="text-[10px] text-amber-700 dark:text-amber-300" title={item.source?.error}>需 API Key</span>
-                                : item.source?.error
-                                  ? <span className="text-[10px] text-red-600 dark:text-red-400" title={item.source.error}>检测失败</span>
-                                  : <span className="text-[10px] text-muted-foreground">未返回</span>}
+                            ) : item.name === "ipapi.is" && String(item.source?.error || "").toLowerCase().includes("api key")
+                              ? <span className="text-[10px] text-amber-700 dark:text-amber-300" title={item.source?.error}>需 API Key</span>
+                              : item.source?.error
+                                ? <span className="text-[10px] text-red-600 dark:text-red-400" title={item.source.error}>检测失败</span>
+                                : <span className="text-[10px] text-muted-foreground">未返回</span>}
                           </td>
                         ))}
                       </tr>
@@ -379,8 +375,8 @@ export function HostNetworkProfileDialog({
                               <div className="flex flex-col items-center gap-1">
                                 <Badge variant="outline" className={ipTypeBadgeClass(item.source.companyType)}>{ipTypeLabel(item.source.companyType)}</Badge>
                               </div>
-                            ) : item.name === "MaxMind" || item.name === "DB-IP"
-                              ? <span className="text-[10px] text-muted-foreground">接口不提供</span>
+                            ) : item.name === "ipapi.is" && String(item.source?.error || "").toLowerCase().includes("api key")
+                              ? <span className="text-[10px] text-amber-700 dark:text-amber-300" title={item.source?.error}>需 API Key</span>
                               : item.source?.error
                                 ? <span className="text-[10px] text-red-600 dark:text-red-400" title={item.source.error}>检测失败</span>
                                 : <span className="text-[10px] text-muted-foreground">未返回</span>}
