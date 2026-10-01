@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	_ "embed"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -1291,10 +1292,8 @@ func profileRisk(cfg Config, client *http.Client, ip string) map[string]any {
 	preferredTypeSources := map[string]bool{
 		"IPinfo": true,
 		"ipregistry": true,
-		"FFraud": true,
 		"IP2Location": true,
 		"AbuseIPDB": true,
-		"ProxyCheck": true,
 	}
 	for _, source := range sources {
 		if source.Score != nil {
@@ -1568,6 +1567,60 @@ func profileBGPToolsGraphPathFromPrefix(prefix string) string {
 	return "/pathimg/rt-" + strings.ReplaceAll(value, "/", "_")
 }
 
+func profileBGPGraphSVGDataURL(body string) (string, error) {
+	svg := strings.TrimSpace(body)
+	if svg == "" {
+		return "", fmt.Errorf("BGP.Tools 返回空图")
+	}
+	probe := svg
+	if len(probe) > 4096 {
+		probe = probe[:4096]
+	}
+	if !strings.Contains(strings.ToLower(probe), "<svg") {
+		return "", fmt.Errorf("BGP.Tools 未返回 SVG")
+	}
+	if strings.Contains(svg, "Not_Visible") && strings.Contains(svg, "in_DFZ") {
+		return "", fmt.Errorf("该 Prefix 当前未在 DFZ 中可见")
+	}
+	return "data:image/svg+xml;base64," + base64.StdEncoding.EncodeToString([]byte(svg)), nil
+}
+
+func profileBGPToolsGraphDataURL(client *http.Client, prefix, rawPath string) (string, error) {
+	path := strings.TrimSpace(rawPath)
+	if path == "" {
+		path = profileBGPToolsGraphPathFromPrefix(prefix)
+	}
+	if path == "" {
+		return "", fmt.Errorf("BGP 拓扑图地址为空")
+	}
+	parsed, err := url.Parse(path)
+	if err != nil {
+		return "", fmt.Errorf("BGP 拓扑图地址无效")
+	}
+	if parsed.IsAbs() {
+		if !strings.EqualFold(parsed.Hostname(), "bgp.tools") || !strings.HasPrefix(parsed.Path, "/pathimg/") {
+			return "", fmt.Errorf("BGP 拓扑图地址无效")
+		}
+		path = parsed.RequestURI()
+	} else if !strings.HasPrefix(parsed.Path, "/pathimg/") {
+		return "", fmt.Errorf("BGP 拓扑图地址无效")
+	}
+	endpoint := "https://bgp.tools" + path
+	headers := map[string]string{
+		"Accept": "image/svg+xml,image/*;q=0.9,*/*;q=0.2",
+		"Referer": "https://bgp.tools/prefix/" + strings.TrimSpace(prefix),
+		"Cache-Control": "no-cache",
+	}
+	code, body, err := profileReadRetry(client, endpoint, headers, 2)
+	if err != nil {
+		return "", err
+	}
+	if code < 200 || code >= 300 {
+		return "", fmt.Errorf("BGP.Tools HTTP %d", code)
+	}
+	return profileBGPGraphSVGDataURL(body)
+}
+
 
 func profileBGPTools(client *http.Client, ip string) map[string]any {
 	result := map[string]any{"provider": "BGP.Tools"}
@@ -1663,6 +1716,16 @@ func profileNetwork(client *http.Client, ip string, asnValue any) (map[string]an
 		}
 		if profileString(result["bgpGraphPageUrl"]) == "" {
 			result["bgpGraphPageUrl"] = "https://bgp.tools/prefix/" + prefix + "#connectivity"
+		}
+		// Fetch the SVG from the Agent's own egress. The Agent has already reached
+		// BGP.Tools for prefix data, while the Panel egress may receive a 200 HTML
+		// anti-bot page instead of SVG. Persisting the small data URL makes display
+		// independent of the Panel's outbound IP.
+		if dataURL, err := profileBGPToolsGraphDataURL(client, prefix, profileString(result["bgpGraphPath"])); err == nil {
+			result["bgpGraphDataUrl"] = dataURL
+			delete(result, "bgpGraphError")
+		} else {
+			result["bgpGraphError"] = err.Error()
 		}
 	}
 	if len(errorsFound) > 0 {
