@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestProfileASNNumber(t *testing.T) {
 	cases := map[any]int64{
@@ -122,6 +125,23 @@ func TestProfileBGPToolsGraphPath(t *testing.T) {
 	}
 }
 
+
+func TestProfileBGPGraphSVGDataURL(t *testing.T) {
+	svg := `<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg"><text>ok</text></svg>`
+	got, err := profileBGPGraphSVGDataURL(svg)
+	if err != nil {
+		t.Fatalf("profileBGPGraphSVGDataURL() error=%v", err)
+	}
+	if !strings.HasPrefix(got, "data:image/svg+xml;base64,") {
+		t.Fatalf("unexpected data URL: %q", got)
+	}
+	if _, err := profileBGPGraphSVGDataURL("<html>not svg</html>"); err == nil {
+		t.Fatal("expected non-SVG body to fail")
+	}
+	if _, err := profileBGPGraphSVGDataURL(`<svg><text>Not_Visible in_DFZ</text></svg>`); err == nil {
+		t.Fatal("expected DFZ placeholder to fail")
+	}
+}
 
 func TestProfileBGPToolsGraphPathFromPrefix(t *testing.T) {
 	cases := map[string]string{
