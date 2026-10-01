@@ -1790,7 +1790,6 @@ func netflixPlayable(body string) bool {
 }
 
 func profileNetflixCheck(client *http.Client) map[string]any {
-	started := time.Now()
 	code1, body1, err1 := profileReadRetry(client, "https://www.netflix.com/title/81280792", nil, 2)
 	code2, body2, err2 := profileReadRetry(client, "https://www.netflix.com/title/70143836", nil, 2)
 	if err1 != nil || err2 != nil {
@@ -1800,7 +1799,7 @@ func profileNetflixCheck(client *http.Client) map[string]any {
 		} else {
 			message = err2.Error()
 		}
-		return map[string]any{"id": "netflix", "name": "Netflix", "status": "error", "message": message, "latencyMs": time.Since(started).Milliseconds()}
+		return map[string]any{"id": "netflix", "name": "Netflix", "status": "error", "message": message}
 	}
 	region := netflixRegion(body1)
 	if region == "" {
@@ -1817,19 +1816,18 @@ func profileNetflixCheck(client *http.Client) map[string]any {
 	ohNo1 := strings.Contains(lower1, "oh no!")
 	ohNo2 := strings.Contains(lower2, "oh no!")
 	if code1 == 403 || code1 == 451 || code2 == 403 || code2 == 451 {
-		return map[string]any{"id": "netflix", "name": "Netflix", "status": "blocked", "region": region, "httpStatus": code2, "latencyMs": time.Since(started).Milliseconds(), "note": "Netflix 返回地区/访问限制"}
+		return map[string]any{"id": "netflix", "name": "Netflix", "status": "blocked", "region": region, "httpStatus": code2, "note": "Netflix 返回地区/访问限制"}
 	}
 	if strings.TrimSpace(body1) == "" || strings.TrimSpace(body2) == "" {
-		return map[string]any{"id": "netflix", "name": "Netflix", "status": "error", "region": region, "httpStatus": code2, "latencyMs": time.Since(started).Milliseconds(), "note": "Netflix 响应为空，检测失败"}
+		return map[string]any{"id": "netflix", "name": "Netflix", "status": "error", "region": region, "httpStatus": code2, "note": "Netflix 响应为空，检测失败"}
 	}
 	if ohNo1 && ohNo2 {
-		return map[string]any{"id": "netflix", "name": "Netflix", "status": "unlocked", "region": region, "httpStatus": code2, "latencyMs": time.Since(started).Milliseconds(), "note": "Netflix 可用（仅 Originals）"}
+		return map[string]any{"id": "netflix", "name": "Netflix", "status": "unlocked", "region": region, "httpStatus": code2, "note": "Netflix 可用（仅 Originals）"}
 	}
-	return map[string]any{"id": "netflix", "name": "Netflix", "status": "unlocked", "region": region, "httpStatus": code2, "latencyMs": time.Since(started).Milliseconds(), "note": "Netflix 完整解锁"}
+	return map[string]any{"id": "netflix", "name": "Netflix", "status": "unlocked", "region": region, "httpStatus": code2, "note": "Netflix 完整解锁"}
 }
 
 func profileChatGPTCheck(client *http.Client) map[string]any {
-	started := time.Now()
 	headers := map[string]string{
 		"Accept": "application/json, text/plain, */*",
 		"Authorization": "Bearer null",
@@ -1874,12 +1872,11 @@ func profileChatGPTCheck(client *http.Client) map[string]any {
 	return map[string]any{
 		"id": "chatgpt", "name": "ChatGPT", "status": status, "region": region,
 		"httpStatus": apiCode, "iosHttpStatus": iosCode, "traceHttpStatus": traceCode,
-		"latencyMs": time.Since(started).Milliseconds(), "note": note,
+		"note": note,
 	}
 }
 
 func profileClaudeCheck(client *http.Client) map[string]any {
-	started := time.Now()
 	req, err := http.NewRequest(http.MethodGet, "https://claude.ai/", nil)
 	if err != nil {
 		return map[string]any{"id": "claude", "name": "Claude", "status": "error", "message": err.Error()}
@@ -1903,11 +1900,10 @@ func profileClaudeCheck(client *http.Client) map[string]any {
 		status = "blocked"
 		note = "Claude 当前地区不可用"
 	}
-	return map[string]any{"id": "claude", "name": "Claude", "status": status, "httpStatus": resp.StatusCode, "latencyMs": time.Since(started).Milliseconds(), "note": note, "finalUrl": finalURL}
+	return map[string]any{"id": "claude", "name": "Claude", "status": status, "httpStatus": resp.StatusCode, "note": note, "finalUrl": finalURL}
 }
 
 func profileGeminiCheck(client *http.Client) map[string]any {
-	started := time.Now()
 	code, body, err := profileReadRetry(client, "https://gemini.google.com/", nil, 2)
 	if err != nil {
 		return map[string]any{"id": "gemini", "name": "Gemini", "status": "error", "message": err.Error()}
@@ -1924,11 +1920,10 @@ func profileGeminiCheck(client *http.Client) map[string]any {
 		status = "unlocked"
 		note = "Gemini 可用"
 	}
-	return map[string]any{"id": "gemini", "name": "Gemini", "status": status, "region": region, "httpStatus": code, "latencyMs": time.Since(started).Milliseconds(), "note": note}
+	return map[string]any{"id": "gemini", "name": "Gemini", "status": status, "region": region, "httpStatus": code, "note": note}
 }
 
 func profilePrimeVideoCheck(client *http.Client) map[string]any {
-	started := time.Now()
 	code, body, err := profileReadRetry(client, "https://www.primevideo.com/", nil, 2)
 	if err != nil {
 		return map[string]any{"id": "prime", "name": "Prime Video", "status": "error", "message": err.Error()}
@@ -1948,11 +1943,10 @@ func profilePrimeVideoCheck(client *http.Client) map[string]any {
 		status = "unlocked"
 		note = "Prime Video 可用"
 	}
-	return map[string]any{"id": "prime", "name": "Prime Video", "status": status, "region": region, "httpStatus": code, "latencyMs": time.Since(started).Milliseconds(), "note": note}
+	return map[string]any{"id": "prime", "name": "Prime Video", "status": status, "region": region, "httpStatus": code, "note": note}
 }
 
 func profileMaxCheck(client *http.Client) map[string]any {
-	started := time.Now()
 	code, body, err := profileReadRetry(client, "https://www.max.com/", nil, 2)
 	if err != nil {
 		return map[string]any{"id": "max", "name": "Max", "status": "error", "message": err.Error()}
@@ -1972,11 +1966,10 @@ func profileMaxCheck(client *http.Client) map[string]any {
 		status = "unlocked"
 		note = "Max 可用"
 	}
-	return map[string]any{"id": "max", "name": "Max", "status": status, "region": region, "httpStatus": code, "latencyMs": time.Since(started).Milliseconds(), "note": note}
+	return map[string]any{"id": "max", "name": "Max", "status": status, "region": region, "httpStatus": code, "note": note}
 }
 
 func profileYouTubeCheck(client *http.Client) map[string]any {
-	started := time.Now()
 	code, body, err := profileReadRetry(client, "https://www.youtube.com/premium", map[string]string{"Accept-Language": "en-US,en;q=0.9"}, 2)
 	if err != nil {
 		return map[string]any{"id": "youtube", "name": "YouTube Premium", "status": "error", "message": err.Error()}
@@ -1995,11 +1988,10 @@ func profileYouTubeCheck(client *http.Client) map[string]any {
 		status = "unlocked"
 		note = "YouTube Premium 页面确认可用"
 	}
-	return map[string]any{"id": "youtube", "name": "YouTube Premium", "status": status, "region": region, "httpStatus": code, "latencyMs": time.Since(started).Milliseconds(), "note": note}
+	return map[string]any{"id": "youtube", "name": "YouTube Premium", "status": status, "region": region, "httpStatus": code, "note": note}
 }
 
 func profileSpotifyCheck(client *http.Client) map[string]any {
-	started := time.Now()
 	values := url.Values{
 		"birth_day": {"11"}, "birth_month": {"11"}, "birth_year": {"2000"},
 		"collect_personal_info": {"undefined"}, "creation_flow": {""},
@@ -2012,7 +2004,7 @@ func profileSpotifyCheck(client *http.Client) map[string]any {
 	}
 	var payload map[string]any
 	if json.Unmarshal([]byte(body), &payload) != nil {
-		return map[string]any{"id": "spotify", "name": "Spotify", "status": "error", "httpStatus": code, "latencyMs": time.Since(started).Milliseconds(), "note": "Spotify 返回格式无法识别"}
+		return map[string]any{"id": "spotify", "name": "Spotify", "status": "error", "httpStatus": code, "note": "Spotify 返回格式无法识别"}
 	}
 	statusCode := int64(0)
 	if number, ok := profileNumber(payload["status"]); ok {
@@ -2029,11 +2021,10 @@ func profileSpotifyCheck(client *http.Client) map[string]any {
 		status = "unlocked"
 		note = "Spotify 注册可用"
 	}
-	return map[string]any{"id": "spotify", "name": "Spotify", "status": status, "region": region, "httpStatus": code, "latencyMs": time.Since(started).Milliseconds(), "note": note}
+	return map[string]any{"id": "spotify", "name": "Spotify", "status": status, "region": region, "httpStatus": code, "note": note}
 }
 
 func profileSteamCheck(client *http.Client) map[string]any {
-	started := time.Now()
 	code, body, err := profileReadRetry(client, "https://store.steampowered.com/app/761830", nil, 2)
 	if err != nil {
 		return map[string]any{"id": "steam", "name": "Steam", "status": "error", "message": err.Error()}
@@ -2048,22 +2039,20 @@ func profileSteamCheck(client *http.Client) map[string]any {
 		status = "unlocked"
 		note = "Steam 商店可用，未识别币种"
 	}
-	return map[string]any{"id": "steam", "name": "Steam", "status": status, "region": currency, "httpStatus": code, "latencyMs": time.Since(started).Milliseconds(), "note": note}
+	return map[string]any{"id": "steam", "name": "Steam", "status": status, "region": currency, "httpStatus": code, "note": note}
 }
 
 func profileAppleRegionCheck(client *http.Client) map[string]any {
-	started := time.Now()
 	code, body, err := profileReadRetry(client, "https://gspe1-ssl.ls.apple.com/pep/gcc", nil, 2)
 	if err != nil {
 		return map[string]any{"id": "apple", "name": "Apple Region", "status": "error", "message": err.Error()}
 	}
 	region := strings.ToUpper(strings.TrimSpace(body))
 	status := "unlocked"
-	return map[string]any{"id": "apple", "name": "Apple Region", "status": status, "region": region, "httpStatus": code, "latencyMs": time.Since(started).Milliseconds(), "note": "Apple 出口地区"}
+	return map[string]any{"id": "apple", "name": "Apple Region", "status": status, "region": region, "httpStatus": code, "note": "Apple 出口地区"}
 }
 
 func profileGooglePlayCheck(client *http.Client) map[string]any {
-	started := time.Now()
 	code, body, err := profileReadRetry(client, "https://play.google.com/", map[string]string{"Accept-Language": "en-US,en;q=0.9"}, 2)
 	if err != nil {
 		return map[string]any{"id": "googleplay", "name": "Google Play", "status": "error", "message": err.Error()}
@@ -2073,11 +2062,10 @@ func profileGooglePlayCheck(client *http.Client) map[string]any {
 		region = strings.TrimSpace(match[1])
 	}
 	status := "unlocked"
-	return map[string]any{"id": "googleplay", "name": "Google Play", "status": status, "region": region, "httpStatus": code, "latencyMs": time.Since(started).Milliseconds(), "note": "Google Play 商店区域"}
+	return map[string]any{"id": "googleplay", "name": "Google Play", "status": status, "region": region, "httpStatus": code, "note": "Google Play 商店区域"}
 }
 
 func profileBilibiliHKMCTWCheck(client *http.Client) map[string]any {
-	started := time.Now()
 	target := "https://api.bilibili.com/pgc/player/web/playurl?avid=18281381&cid=29892777&qn=0&type=&otype=json&ep_id=183799&fourk=1&fnver=0&fnval=16&module=bangumi"
 	code, body, err := profileReadRetry(client, target, nil, 2)
 	if err != nil {
@@ -2098,11 +2086,10 @@ func profileBilibiliHKMCTWCheck(client *http.Client) map[string]any {
 		status = "blocked"
 		note = "港澳台限定内容不可播放"
 	}
-	return map[string]any{"id": "bilibili_hmt", "name": "Bilibili 港澳台", "status": status, "httpStatus": code, "latencyMs": time.Since(started).Milliseconds(), "note": note}
+	return map[string]any{"id": "bilibili_hmt", "name": "Bilibili 港澳台", "status": status, "httpStatus": code, "note": note}
 }
 
 func profileTikTokCheck(client *http.Client) map[string]any {
-	started := time.Now()
 	code, body, err := profileReadRetry(client, "https://www.tiktok.com/", map[string]string{"Accept-Language": "en-US,en;q=0.9"}, 2)
 	if err != nil {
 		return map[string]any{"id": "tiktok", "name": "TikTok", "status": "error", "message": err.Error()}
@@ -2124,11 +2111,10 @@ func profileTikTokCheck(client *http.Client) map[string]any {
 		status = "unlocked"
 		note = "TikTok 地区识别成功"
 	}
-	return map[string]any{"id": "tiktok", "name": "TikTok", "status": status, "region": region, "httpStatus": code, "latencyMs": time.Since(started).Milliseconds(), "note": note}
+	return map[string]any{"id": "tiktok", "name": "TikTok", "status": status, "region": region, "httpStatus": code, "note": note}
 }
 
 func profileRedditCheck(client *http.Client) map[string]any {
-	started := time.Now()
 	code, body, err := profileReadRetry(client, "https://www.reddit.com/svc/shreddit/reddit-chat", nil, 2)
 	if err != nil {
 		return map[string]any{"id": "reddit", "name": "Reddit", "status": "error", "message": err.Error()}
@@ -2147,7 +2133,7 @@ func profileRedditCheck(client *http.Client) map[string]any {
 		status = "blocked"
 		note = "Reddit 拒绝当前出口"
 	}
-	return map[string]any{"id": "reddit", "name": "Reddit", "status": status, "region": region, "httpStatus": code, "latencyMs": time.Since(started).Milliseconds(), "note": note}
+	return map[string]any{"id": "reddit", "name": "Reddit", "status": status, "region": region, "httpStatus": code, "note": note}
 }
 
 
@@ -2388,7 +2374,6 @@ func profileMailAndBlacklist(family, ip string) map[string]any {
 }
 
 func profileGenericAppCheck(client *http.Client, id, name, target string) map[string]any {
-	started := time.Now()
 	code, _, err := profileReadRetry(client, target, nil, 2)
 	if err != nil {
 		return map[string]any{"id": id, "name": name, "status": "error", "message": err.Error()}
@@ -2404,7 +2389,7 @@ func profileGenericAppCheck(client *http.Client, id, name, target string) map[st
 	}
 	return map[string]any{
 		"id": id, "name": name, "status": status, "httpStatus": code,
-		"latencyMs": time.Since(started).Milliseconds(), "note": note,
+		"note": note,
 	}
 }
 
