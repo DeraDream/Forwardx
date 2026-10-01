@@ -315,10 +315,11 @@ func TestProfileRRCParseOutput(t *testing.T) {
 		"Spotify Region: HK\n" +
 		"Steam Currency: HKD\n" +
 		"DAZN: Unsupported\n" +
-		"HotStar: No\n"
+		"HotStar: No\n" +
+		"Project Sekai: Colorful Stage: No\n"
 	items := profileRRCParseOutput(raw, "global", "跨国平台")
-	if len(items) != 5 {
-		t.Fatalf("profileRRCParseOutput() len=%d want=5: %#v", len(items), items)
+	if len(items) != 6 {
+		t.Fatalf("profileRRCParseOutput() len=%d want=6: %#v", len(items), items)
 	}
 	byName := map[string]map[string]any{}
 	for _, item := range items {
@@ -341,6 +342,9 @@ func TestProfileRRCParseOutput(t *testing.T) {
 	}
 	if got := profileString(byName["HotStar"]["status"]); got != "blocked" {
 		t.Fatalf("HotStar status=%q", got)
+	}
+	if got := profileString(byName["Project Sekai: Colorful Stage"]["status"]); got != "blocked" {
+		t.Fatalf("Project Sekai status=%q", got)
 	}
 }
 
