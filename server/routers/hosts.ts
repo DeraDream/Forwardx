@@ -591,6 +591,16 @@ async function assertPublicHostMonitorRequest(path: unknown) {
   return { settings, configuredPath };
 }
 
+async function getAgentUpgradeRolloutSettings() {
+  const [waveSizeRaw, waveIntervalRaw] = await Promise.all([
+    db.getSetting("agentUpgradeWaveSize"),
+    db.getSetting("agentUpgradeWaveIntervalSeconds"),
+  ]);
+  const waveSize = Math.min(100, Math.max(1, Math.floor(Number(waveSizeRaw || 5) || 5)));
+  const waveIntervalSeconds = Math.min(300, Math.max(1, Math.floor(Number(waveIntervalRaw || 15) || 15)));
+  return { waveSize, waveIntervalSeconds };
+}
+
 function scheduleStaleHostUpgradeCleanup() {
   const now = Date.now();
   if (hostUpgradeCleanupRunning || now - lastHostUpgradeCleanupAt < HOST_UPGRADE_CLEANUP_INTERVAL_MS) return;
@@ -1398,6 +1408,7 @@ export const hostsRouter = router({
       .input(z.object({ hostIds: z.array(z.number()).min(1).max(500), targetVersion: z.string().max(64).nullable().optional() }))
       .mutation(async ({ input }) => {
         const targetVersion = normalizeVersion(input.targetVersion || AGENT_VERSION);
+        const rolloutSettings = await getAgentUpgradeRolloutSettings();
         const configuredPanelUrl = (await db.getSetting("panelPublicUrl")) || "";
         const panelUrl = /^https?:\/\//.test(configuredPanelUrl) ? configuredPanelUrl.replace(/\/+$/, "") : "";
         let requested = 0;
@@ -1431,7 +1442,12 @@ export const hostsRouter = router({
           }
           return true;
         });
-        for (const rollout of planAgentUpgradeWaves(upgradeHosts)) {
+        for (const rollout of planAgentUpgradeWaves(
+          upgradeHosts,
+          Date.now(),
+          rolloutSettings.waveSize,
+          rolloutSettings.waveIntervalSeconds * 1000,
+        )) {
           const { host, wave, delayMs, requestedAt } = rollout;
           const currentVersion = normalizeVersion((host as any).agentVersion);
           appendPanelLog("info", `[AgentUpgrade] request host=${host.id} name=${host.name} current=${currentVersion || "-"} target=${targetVersion} batch=true wave=${wave + 1} delayMs=${delayMs}`);
@@ -1453,6 +1469,16 @@ export const hostsRouter = router({
             timer.unref?.();
           }
         }
-        return { success: true, requested, pushed, scheduled, missing, skippedLatest, skippedOffline };
+        return {
+          success: true,
+          requested,
+          pushed,
+          scheduled,
+          missing,
+          skippedLatest,
+          skippedOffline,
+          waveSize: rolloutSettings.waveSize,
+          waveIntervalSeconds: rolloutSettings.waveIntervalSeconds,
+        };
       }),
   });
