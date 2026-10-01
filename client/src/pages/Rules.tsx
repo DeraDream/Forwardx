@@ -49,6 +49,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { OptimisticSwitch, Switch } from "@/components/ui/switch";
 import { Tabs } from "@/components/ui/tabs";
 import {
@@ -476,6 +481,7 @@ type RuleCategory = "all" | "local" | "tunnel" | "chain" | "group";
 type RulePageTab = RuleCategory | "landing";
 type RuleCategoryCounts = Record<RuleCategory, number>;
 type RuleTransferScopeType = Exclude<RuleCategory, "all">;
+type RuleResourceFilter = "all" | `${RuleTransferScopeType}` | `${RuleTransferScopeType}:${number}`;
 type RuleBatchManageMode = "copy" | "edit" | "export" | "import";
 type BatchEditFormData = Pick<
   RuleFormData,
@@ -506,13 +512,33 @@ const ruleTransferScopeOptions: Array<{
 ];
 const importRuleTransferScopeOptions = ruleTransferScopeOptions;
 
+function parseRuleResourceFilter(value: unknown): { type: RuleTransferScopeType | null; id: number | null } {
+  const raw = String(value || "").trim();
+  if (!raw || raw === "all") return { type: null, id: null };
+  const [type, idText] = raw.split(":", 2);
+  if (!(ruleTransferScopeOptions as readonly { value: string }[]).some((item) => item.value === type)) {
+    return { type: null, id: null };
+  }
+  const id = idText ? Number(idText) : 0;
+  return {
+    type: type as RuleTransferScopeType,
+    id: Number.isInteger(id) && id > 0 ? id : null,
+  };
+}
+
+function normalizeRuleResourceFilter(value: unknown): RuleResourceFilter {
+  const parsed = parseRuleResourceFilter(value);
+  if (!parsed.type) return "all";
+  return parsed.id ? `${parsed.type}:${parsed.id}` : parsed.type;
+}
+
 const RULE_VIEW_MODE_STORAGE_KEY = "forwardx.rules.viewMode";
 const RULE_CARD_SIZE_STORAGE_KEY = "forwardx.rules.cardSize";
 const RULE_PAGE_SIZE_STORAGE_KEY = "forwardx.rules.pageSize";
 const RULE_GROUP_COLLAPSED_STORAGE_KEY = "forwardx.rules.groupCollapsed";
 const RULE_CATEGORY_STORAGE_KEY = "forwardx.rules.category";
 const RULE_FILTER_USER_STORAGE_KEY = "forwardx.rules.filterUser";
-const RULE_FILTER_HOST_STORAGE_KEY = "forwardx.rules.filterHost";
+const RULE_FILTER_RESOURCE_STORAGE_KEY = "forwardx.rules.filterResource";
 const RULE_SORT_CATEGORY_ORDER: RuleTransferScopeType[] = [
   "local",
   "tunnel",
@@ -763,7 +789,7 @@ function getRuleDisplayType(
 
 type RuleFilterState = {
   filterUser: string;
-  filterHost: string;
+  filterResource: RuleResourceFilter;
   ruleCategory: RuleCategory;
   searchQuery: string;
   isAdmin: boolean;
@@ -1125,11 +1151,17 @@ function isForwardRuleVisibleByFilters(rule: any, filters: RuleFilterState) {
       return false;
     }
   }
-  if (
-    filters.filterHost !== "all" &&
-    filters.getRuleEntryHostId(rule) !== parseInt(filters.filterHost)
-  ) {
-    return false;
+  const resourceFilter = parseRuleResourceFilter(filters.filterResource);
+  if (resourceFilter.type) {
+    const group = rule?.forwardGroupId ? filters.forwardGroupById.get(Number(rule.forwardGroupId)) : null;
+    const resourceType = getRuleCategory(rule, filters.forwardGroupById);
+    if (resourceType !== resourceFilter.type) return false;
+    if (resourceFilter.id) {
+      const resourceId = resourceType === "tunnel"
+        ? Number(rule?.tunnelId || 0)
+        : Number(rule?.forwardGroupId || 0);
+      if (resourceId !== resourceFilter.id || (resourceType !== "tunnel" && !group)) return false;
+    }
   }
   if (filters.ruleCategory !== "all") {
     if (
@@ -2953,8 +2985,8 @@ function RulesContent() {
   >(null);
   const [showCopyDialog, setShowCopyDialog] = useState(false);
   const [form, setForm] = useState<RuleFormData>(defaultForm);
-  const filterHostStorageKey = ruleFilterStorageKey(
-    RULE_FILTER_HOST_STORAGE_KEY,
+  const filterResourceStorageKey = ruleFilterStorageKey(
+    RULE_FILTER_RESOURCE_STORAGE_KEY,
     user,
   );
   const filterUserStorageKey = ruleFilterStorageKey(
@@ -2966,24 +2998,29 @@ function RulesContent() {
     user,
   );
   const rulePageTabStorageKey = `${ruleCategoryStorageKey}.page`;
-  const [filterHost, setFilterHost] = useState<string>(() =>
-    getStoredString(filterHostStorageKey, "all"),
+  const [filterResource, setFilterResource] = useState<RuleResourceFilter>(() =>
+    normalizeRuleResourceFilter(getStoredString(filterResourceStorageKey, "all")),
+  );
+  const [ruleResourceMenuOpen, setRuleResourceMenuOpen] = useState(false);
+  const [ruleResourceMenuType, setRuleResourceMenuType] = useState<RuleTransferScopeType>(
+    parseRuleResourceFilter(getStoredString(filterResourceStorageKey, "all")).type || "local",
   );
   const [filterUser, setFilterUser] = useState<string>(() =>
     getStoredString(filterUserStorageKey, "self"),
   );
-  const previousFilterIdentity = useRef(filterHostStorageKey);
+  const previousFilterIdentity = useRef(filterResourceStorageKey);
   useEffect(() => {
-    if (previousFilterIdentity.current === filterHostStorageKey) return;
-    previousFilterIdentity.current = filterHostStorageKey;
-    const nextHost = getStoredString(filterHostStorageKey, "all");
+    if (previousFilterIdentity.current === filterResourceStorageKey) return;
+    previousFilterIdentity.current = filterResourceStorageKey;
+    const nextResource = normalizeRuleResourceFilter(getStoredString(filterResourceStorageKey, "all"));
     const nextUser =
       user?.role === "admin"
         ? getStoredString(filterUserStorageKey, "self")
         : "self";
-    setFilterHost(nextHost);
+    setFilterResource(nextResource);
+    setRuleResourceMenuType(parseRuleResourceFilter(nextResource).type || "local");
     setFilterUser(nextUser);
-  }, [filterHostStorageKey, filterUserStorageKey, user?.role]);
+  }, [filterResourceStorageKey, filterUserStorageKey, user?.role]);
   const [ruleSearchQuery, setRuleSearchQuery] = useState("");
   const [ruleCategory, setRuleCategory] = useUrlTab<RuleCategory>({
     values: RULE_CATEGORIES,
@@ -3082,20 +3119,10 @@ function RulesContent() {
   const [importingRules, setImportingRules] = useState(false);
   const importingRulesRef = useRef(false);
   const rulePageRequest = usePersistentPageRequest("forwardx.rules.page");
-  const requestedRulePageEntryHostId = /^\d+$/.test(filterHost)
-    ? Number(filterHost)
-    : null;
-  const knownRulePageEntryHost =
-    requestedRulePageEntryHostId === null ||
-    !hostsFetched ||
-    !Array.isArray(hosts) ||
-    hosts.some((host: any) => Number(host.id) === requestedRulePageEntryHostId);
-  const rulePageEntryHostId = knownRulePageEntryHost
-    ? requestedRulePageEntryHostId
-    : null;
+  const rulePageResource = parseRuleResourceFilter(filterResource);
   const rulePageFilterKey = [
     filterUser,
-    filterHost,
+    filterResource,
     ruleCategory,
     ruleSearchQuery.trim(),
     rulePageSize,
@@ -3111,7 +3138,8 @@ function RulesContent() {
       ...(effectiveRulesQuery || {}),
       page: rulePageRequest.page,
       pageSize: rulePageSize,
-      entryHostId: rulePageEntryHostId,
+      resourceType: rulePageResource.type,
+      resourceId: rulePageResource.id,
       category: ruleCategory,
       search: ruleSearchQuery,
     },
@@ -3127,7 +3155,8 @@ function RulesContent() {
     {
       ...(effectiveRulesQuery || {}),
       limit: 100,
-      entryHostId: rulePageEntryHostId,
+      resourceType: rulePageResource.type,
+      resourceId: rulePageResource.id,
       category: ruleCategory,
       search: ruleSearchQuery,
     },
@@ -3197,7 +3226,8 @@ function RulesContent() {
   } = trpc.rules.listSummary.useQuery(
     {
       ...(effectiveRulesQuery || {}),
-      entryHostId: rulePageEntryHostId,
+      resourceType: rulePageResource.type,
+      resourceId: rulePageResource.id,
       category: ruleCategory,
       search: ruleSearchQuery,
     },
@@ -3218,23 +3248,13 @@ function RulesContent() {
     if (!ruleListSummary || ruleListSummaryPlaceholder) return;
     setStableRuleListSummary(ruleListSummary);
   }, [ruleListSummary, ruleListSummaryPlaceholder]);
-  const rules = (
-    isRuleGlobeView
-      ? mapRules
-      : needsFullRuleList
-        ? fullRulesQuery.data
-        : rulePageQuery.data?.items
-  ) as any[] | undefined;
-  const isLoading = isRuleGlobeView
-    ? ruleMapQuery.isLoading
-    : needsFullRuleList
-      ? fullRulesQuery.isLoading
-      : rulePageQuery.isLoading;
+  // Full-list queries are only dialog/editor data sources. Keep the visible page
+  // on the paged query so opening batch management never replaces or hides it.
+  const rules = (isRuleGlobeView ? mapRules : rulePageQuery.data?.items) as any[] | undefined;
+  const isLoading = isRuleGlobeView ? ruleMapQuery.isLoading : rulePageQuery.isLoading;
   const ruleListDataReady = isRuleGlobeView
     ? ruleMapQuery.data !== undefined && !ruleMapQuery.isPlaceholderData
-    : needsFullRuleList
-      ? fullRulesQuery.data !== undefined && !fullRulesQuery.isPlaceholderData
-      : rulePageQuery.data !== undefined && !rulePageQuery.isPlaceholderData;
+    : rulePageQuery.data !== undefined && !rulePageQuery.isPlaceholderData;
   const selectedScopeRules = undefined;
 
   const walletBalanceKnown =
@@ -3916,27 +3936,6 @@ function RulesContent() {
   );
   const tunnelAvailabilityById = linkAvailabilityIndex.tunnelAvailabilityById;
   const groupAvailabilityById = linkAvailabilityIndex.groupAvailabilityById;
-  useEffect(() => {
-    if (!String(filterHost).startsWith("group:")) return;
-    setFilterHost("all");
-    storeString(filterHostStorageKey, "all");
-  }, [filterHost, filterHostStorageKey]);
-  useEffect(() => {
-    if (
-      !hostsFetched ||
-      !Array.isArray(hosts) ||
-      requestedRulePageEntryHostId === null
-    )
-      return;
-    if (
-      hosts.some(
-        (host: any) => Number(host.id) === requestedRulePageEntryHostId,
-      )
-    )
-      return;
-    setFilterHost("all");
-    storeString(filterHostStorageKey, "all");
-  }, [filterHostStorageKey, hosts, hostsFetched, requestedRulePageEntryHostId]);
   const getRuleEntryHostIdForSort = useCallback(
     (rule: any) => {
       const group = rule.forwardGroupId
@@ -4031,6 +4030,22 @@ function RulesContent() {
       ),
     [forwardGroups],
   );
+  const getRuleFilterResources = useCallback(
+    (type: RuleTransferScopeType): any[] => {
+      if (type === "local") return transferPortGroups;
+      if (type === "tunnel") return tunnels || [];
+      if (type === "chain") return transferChainGroups;
+      return transferRuleGroups;
+    },
+    [tunnels, transferPortGroups, transferChainGroups, transferRuleGroups],
+  );
+  useEffect(() => {
+    const selected = parseRuleResourceFilter(filterResource);
+    if (!selected.type || !selected.id) return;
+    if (selected.type === "tunnel" ? !Array.isArray(tunnels) : !Array.isArray(forwardGroups)) return;
+    if (getRuleFilterResources(selected.type).some((resource: any) => Number(resource.id) === selected.id)) return;
+    handleFilterResourceChange("all");
+  }, [filterResource, filterResourceStorageKey, forwardGroups, getRuleFilterResources, tunnels]);
   const getTransferResources = useCallback(
     (type: RuleTransferScopeType): any[] => {
       if (type === "local") return transferPortGroups;
@@ -5213,7 +5228,7 @@ function RulesContent() {
   const ruleFilters = useMemo<RuleFilterState>(
     () => ({
       filterUser,
-      filterHost,
+      filterResource,
       ruleCategory,
       searchQuery: ruleSearchQuery,
       isAdmin: user?.role === "admin",
@@ -5225,7 +5240,7 @@ function RulesContent() {
       getRuleEntryHostId: getRuleEntryHostIdForSort,
     }),
     [
-      filterHost,
+      filterResource,
       forwardGroupById,
       getRuleEntryHostIdForSort,
       hostById,
@@ -5272,7 +5287,7 @@ function RulesContent() {
   const copyableSourceRules = useMemo(() => {
     const batchFilters: RuleFilterState = {
       ...ruleFilters,
-      filterHost: "all",
+      filterResource: "all",
       ruleCategory: copyRuleCategory,
       searchQuery: copyRuleSearch,
     };
@@ -5597,10 +5612,10 @@ function RulesContent() {
       : `user-${user?.id || "self"}`;
   const ruleCategoryCountsCacheKey = useMemo(
     () =>
-      [ruleFilterCacheScope, filterHost, ruleSearchQuery.trim() || "search-all"]
+      [ruleFilterCacheScope, filterResource, ruleSearchQuery.trim() || "search-all"]
         .map((value) => encodeURIComponent(String(value)))
         .join("."),
-    [filterHost, ruleFilterCacheScope, ruleSearchQuery],
+    [filterResource, ruleFilterCacheScope, ruleSearchQuery],
   );
   const [stableRuleCategoryCounts, setStableRuleCategoryCounts] = useState(
     () => {
@@ -5622,7 +5637,7 @@ function RulesContent() {
     });
   }, [ruleCategoryCountsCacheKey]);
   const liveRuleCategoryCounts = useMemo<RuleCategoryCounts>(() => {
-    if (!needsFullRuleList && rulePageQuery.data?.categoryCounts) {
+    if (rulePageQuery.data?.categoryCounts) {
       return normalizeRuleCategoryCounts(rulePageQuery.data.categoryCounts);
     }
     const sourceRules = selectedScopeQueryEnabled
@@ -5650,9 +5665,8 @@ function RulesContent() {
     selectedScopeQueryEnabled,
     selectedScopedRules,
   ]);
-  const hasFreshRuleCategoryCounts = !needsFullRuleList
-    ? rulePageQuery.data !== undefined && !rulePageQuery.isPlaceholderData
-    : fullRulesQuery.data !== undefined && !fullRulesQuery.isPlaceholderData;
+  const hasFreshRuleCategoryCounts =
+    rulePageQuery.data !== undefined && !rulePageQuery.isPlaceholderData;
   useEffect(() => {
     if (!hasFreshRuleCategoryCounts) return;
     setStableRuleCategoryCounts((previous) =>
@@ -6050,11 +6064,11 @@ function RulesContent() {
     () =>
       [
         ruleFilterCacheScope,
-        filterHost,
+        filterResource,
         ruleCategory,
         ruleSearchQuery.trim() || "search-all",
       ].join("."),
-    [filterHost, ruleCategory, ruleFilterCacheScope, ruleSearchQuery],
+    [filterResource, ruleCategory, ruleFilterCacheScope, ruleSearchQuery],
   );
   const trafficTotalsLastCacheScope =
     user?.role === "admin"
@@ -6063,7 +6077,7 @@ function RulesContent() {
   const hasActiveUserFilter = user?.role === "admin" && filterUser !== "self";
   const hasActiveRuleFilter =
     hasActiveUserFilter ||
-    filterHost !== "all" ||
+    filterResource !== "all" ||
     ruleCategory !== "all" ||
     ruleSearchQuery.trim().length > 0;
   const rulesHeaderLoading =
@@ -6090,14 +6104,10 @@ function RulesContent() {
   }, [rulePageQuery.data, rulePageQuery.isPlaceholderData]);
   const rulePageMeta = rulePageQuery.data ?? stableRulePageMeta;
   const ruleScopeTotal = Math.max(0, Number(rulePageMeta.scopeTotalItems) || 0);
-  const activeCount = needsFullRuleList
-    ? filteredRules.filter((r: any) => r.isEnabled && isRuleSupported(r)).length
-    : Math.max(0, Number(rulePageMeta.activeItems) || 0);
-  const filteredRuleTotal = needsFullRuleList
-    ? filteredRules.length
-    : Math.max(0, Number(rulePageMeta.totalItems) || 0);
+  const activeCount = Math.max(0, Number(rulePageMeta.activeItems) || 0);
+  const filteredRuleTotal = Math.max(0, Number(rulePageMeta.totalItems) || 0);
   const rulePagination = useServerPagination(
-    needsFullRuleList || isRuleGlobeView ? [] : orderedFilteredRules,
+    isRuleGlobeView ? [] : orderedFilteredRules,
     filteredRuleTotal,
     rulePageRequest,
     {
@@ -6109,8 +6119,7 @@ function RulesContent() {
   const ruleSortingEnabled =
     ruleCategory !== "all" &&
     effectiveViewMode !== "globe" &&
-    !needsFullRuleList &&
-    filterHost === "all" &&
+    filterResource === "all" &&
     ruleSearchQuery.trim().length === 0 &&
     (user?.role !== "admin" || filterUser !== "all");
   const ruleSortingReady =
@@ -8865,15 +8874,17 @@ function RulesContent() {
       : effectiveRuleCardSize;
 
   const handleRuleCategoryChange = (value: string) => {
-    const next = (
-      value === "local" ||
-      value === "tunnel" ||
-      value === "chain" ||
-      value === "group"
-        ? value
-        : "all"
-    ) as RuleCategory;
+    const next = (value === "local" || value === "tunnel" || value === "chain" || value === "group" ? value : "all") as RuleCategory;
     setRuleCategory(next);
+    const selected = parseRuleResourceFilter(filterResource);
+    if (next === "all" && selected.type) {
+      setFilterResource("all");
+      storeString(filterResourceStorageKey, "all");
+    } else if (next !== "all" && selected.type !== next) {
+      setFilterResource(next);
+      storeString(filterResourceStorageKey, next);
+      setRuleResourceMenuType(next);
+    }
   };
   const handleRulePageTabChange = (value: string) => {
     if (value === "landing") {
@@ -8891,16 +8902,25 @@ function RulesContent() {
     storeString(filterUserStorageKey, value);
   };
 
-  const handleFilterHostChange = (value: string) => {
-    setFilterHost(value);
-    storeString(filterHostStorageKey, value);
+  const handleFilterResourceChange = (value: string) => {
+    const next = normalizeRuleResourceFilter(value);
+    const parsed = parseRuleResourceFilter(next);
+    setFilterResource(next);
+    storeString(filterResourceStorageKey, next);
+    if (parsed.type) {
+      setRuleResourceMenuType(parsed.type);
+      setRuleCategory(parsed.type);
+    } else {
+      setRuleCategory("all");
+    }
+    setRuleResourceMenuOpen(false);
   };
 
   const clearRuleFilters = () => {
     setRuleSearchQuery("");
     setRuleCategory("all");
-    setFilterHost("all");
-    storeString(filterHostStorageKey, "all");
+    setFilterResource("all");
+    storeString(filterResourceStorageKey, "all");
     if (user?.role === "admin") {
       setFilterUser("self");
       storeString(filterUserStorageKey, "self");
@@ -9568,23 +9588,59 @@ function RulesContent() {
                 </SelectContent>
               </Select>
             )}
-            <Select value={filterHost} onValueChange={handleFilterHostChange}>
-              <SelectTrigger className="h-8 w-full text-xs sm:w-[160px]">
-                <SelectValue placeholder="所有入口主机" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">所有入口主机</SelectItem>
-                {hosts?.map((h: any) => (
-                  <SelectItem
-                    key={h.id}
-                    value={String(h.id)}
-                    textValue={getHostOptionText(h)}
-                  >
-                    {renderHostStatusLabel(h)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <DropdownMenu open={ruleResourceMenuOpen} onOpenChange={setRuleResourceMenuOpen} modal={false}>
+              <DropdownMenuTrigger asChild>
+                <Button type="button" variant="outline" className="h-8 w-full justify-between px-3 text-xs font-normal sm:w-[190px]">
+                  {(() => {
+                    const selected = parseRuleResourceFilter(filterResource);
+                    if (!selected.type) return "所有链路";
+                    if (!selected.id) return `全部${ruleTransferScopeLabels[selected.type]}`;
+                    const resource = getRuleFilterResources(selected.type).find((item: any) => Number(item.id) === selected.id);
+                    return resource?.name || `${ruleTransferScopeLabels[selected.type]} #${selected.id}`;
+                  })()}
+                  <ChevronRight className="h-3.5 w-3.5 rotate-90 text-muted-foreground" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-[min(34rem,calc(100vw-2rem))] p-1">
+                <div className="grid min-h-[13rem] grid-cols-[8.5rem_minmax(0,1fr)]">
+                  <div className="border-r border-border/60 p-1">
+                    <button type="button" onClick={() => handleFilterResourceChange("all")} className={`flex h-8 w-full items-center gap-2 rounded px-2 text-left text-xs transition-colors ${filterResource === "all" ? "bg-accent text-accent-foreground" : "hover:bg-muted"}`}>
+                      <LayoutGrid className="h-3.5 w-3.5" />全部
+                    </button>
+                    {ruleTransferScopeOptions.map((option) => {
+                      const Icon = option.value === "local" ? ArrowRightLeft : option.value === "tunnel" ? Network : option.value === "chain" ? GitBranch : Layers3;
+                      const active = ruleResourceMenuType === option.value;
+                      return (
+                        <button key={option.value} type="button" onMouseEnter={() => setRuleResourceMenuType(option.value)} onFocus={() => setRuleResourceMenuType(option.value)} onClick={() => setRuleResourceMenuType(option.value)} className={`flex h-8 w-full items-center gap-2 rounded px-2 text-left text-xs transition-colors ${active ? "bg-accent text-accent-foreground" : "hover:bg-muted"}`}>
+                          <Icon className="h-3.5 w-3.5" />{option.label}<ChevronRight className="ml-auto h-3.5 w-3.5 text-muted-foreground" />
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="min-w-0 p-1">
+                    <button type="button" onClick={() => handleFilterResourceChange(ruleResourceMenuType)} className={`flex h-8 w-full items-center rounded px-2 text-left text-xs font-medium transition-colors ${filterResource === ruleResourceMenuType ? "bg-accent text-accent-foreground" : "hover:bg-muted"}`}>
+                      全部{ruleTransferScopeLabels[ruleResourceMenuType]}
+                    </button>
+                    <div className="mt-1 max-h-64 overflow-y-auto">
+                      {getRuleFilterResources(ruleResourceMenuType).length > 0 ? getRuleFilterResources(ruleResourceMenuType).map((resource: any) => {
+                        const value = `${ruleResourceMenuType}:${Number(resource.id)}` as RuleResourceFilter;
+                        const detail = ruleResourceMenuType === "tunnel"
+                          ? getTunnelRouteText(resource, hosts || [])
+                          : resource?.domain || resource?.displayRemark || resource?.remark || resource?.description || "";
+                        return (
+                          <button key={value} type="button" onClick={() => handleFilterResourceChange(value)} className={`flex min-h-9 w-full flex-col justify-center rounded px-2 text-left transition-colors ${filterResource === value ? "bg-accent text-accent-foreground" : "hover:bg-muted"}`}>
+                            <span className="truncate text-xs font-medium">{resource?.name || `${ruleTransferScopeLabels[ruleResourceMenuType]} #${resource?.id}`}</span>
+                            {detail ? <span className="truncate text-[11px] text-muted-foreground">{detail}</span> : null}
+                          </button>
+                        );
+                      }) : (
+                        <div className="px-2 py-6 text-center text-xs text-muted-foreground">暂无可筛选的{ruleTransferScopeLabels[ruleResourceMenuType]}</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <Select
               value={String(rulePageSize)}
               onValueChange={handleRulePageSizeChange}
