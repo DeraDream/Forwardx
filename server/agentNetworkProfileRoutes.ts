@@ -2,7 +2,7 @@ import net from "node:net";
 import type { Router, Request, Response } from "express";
 import { getAgentHostFromRequest } from "./agentAuth";
 import { reportHostNetworkProfile } from "./hostNetworkProfileState";
-import { ENV } from "./env";
+import * as db from "./db";
 
 function familyOf(value: unknown): "ipv4" | "ipv6" | null {
   const text = String(value || "").trim().toLowerCase();
@@ -14,8 +14,7 @@ const NETWORK_PROFILE_PROXY_CACHE_MS = 10 * 60_000;
 const NETWORK_PROFILE_PROXY_CACHE_LIMIT = 2_048;
 const NETWORK_PROFILE_PROXY_PROVIDERS = new Set([
   "maxmind",
-  "maxmind-insights",
-  "dbip",
+  "ipapi",
   "proxycheck",
   "abuseipdb",
 ]);
@@ -27,33 +26,16 @@ type NetworkProfileProxyCacheEntry = {
 
 const networkProfileProxyCache = new Map<string, NetworkProfileProxyCacheEntry>();
 
-function networkProfileProxyRequest(ip: string, provider: string) {
+async function networkProfileProxyRequest(ip: string, provider: string) {
   const escapedIp = encodeURIComponent(ip);
   if (provider === "maxmind") {
     return { url: `https://ipinfo.check.place/${escapedIp}?lang=en`, headers: {} as Record<string, string> };
   }
-  if (provider === "maxmind-insights") {
-    const accountId = ENV.maxMindAccountId.trim();
-    const licenseKey = ENV.maxMindLicenseKey.trim();
-    if (!accountId || !licenseKey) {
-      throw new Error("MaxMind Insights credentials are not configured");
-    }
-    const basic = Buffer.from(`${accountId}:${licenseKey}`, "utf8").toString("base64");
+  if (provider === "ipapi") {
+    const apiKey = String((await db.getSetting("networkProfileIpapiApiKey")) || "").trim();
+    if (!apiKey) throw new Error("ipapi.is API key is not configured");
     return {
-      url: `https://geoip.maxmind.com/geoip/v2.1/insights/${escapedIp}`,
-      headers: {
-        Authorization: `Basic ${basic}`,
-        Accept: "application/vnd.maxmind.com-insights+json; charset=UTF-8; version=2.1",
-      },
-    };
-  }
-  if (provider === "dbip") {
-    const apiKey = ENV.dbIpApiKey.trim();
-    if (!apiKey) {
-      throw new Error("DB-IP API key is not configured");
-    }
-    return {
-      url: `https://api.db-ip.com/v2/${encodeURIComponent(apiKey)}/${escapedIp}`,
+      url: `https://api.ipapi.is/?q=${escapedIp}&key=${encodeURIComponent(apiKey)}`,
       headers: { Accept: "application/json" },
     };
   }
@@ -61,10 +43,8 @@ function networkProfileProxyRequest(ip: string, provider: string) {
     return { url: `https://proxycheck.io/v2/${escapedIp}?vpn=1&asn=1&risk=1&days=7`, headers: {} as Record<string, string> };
   }
   if (provider === "abuseipdb") {
-    const apiKey = ENV.abuseIpdbApiKey.trim();
-    if (!apiKey) {
-      throw new Error("AbuseIPDB API key is not configured");
-    }
+    const apiKey = String((await db.getSetting("networkProfileAbuseIpdbApiKey")) || "").trim();
+    if (!apiKey) throw new Error("AbuseIPDB API key is not configured");
     return {
       url: `https://api.abuseipdb.com/api/v2/check?ipAddress=${escapedIp}&maxAgeInDays=90&verbose=`,
       headers: {
@@ -97,7 +77,7 @@ async function fetchNetworkProfileProxyPayload(ip: string, provider: string) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), NETWORK_PROFILE_PROXY_TIMEOUT_MS);
     try {
-      const request = networkProfileProxyRequest(ip, provider);
+      const request = await networkProfileProxyRequest(ip, provider);
       const response = await fetch(request.url, {
         cache: "no-store",
         headers: {
@@ -146,15 +126,15 @@ export function registerAgentNetworkProfileRoutes(router: Router) {
         res.status(400).json({ error: "Invalid network profile risk proxy request" });
         return;
       }
-      // Optional paid providers should report a structured “not configured”
-      // result instead of HTTP 502. The Agent can then surface the exact reason
-      // and, for DB-IP, continue with its public-demo fallback.
-      if (provider === "maxmind-insights" && (!ENV.maxMindAccountId.trim() || !ENV.maxMindLicenseKey.trim())) {
-        res.json({ success: false, error: "MaxMind Insights credentials are not configured" });
+      // Keyed providers are called only after an admin has saved credentials
+      // in System Settings. Missing credentials are a clean unavailable state,
+      // not a provider/network failure.
+      if (provider === "ipapi" && !String((await db.getSetting("networkProfileIpapiApiKey")) || "").trim()) {
+        res.json({ success: false, error: "ipapi.is API key is not configured" });
         return;
       }
-      if (provider === "dbip" && !ENV.dbIpApiKey.trim()) {
-        res.json({ success: false, error: "DB-IP API key is not configured" });
+      if (provider === "abuseipdb" && !String((await db.getSetting("networkProfileAbuseIpdbApiKey")) || "").trim()) {
+        res.json({ success: false, error: "AbuseIPDB API key is not configured" });
         return;
       }
       const payload = await fetchNetworkProfileProxyPayload(ip, provider);
