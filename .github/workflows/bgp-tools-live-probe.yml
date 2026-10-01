@@ -1,4 +1,4 @@
-name: BGP Tools Live Probe
+name: Network Profile Live Probe
 
 on:
   push:
@@ -12,25 +12,22 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: Probe BGP.Tools SVG behavior
+      - name: Probe 155.103.50.67 providers
         shell: bash
         run: |
           set -u
+          IP="155.103.50.67"
           PREFIX="155.103.50.0/24"
-          PATHIMG="https://bgp.tools/pathimg/rt-155.103.50.0_24"
-          probe() {
-            name="$1"; url="$2"; shift 2
-            tmp="$(mktemp)"; hdr="$(mktemp)"
-            code="$(curl -L --compressed -sS -m 20 -D "$hdr" -o "$tmp" -w '%{http_code}' "$@" "$url" || true)"
-            echo "===== $name ====="
-            echo "URL=$url"
-            echo "HTTP=$code TYPE=$(grep -i '^content-type:' "$hdr" | tail -1 | tr -d '\r') SIZE=$(wc -c < "$tmp" | tr -d ' ')"
-            echo "HEADERS:"; sed -n '1,40p' "$hdr"
-            echo "BODY_PREFIX:"; head -c 700 "$tmp" | strings | head -20
-            echo
-            rm -f "$tmp" "$hdr"
-          }
-          probe "prefix browser" "https://bgp.tools/prefix/$PREFIX" -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/154 Safari/537.36" -H "Accept: text/html,application/xhtml+xml"
-          probe "plain" "$PATHIMG" -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/154 Safari/537.36" -H "Accept: image/svg+xml,image/*;q=0.9,*/*;q=0.2" -e "https://bgp.tools/prefix/$PREFIX"
-          probe "loggedin" "$PATHIMG?$(cat /proc/sys/kernel/random/uuid)&loggedin" -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/154 Safari/537.36" -H "Accept: image/svg+xml,image/*;q=0.9,*/*;q=0.2" -e "https://bgp.tools/prefix/$PREFIX"
-          probe "showrs" "$PATHIMG?$(cat /proc/sys/kernel/random/uuid)&loggedin&showrs" -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/154 Safari/537.36" -H "Accept: image/svg+xml,image/*;q=0.9,*/*;q=0.2" -e "https://bgp.tools/prefix/$PREFIX"
+          echo "===== FFraud ====="
+          curl -L --compressed -sS -m 20 "https://api.ffraud.com/public/ip/$IP" | jq '{fraud_score,risk,connection_type,hosting,company,geo}'
+          echo "===== IP99 ====="
+          curl -L --compressed -sS -m 20 "https://ip99.com/v1/ip/$IP" | jq .
+          echo "===== IP2Location JSON ====="
+          curl -L --compressed -sS -m 20 "https://api.ip2location.io/?ip=$IP&format=json" | jq .
+          echo "===== ProxyCheck ====="
+          curl -L --compressed -sS -m 20 "https://proxycheck.io/v2/$IP?vpn=1&asn=1&risk=1&days=7" | jq .
+          echo "===== BGP SVG ====="
+          tmp="$(mktemp)"
+          code="$(curl -L --compressed -sS -m 20 -o "$tmp" -w '%{http_code}' -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/154 Safari/537.36" -H "Accept: image/svg+xml,image/*;q=0.9,*/*;q=0.2" -e "https://bgp.tools/prefix/$PREFIX" "https://bgp.tools/pathimg/rt-155.103.50.0_24" || true)"
+          echo "HTTP=$code SIZE=$(wc -c < "$tmp" | tr -d ' ') SVG=$(grep -a -m1 -o '<svg' "$tmp" || true)"
+          rm -f "$tmp"
