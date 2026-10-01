@@ -16,7 +16,12 @@ jobs:
         shell: bash
         run: |
           set -eu
-          for IP in 85.149.212.98 155.103.50.67; do
-            echo "===== $IP ====="
-            curl -fsSL --compressed -A 'Mozilla/5.0 Chrome/154 Safari/537.36' -H 'Accept: application/json,text/plain,*/*' -e 'https://db-ip.com/' "https://db-ip.com/demo/home.php?s=$IP" | jq '{status, demoInfo: {ipAddress: .demoInfo.ipAddress, usageType: .demoInfo.usageType, threatLevel: .demoInfo.threatLevel, countryCode: .demoInfo.countryCode, asNumber: .demoInfo.asNumber, organization: .demoInfo.organization}}'
-          done
+          IP="85.149.212.98"
+          tmp="$(mktemp)"
+          curl -fsSL --compressed -A 'Mozilla/5.0 Chrome/154 Safari/537.36' -H 'Accept: application/json,text/plain,*/*' -e 'https://db-ip.com/' "https://db-ip.com/demo/home.php?s=$IP" -o "$tmp"
+          echo "===== RAW ====="
+          head -c 6000 "$tmp"
+          echo
+          echo "===== KEYS ====="
+          jq 'keys' "$tmp"
+          jq '.demoInfo // .data // .info // .' "$tmp" | head -c 6000
