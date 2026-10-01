@@ -435,24 +435,28 @@ func profileIdentity(cfg Config, client *http.Client, ip string) (map[string]any
 		primaryErr = err
 	}
 
-	var ipapi map[string]any
-	if err := profileGetJSON(client, "https://api.ipapi.is/?q="+url.QueryEscape(ip), &ipapi); err == nil {
-		for _, key := range []string{"is_datacenter", "is_vpn", "is_proxy", "is_tor", "is_abuser"} {
+	// ipapi.is switched its useful classification fields to keyed responses.
+	// Keep the key on the Panel: when no key is saved, the Panel returns an
+	// unavailable response and no external ipapi.is request is made.
+	if ipapi, err := profilePanelRiskProxy(cfg, ip, "ipapi"); err == nil {
+		for _, key := range []string{"is_datacenter", "is_vpn", "is_proxy", "is_tor", "is_abuser", "is_mobile"} {
 			if value, ok := ipapi[key]; ok {
 				if _, valid := profileBool(value); valid {
 					result[key] = value
 				}
 			}
 		}
-		if current := profileString(result["company"]); current == "" {
-			if company := profileString(ipapi["company"]); company != "" && !strings.HasPrefix(company, "map[") {
-				result["company"] = company
-			}
+		company := profileMap(ipapi["company"])
+		asnInfo := profileMap(ipapi["asn"])
+		if current := profileString(result["company"]); current == "" && company != nil {
+			result["company"] = firstNonEmpty(profileString(company["name"]), profileString(company["domain"]))
 		}
-		if current := profileString(result["asn"]); current == "" {
-			if asn := profileString(ipapi["asn"]); asn != "" && !strings.HasPrefix(asn, "map[") {
-				result["asn"] = asn
-				result["asnNumber"] = profileASNNumber(asn)
+		if current := profileString(result["asn"]); current == "" && asnInfo != nil {
+			asnNumber := profileASNNumber(asnInfo["asn"])
+			asnOrg := firstNonEmpty(profileString(asnInfo["org"]), profileString(asnInfo["name"]))
+			if asnNumber > 0 {
+				result["asnNumber"] = asnNumber
+				result["asn"] = fmt.Sprintf("AS%d %s", asnNumber, asnOrg)
 			}
 		}
 		if location := profileMap(ipapi["location"]); location != nil {
@@ -1048,26 +1052,41 @@ func profileProxyCheckSource(cfg Config, client *http.Client, ip string) profile
 }
 
 
-func profileMaxMindTypeSource(cfg Config, client *http.Client, ip string) profileRiskSource {
-	source := profileRiskSource{Name: "MaxMind"}
-	payload, err := profilePanelRiskProxy(cfg, ip, "maxmind-insights")
+func profileIPAPISource(cfg Config, ip string) profileRiskSource {
+	source := profileRiskSource{Name: "ipapi.is"}
+	payload, err := profilePanelRiskProxy(cfg, ip, "ipapi")
 	if err != nil {
 		source.Error = err.Error()
 		return source
 	}
-	traits := profileMap(payload["traits"])
-	anonymizer := profileMap(payload["anonymizer"])
-	country := profileMap(payload["country"])
-	source.Country = profileString(country["iso_code"])
-	source.NetworkType = firstNonEmpty(profileString(traits["user_type"]), profileString(traits["connection_type"]))
-	if hosting := profileBoolPtr(anonymizer["is_hosting_provider"]); hosting != nil {
-		source.IsDatacenter = hosting
+	location := profileMap(payload["location"])
+	company := profileMap(payload["company"])
+	asn := profileMap(payload["asn"])
+	if location != nil {
+		source.Country = profileString(location["country_code"])
 	}
-	source.IsProxy = profileBoolPtr(anonymizer["is_public_proxy"])
-	source.IsVPN = profileBoolPtr(anonymizer["is_anonymous_vpn"])
-	source.IsTor = profileBoolPtr(anonymizer["is_tor_exit_node"])
-	if source.Country == "" && source.NetworkType == "" && source.IsDatacenter == nil && source.IsProxy == nil && source.IsVPN == nil && source.IsTor == nil {
-		source.Error = "MaxMind Insights type data unavailable"
+	if asn != nil {
+		source.NetworkType = profileString(asn["type"])
+	}
+	if company != nil {
+		source.CompanyType = profileString(company["type"])
+	}
+	source.IsProxy = profileBoolPtr(payload["is_proxy"])
+	source.IsVPN = profileBoolPtr(payload["is_vpn"])
+	source.IsTor = profileBoolPtr(payload["is_tor"])
+	source.IsDatacenter = profileBoolPtr(payload["is_datacenter"])
+	source.IsAbuser = profileBoolPtr(payload["is_abuser"])
+	if source.NetworkType == "" {
+		if value := profileBoolPtr(payload["is_mobile"]); value != nil && *value {
+			source.NetworkType = "mobile"
+		} else if source.IsDatacenter != nil && *source.IsDatacenter {
+			source.NetworkType = "hosting"
+		}
+	}
+	if source.Country == "" && source.NetworkType == "" && source.CompanyType == "" &&
+		source.IsProxy == nil && source.IsVPN == nil && source.IsTor == nil &&
+		source.IsDatacenter == nil && source.IsAbuser == nil {
+		source.Error = "ipapi.is classification data unavailable"
 	}
 	return source
 }
@@ -1177,78 +1196,10 @@ func profilePostRaw(client *http.Client, rawURL, contentType, body string, heade
 
 var profileDBIPKeyPattern = regexp.MustCompile(`data-api-key=["']([^"']+)["']`)
 
-func profileDBIPSource(cfg Config, client *http.Client, ip string) profileRiskSource {
-	parse := func(payload map[string]any) profileRiskSource {
-		source := profileRiskSource{Name: "DB-IP"}
-		returnedIP := profileString(payload["ipAddress"])
-		if returnedIP != "" && returnedIP != ip {
-			source.Error = "DB-IP returned a different IP"
-			return source
-		}
-		source.Country = profileString(payload["countryCode"])
-		source.NetworkType = profileString(payload["usageType"])
-		source.IsProxy = profileBoolPtr(payload["isProxy"])
-		source.IsBot = profileBoolPtr(payload["isCrawler"])
-		switch strings.ToLower(profileString(payload["threatLevel"])) {
-		case "low":
-			score := float64(0); source.Score = &score; source.Level = "low"
-		case "medium":
-			score := float64(50); source.Score = &score; source.Level = "medium"
-		case "high":
-			score := float64(100); source.Score = &score; source.Level = "high"
-		}
-		if source.Country == "" && source.NetworkType == "" && source.Score == nil && source.IsProxy == nil && source.IsBot == nil {
-			source.Error = "DB-IP type data unavailable"
-		}
-		return source
-	}
-
-	// Prefer the official Core/Extended API through the Panel so the optional
-	// API key never leaves the Panel host.
-	if payload, err := profilePanelRiskProxy(cfg, ip, "dbip"); err == nil {
-		source := parse(payload)
-		if profileRiskSourceHasUsefulData(source) || source.NetworkType != "" {
-			return source
-		}
-	}
-
-	// Best-effort keyless fallback: DB-IP's own public demo exposes usageType,
-	// but it has a shared daily quota and is not guaranteed to be available.
-	code, body, err := profileReadRetry(client, "https://db-ip.com/demo/home.php?s="+url.QueryEscape(ip), map[string]string{
-		"Accept": "application/json,text/plain,*/*",
-		"Referer": "https://db-ip.com/",
-	}, 2)
-	if err == nil && code >= 200 && code < 300 {
-		var wrapper map[string]any
-		if json.Unmarshal([]byte(body), &wrapper) == nil {
-			info := profileMap(wrapper["demoInfo"])
-			if info != nil {
-				if errorCode := profileString(info["errorCode"]); errorCode != "" {
-					source := profileRiskSource{Name: "DB-IP"}
-					if strings.EqualFold(errorCode, "OVER_QUERY_LIMIT") {
-						source.Error = "DB-IP API key is not configured and demo quota is exhausted"
-					} else {
-						source.Error = firstNonEmpty(profileString(info["error"]), errorCode)
-					}
-					return source
-				}
-				source := parse(info)
-				if profileRiskSourceHasUsefulData(source) || source.NetworkType != "" {
-					return source
-				}
-			}
-		}
-	}
-
-	source := profileRiskSource{Name: "DB-IP"}
-	source.Error = "DB-IP API key is not configured"
-	return source
-}
-
 func profileAbuseIPDBSource(cfg Config, client *http.Client, ip string) profileRiskSource {
 	source := profileRiskSource{Name: "AbuseIPDB"}
-	// AbuseIPDB has no anonymous endpoint suitable for this query. The panel
-	// proxy calls the official API only when ABUSEIPDB_API_KEY is configured.
+	// AbuseIPDB has no anonymous endpoint suitable for this query. The Panel
+	// calls the official API only after an admin saves a key in System Settings.
 	payload, err := profilePanelRiskProxy(cfg, ip, "abuseipdb")
 	if err != nil {
 		source.Error = err.Error()
@@ -1295,21 +1246,18 @@ func profileRiskAnyTrue(sources []profileRiskSource, selector func(profileRiskSo
 }
 
 func profileRisk(cfg Config, client *http.Client, ip string) map[string]any {
-	// Risk rows must represent the provider named on the row. Do not synthesize
-	// Scamalytics/IPQS/ipapi/AbuseIPDB values from unrelated fallback scores.
-	// All providers below are queried directly, except AbuseIPDB which is proxied
-	// through the panel only to keep its optional API key off the Agent.
+	// Risk/type rows must represent the provider named on the row. Keyed
+	// providers are proxied through the Panel so credentials never reach Agent.
 	checks := []struct {
 		name  string
 		check func() profileRiskSource
 	}{
 		{"ProxyCheck", func() profileRiskSource { return profileProxyCheckSource(cfg, client, ip) }},
 		{"IPinfo", func() profileRiskSource { return profileIPInfoSource(client, ip) }},
-		{"MaxMind", func() profileRiskSource { return profileMaxMindTypeSource(cfg, client, ip) }},
+		{"ipapi.is", func() profileRiskSource { return profileIPAPISource(cfg, ip) }},
 		{"ipregistry", func() profileRiskSource { return profileIPRegistrySource(client, ip) }},
 		{"FFraud", func() profileRiskSource { return profileFFraudSource(client, ip) }},
 		{"IP99", func() profileRiskSource { return profileIP99Source(client, ip) }},
-		{"DB-IP", func() profileRiskSource { return profileDBIPSource(cfg, client, ip) }},
 		{"IP2Location", func() profileRiskSource { return profileIP2LocationPrimarySource(client, ip) }},
 		{"AbuseIPDB", func() profileRiskSource { return profileAbuseIPDBSource(cfg, client, ip) }},
 	}
@@ -1336,7 +1284,7 @@ func profileRisk(cfg Config, client *http.Client, ip string) map[string]any {
 		if strings.TrimSpace(sources[index].Error) == "" {
 			continue
 		}
-		if item.name == "AbuseIPDB" && strings.Contains(strings.ToLower(sources[index].Error), "api key") {
+		if (item.name == "AbuseIPDB" || item.name == "ipapi.is") && strings.Contains(strings.ToLower(sources[index].Error), "api key") {
 			continue
 		}
 		time.Sleep(250 * time.Millisecond)
@@ -1352,6 +1300,7 @@ func profileRisk(cfg Config, client *http.Client, ip string) map[string]any {
 	preferredTypeSources := map[string]bool{
 		"IPinfo": true,
 		"ipregistry": true,
+		"ipapi.is": true,
 		"IP2Location": true,
 		"AbuseIPDB": true,
 	}
