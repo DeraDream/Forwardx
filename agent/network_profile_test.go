@@ -286,3 +286,82 @@ func TestProfileRiskLevelFromText(t *testing.T) {
 		}
 	}
 }
+
+
+func TestProfileRRCRegionForCountry(t *testing.T) {
+	cases := map[string]profileRRCRegionPlan{
+		"JP": {Function: "JP_UnlockTest", Label: "日本平台"},
+		"HK": {Function: "HK_UnlockTest", Label: "香港平台"},
+		"SG": {Function: "SEA_UnlockTest", Label: "东南亚平台"},
+		"AU": {Function: "OA_UnlockTest", Label: "大洋洲平台"},
+		"US": {Function: "NA_UnlockTest", Label: "北美平台"},
+		"DE": {Function: "EU_UnlockTest", Label: "欧洲平台"},
+		"BR": {Function: "SA_UnlockTest", Label: "南美平台"},
+		"ZA": {Function: "AF_UnlockTest", Label: "非洲平台"},
+		"CN": {},
+	}
+	for country, want := range cases {
+		got := profileRRCRegionForCountry(country)
+		if got != want {
+			t.Fatalf("profileRRCRegionForCountry(%q)=%+v want=%+v", country, got, want)
+		}
+	}
+}
+
+func TestProfileRRCParseOutput(t *testing.T) {
+	raw := "\x1b[32mIPv4:\x1b[0m\n" +
+		"============[ Multination ]============\n" +
+		"Netflix: Yes (Region: HK)\n" +
+		"Spotify Region: HK\n" +
+		"Steam Currency: HKD\n" +
+		"DAZN: Unsupported\n" +
+		"HotStar: No\n"
+	items := profileRRCParseOutput(raw, "global", "跨国平台")
+	if len(items) != 5 {
+		t.Fatalf("profileRRCParseOutput() len=%d want=5: %#v", len(items), items)
+	}
+	byName := map[string]map[string]any{}
+	for _, item := range items {
+		byName[profileString(item["name"])] = item
+	}
+	if got := profileString(byName["Netflix"]["status"]); got != "unlocked" {
+		t.Fatalf("Netflix status=%q", got)
+	}
+	if got := profileString(byName["Netflix"]["region"]); got != "HK" {
+		t.Fatalf("Netflix region=%q", got)
+	}
+	if got := profileString(byName["Spotify Region"]["status"]); got != "info" {
+		t.Fatalf("Spotify status=%q", got)
+	}
+	if got := profileString(byName["Spotify Region"]["region"]); got != "HK" {
+		t.Fatalf("Spotify region=%q", got)
+	}
+	if got := profileString(byName["DAZN"]["status"]); got != "unsupported" {
+		t.Fatalf("DAZN status=%q", got)
+	}
+	if got := profileString(byName["HotStar"]["status"]); got != "blocked" {
+		t.Fatalf("HotStar status=%q", got)
+	}
+}
+
+func TestProfileRRCParseRegionalSubgroups(t *testing.T) {
+	raw := "IPv4:\n" +
+		"===============[ Japan ]===============\n" +
+		"NHK+: Yes\n" +
+		"---Game---\n" +
+		"Kancolle Japan: Yes\n" +
+		"Pretty Derby Japan: Failed (Network Connection)\n"
+	items := profileRRCParseOutput(raw, "regional", "日本平台")
+	if len(items) != 3 {
+		t.Fatalf("profileRRCParseOutput() len=%d want=3: %#v", len(items), items)
+	}
+	if subgroup := profileString(items[0]["subgroup"]); subgroup != "" {
+		t.Fatalf("NHK subgroup=%q want empty", subgroup)
+	}
+	if subgroup := profileString(items[1]["subgroup"]); subgroup != "Game" {
+		t.Fatalf("Kancolle subgroup=%q want Game", subgroup)
+	}
+	if status := profileString(items[2]["status"]); status != "error" {
+		t.Fatalf("Pretty Derby status=%q want error", status)
+	}
+}
