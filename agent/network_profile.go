@@ -2131,9 +2131,9 @@ func profileUnlockMethod(target, family, sourceIP string) string {
 }
 
 type profileMailProviderResult struct {
-	Name      string \`json:"name"\`
-	Available bool   \`json:"available"\`
-	Detail    string \`json:"detail,omitempty"\`
+	Name      string `json:"name"`
+	Available bool   `json:"available"`
+	Detail    string `json:"detail,omitempty"`
 }
 
 func profileSMTPAvailable(family, host string, timeout time.Duration) (bool, string) {
@@ -2187,7 +2187,7 @@ func profileMailProviderCheck(family, name, domain string) profileMailProviderRe
 	return result
 }
 
-var profileDNSBLDomainPattern = regexp.MustCompile(\`(?i)^[a-z0-9][a-z0-9.-]*[a-z0-9]$\`)
+var profileDNSBLDomainPattern = regexp.MustCompile(`(?i)^[a-z0-9][a-z0-9.-]*[a-z0-9]$`)
 
 func profileDNSBLDomains() []string {
 	seen := map[string]struct{}{}
