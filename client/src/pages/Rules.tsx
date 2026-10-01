@@ -3670,16 +3670,14 @@ function RulesContent() {
     setBatchEditForm(buildEmptyBatchEditForm());
     setCopyRuleCategory(ruleCategory);
     setCopyRuleSearch(ruleSearchQuery);
-    setCopyTargetScopeType(
-      canUseSavedLocalForward
-        ? "local"
-        : canUseGost
-          ? "tunnel"
-          : canUseForwardChain
-            ? "chain"
-            : "group",
-    );
-    setCopyTargetResourceIds([]);
+    const preferredCopyTargetScope: RuleTransferScopeType = canUseSavedLocalForward
+      ? "local"
+      : canUseGost
+        ? "tunnel"
+        : canUseForwardChain
+          ? "chain"
+          : "group";
+    commitCopyTargetSelection(preferredCopyTargetScope, []);
     setCopyTargetSearch("");
     setCopyRuleIds([]);
     setCopyConflictStrategy("auto");
@@ -5310,9 +5308,13 @@ function RulesContent() {
     selectedScopeQueryEnabled,
   ]);
   const filteredRules = stableFilteredRules;
+  // Batch tools need all matching source rules, while the page itself stays
+  // on its current server page. Keep these two data sources separate.
   const transferSourceRules = selectedScopeQueryEnabled
     ? selectedScopedRules || []
-    : baseScopedRules;
+    : needsFullRuleList
+      ? (fullRulesQuery.data as any[] | undefined) || []
+      : baseScopedRules;
   const copyableSourceRules = useMemo(() => {
     const batchFilters: RuleFilterState = {
       ...ruleFilters,
@@ -11953,7 +11955,7 @@ function RulesContent() {
                           <div className="space-y-1">
                             <Label>复制目标</Label>
                             <div className="text-xs text-muted-foreground">
-                              可同时选择多个{copyTargetScopeLabel}作为复制目标。
+                              可同时选择多个{copyTargetScopeLabel}；搜索仅筛选显示，不会取消已选目标。
                             </div>
                           </div>
                           <div className="inline-flex items-center gap-2 self-start rounded-full bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-700 dark:text-emerald-300">
@@ -11966,11 +11968,12 @@ function RulesContent() {
                         <div className="grid gap-2 sm:grid-cols-[10rem_minmax(0,1fr)]">
                           <Select
                             value={copyTargetScopeType}
+                            disabled={copyActionPending}
                             onValueChange={(value) => {
-                              setCopyTargetScopeType(
+                              commitCopyTargetSelection(
                                 value as RuleTransferScopeType,
+                                [],
                               );
-                              setCopyTargetResourceIds([]);
                               setCopyTargetSearch("");
                             }}
                           >
@@ -11997,6 +12000,7 @@ function RulesContent() {
                               }
                               placeholder={"查找" + copyTargetScopeLabel}
                               className="h-9 pl-8 pr-8 text-xs"
+                              disabled={copyActionPending}
                             />
                             {copyTargetSearch ? (
                               <button
@@ -12004,6 +12008,7 @@ function RulesContent() {
                                 aria-label="清空目标查找"
                                 className="absolute right-2 top-1/2 inline-flex h-4 w-4 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-foreground"
                                 onClick={() => setCopyTargetSearch("")}
+                                disabled={copyActionPending}
                               >
                                 <XCircle className="h-3.5 w-3.5" />
                               </button>
@@ -12014,6 +12019,7 @@ function RulesContent() {
                           <Label>端口冲突处理</Label>
                           <Select
                             value={copyConflictStrategy}
+                            disabled={copyActionPending}
                             onValueChange={(value) =>
                               setCopyConflictStrategy(value as any)
                             }
@@ -12046,14 +12052,31 @@ function RulesContent() {
                               const visibleTargetIdSet = new Set(
                                 visibleTargetIds,
                               );
-                              setCopyTargetResourceIds((prev) =>
-                                allVisibleCopyTargetsSelected
-                                  ? prev.filter(
-                                      (id) => !visibleTargetIdSet.has(id),
-                                    )
-                                  : Array.from(
-                                      new Set([...prev, ...visibleTargetIds]),
-                                    ),
+                              const current =
+                                copyTargetSelectionRef.current;
+                              const renderedScopeType = copyTargetScopeType;
+                              const currentIds =
+                                current.scopeType === renderedScopeType
+                                  ? current.resourceIds
+                                  : [];
+                              const visibleSelected =
+                                visibleTargetIds.length > 0 &&
+                                visibleTargetIds.every((id) =>
+                                  currentIds.includes(id),
+                                );
+                              const nextIds = visibleSelected
+                                ? currentIds.filter(
+                                    (id) => !visibleTargetIdSet.has(id),
+                                  )
+                                : Array.from(
+                                    new Set([
+                                      ...currentIds,
+                                      ...visibleTargetIds,
+                                    ]),
+                                  );
+                              commitCopyTargetSelection(
+                                renderedScopeType,
+                                nextIds,
                               );
                             }}
                             disabled={
@@ -12071,7 +12094,7 @@ function RulesContent() {
                           {filteredCopyTargetResources.length > 0 ? (
                             filteredCopyTargetResources.map((resource: any) => (
                               <label
-                                key={resource.id}
+                                key={`${copyTargetScopeType}:${resource.id}`}
                                 className={`flex cursor-pointer items-start gap-3 rounded-md border p-2 transition-colors hover:bg-muted/40 ${
                                   copyTargetResourceIds.includes(
                                     Number(resource.id),
@@ -12108,6 +12131,34 @@ function RulesContent() {
                             <div className="py-10 text-center text-sm text-muted-foreground">
                               没有可选择的{copyTargetScopeLabel}
                             </div>
+                          )}
+                        </div>
+                        <div className="rounded-md border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-xs leading-5 text-emerald-800 dark:text-emerald-200">
+                          {selectedCopyTargetResources.length > 0 ? (
+                            <>
+                              <span className="font-medium">本次复制目标：</span>
+                              <span>
+                                {selectedCopyTargetResources
+                                  .slice(0, 4)
+                                  .map((resource: any, index: number) => (
+                                    <span
+                                      key={`${copyTargetScopeType}-summary-${resource.id}`}
+                                    >
+                                      {index > 0 ? "、" : ""}
+                                      {getTransferResourceLabel(
+                                        copyTargetScopeType,
+                                        resource,
+                                      )}{" "}
+                                      (#{Number(resource.id)})
+                                    </span>
+                                  ))}
+                                {selectedCopyTargetResources.length > 4
+                                  ? ` 等 ${selectedCopyTargetResources.length} 个目标`
+                                  : ""}
+                              </span>
+                            </>
+                          ) : (
+                            <span>尚未选择复制目标</span>
                           )}
                         </div>
                       </div>
