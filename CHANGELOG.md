@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.3.398] - 2026-10-01
+
+### BGP 预览回退为自适应并新增全屏查看
+
+- BGP 拓扑在面板内恢复自适应卡片宽度，避免原始 SVG 尺寸把弹窗横向撑出；点击拓扑图可进入全屏遮罩，按 SVG 原始矢量尺寸查看并支持滚动。
+- 修复未配置 MaxMind Insights 时前端只显示“检测失败”的问题：Panel 对可选凭据缺失返回结构化状态，网络画像会明确显示“需 Insights Key”。
+- DB-IP 继续支持可选 `DBIP_API_KEY`；无 Key 时尝试官方 Demo，Demo 配额耗尽则明确显示“需 API Key”。
+- Panel / APK Release 升级至 `2.3.398`；Agent 保持 `2.2.227`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.3.397] - 2026-10-01
 
 ### 补齐 MaxMind / DB-IP 类型列并优化 BGP 清晰度
