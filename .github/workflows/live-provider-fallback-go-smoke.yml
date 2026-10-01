@@ -1,0 +1,79 @@
+name: Live Provider Fallback Go Smoke
+
+on:
+  push:
+    branches:
+      - fix-network-profile-provider-fallbacks
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+      - name: Inject live network-profile smoke test
+        shell: bash
+        run: |
+          cat > agent/network_profile_live_smoke_test.go <<'EOF'
+          package main
+
+          import (
+            "strings"
+            "testing"
+            "time"
+          )
+
+          func TestLiveNetworkProfileFallback85(t *testing.T) {
+            const ip = "85.149.212.98"
+            client := profileHTTPClient("ipv4", 15*time.Second)
+
+            ffraud := profileFFraudFallbackSource(client, ip)
+            if ffraud.Error != "" {
+              t.Fatalf("FFraud fallback failed: %s", ffraud.Error)
+            }
+            if ffraud.Score == nil || ffraud.NetworkType == "" {
+              t.Fatalf("FFraud incomplete: %+v", ffraud)
+            }
+
+            directIP2 := profileIP2LocationDirectSource(client, ip)
+            if directIP2.Error != "" || directIP2.Country == "" {
+              t.Fatalf("IP2Location keyless direct failed: %+v", directIP2)
+            }
+
+            directIPAPI := profileIPAPIDirectSource(client, ip)
+            if directIPAPI.Error != "" || directIPAPI.Country == "" {
+              t.Fatalf("ipapi.is anonymous direct failed: %+v", directIPAPI)
+            }
+
+            result := profileRisk(Config{}, client, ip)
+            raw, ok := result["sources"].([]profileRiskSource)
+            if !ok || len(raw) < 9 {
+              t.Fatalf("unexpected sources: %#v", result["sources"])
+            }
+
+            checks := map[int]string{3: "ipapi", 7: "AbuseIPDB", 8: "IP2Location"}
+            for index, name := range checks {
+              source := raw[index]
+              t.Logf("%s => score=%v level=%s network=%s company=%s country=%s fallback=%s err=%s",
+                name, source.Score, source.Level, source.NetworkType, source.CompanyType, source.Country, source.FallbackProvider, source.Error)
+              if source.Error != "" {
+                t.Fatalf("%s still failed: %s", name, source.Error)
+              }
+              if source.Score == nil {
+                t.Fatalf("%s score still empty: %+v", name, source)
+              }
+              if source.NetworkType == "" {
+                t.Fatalf("%s network type still empty: %+v", name, source)
+              }
+              if !strings.Contains(source.FallbackProvider, "FFraud") && !strings.Contains(source.FallbackProvider, "IP99") {
+                t.Fatalf("%s expected explicit fallback metadata: %+v", name, source)
+              }
+            }
+          }
+          EOF
+      - name: Run live smoke
+        working-directory: agent
+        run: go test -run TestLiveNetworkProfileFallback85 -v -count=1
