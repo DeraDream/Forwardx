@@ -28,3 +28,6 @@ jobs:
           testurl ipapi "https://api.ipapi.is/?q=$IP"
           testurl ip2location "https://api.ip2location.io/?ip=$IP"
           testurl abusepage "https://www.abuseipdb.com/check/$IP"
+          testurl abuseapi "https://api.abuseipdb.com/api/v2/check?ipAddress=$IP&maxAgeInDays=90"
+          testurl ip2demo "https://www.ip2location.com/demo/$IP"
+          testurl ipapiweb "https://ipapi.is/?q=$IP"
