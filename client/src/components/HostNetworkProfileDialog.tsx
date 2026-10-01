@@ -360,11 +360,13 @@ export function HostNetworkProfileDialog({
                               <div className="flex flex-col items-center gap-1">
                                 <Badge variant="outline" className={ipTypeBadgeClass(item.source.networkType)}>{ipTypeLabel(item.source.networkType)}</Badge>
                               </div>
-                            ) : item.name === "MaxMind" && String(item.source?.error || "").includes("credentials")
+                            ) : item.name === "MaxMind" && String(item.source?.error || "").toLowerCase().includes("credentials")
                               ? <span className="text-[10px] text-amber-700 dark:text-amber-300" title={item.source?.error}>需 Insights Key</span>
-                              : item.source?.error
-                                ? <span className="text-[10px] text-red-600 dark:text-red-400" title={item.source.error}>检测失败</span>
-                                : <span className="text-[10px] text-muted-foreground">未返回</span>}
+                              : item.name === "DB-IP" && String(item.source?.error || "").toLowerCase().includes("api key")
+                                ? <span className="text-[10px] text-amber-700 dark:text-amber-300" title={item.source?.error}>需 API Key</span>
+                                : item.source?.error
+                                  ? <span className="text-[10px] text-red-600 dark:text-red-400" title={item.source.error}>检测失败</span>
+                                  : <span className="text-[10px] text-muted-foreground">未返回</span>}
                           </td>
                         ))}
                       </tr>
