@@ -31,8 +31,13 @@ async function networkProfileProxyRequest(ip: string, provider: string) {
     const apiKey = String((await db.getSetting("networkProfileIpapiApiKey")) || "").trim();
     if (!apiKey) throw new Error("ipapi.is API key is not configured");
     return {
-      url: `https://api.ipapi.is/?q=${escapedIp}&key=${encodeURIComponent(apiKey)}`,
-      headers: { Accept: "application/json" },
+      url: "https://api.ipapi.is",
+      method: "POST",
+      body: JSON.stringify({ q: ip, key: apiKey }),
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
     };
   }
   if (provider === "proxycheck") {
@@ -76,6 +81,8 @@ async function fetchNetworkProfileProxyPayload(ip: string, provider: string) {
       const request = await networkProfileProxyRequest(ip, provider);
       const response = await fetch(request.url, {
         cache: "no-store",
+        method: request.method || "GET",
+        body: request.body,
         headers: {
           Accept: "application/json,text/plain,*/*",
           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125 Safari/537.36",
