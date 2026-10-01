@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.3.393] - 2026-10-01
+
+### 网络画像风险源容灾补全与实网验证
+
+- 针对 `ipinfo.check.place` 在数据中心出口被 Cloudflare 403 的情况，补全风险源容灾：ipapi、Scamalytics、IPQS、AbuseIPDB 在主数据源失败或缺少评分时，依次使用 FFraud、IP99、ProxyCheck 补齐缺失字段；主源已有字段始终优先，不会被备用源覆盖。
+- IP2Location 继续优先使用官方公开 Demo / keyless 接口；公开 Demo 已在 GitHub Azure Runner 对 `85.149.212.98` 实测得到 Usage Type、AS Usage Type、Fraud Score 与代理状态，随后仅由共享备用源补齐 Demo 未提供的风险布尔字段。
+- 风险 UI 明确展示“回退 FFraud / IP99 / ProxyCheck”等来源，并将说明改为“主数据源优先；受限时明确标注备用源评分”，避免把备用评分伪装成原数据库返回值。
+- 新增共享风险回退链回归测试，并使用临时 GitHub Actions 对 `85.149.212.98` 做真实外网验证：check.place 的 ipapi / AbuseIPDB / IP2Location 均为 403，但 FFraud、IP99、IP2Location Demo 可用；ipapi、Scamalytics、IPQS、AbuseIPDB 与 IP2Location 五行均成功得到可展示数据。测试 workflow 验证后已删除。
+- Panel / APK Release 升级至 `2.3.393`；Agent 升级至 `2.2.223`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.3.392] - 2026-10-01
 
 ### 网络画像重构：IPQuality 对齐、BGP 拓扑、邮局与黑名单检测
