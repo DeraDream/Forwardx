@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.3.395] - 2026-10-01
+
+### 修复 IP 类型属性语义与 BGP 拓扑空白
+
+- 修正 IP 类型属性表的数据源语义：FFraud / IP99 / ProxyCheck 的分类字段与 IPQuality 的“使用类型 / 公司类型”并非同一口径，不再塞入该矩阵；矩阵仅保留 IPinfo、ipregistry、IP2Location，以及配置官方 Key 时的 AbuseIPDB。
+- 实测 `155.103.50.67`：FFraud 将其识别为 Residential 且给出错误 ASN `AS63262`，IP99 返回 `GOV`，而实际 Prefix `155.103.50.0/24` 为 `AS152900 Onidel Pty Ltd`；因此这两类字段不再用于 IP 类型结论。
+- 完善 IP 类型标签归一化：`Residential` 显示为“家宽”，`(DCH) Data Center/Web Hosting/Transit` 显示为“机房”，并兼容 COM / ISP / MOB / CDN / GOV 等数据库代码，不再直接显示长英文原值。
+- BGP 拓扑改为由 Agent 使用目标机器自己的出口直接获取 BGP.Tools SVG，并随网络画像结果回传给 Panel；Panel 端只保留旧数据的回退抓取，避免 Panel 出口拿到 HTTP 200 的 HTML/反爬页面后误报“未返回 SVG”。
+- 对 `155.103.50.0/24` 做真实外网验证：BGP.Tools pathimg 返回 HTTP 200、`image/svg+xml`，Agent 新逻辑生成约 27 KB 的 SVG data URL 并通过 live test。
+- 新增 BGP SVG 校验回归测试；临时外网测试 workflow 验证后已删除。
+- Panel / APK Release 升级至 `2.3.395`；Agent 升级至 `2.2.225`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.3.394] - 2026-10-01
 
 ### 网络画像风险源改为真实直连数据库
