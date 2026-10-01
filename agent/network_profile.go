@@ -2409,7 +2409,7 @@ type profileRRCRegionPlan struct {
 }
 
 var profileRRCANSI = regexp.MustCompile("\x1b\\[[0-9;?]*[ -/]*[@-~]")
-var profileRRCResultLine = regexp.MustCompile("^(.+?):\\s+(.+)$")
+var profileRRCResultLine = regexp.MustCompile("^(.+):\\s+(.+)$")
 var profileRRCRegionPattern = regexp.MustCompile("(?i)Region:\\s*([A-Za-z]{2,3})")
 var profileRRCHeadingPattern = regexp.MustCompile("\\[\\s*([^\\]]+?)\\s*\\]")
 
@@ -2507,7 +2507,7 @@ func profileRRCStatus(value string) string {
 		return "unsupported"
 	case strings.HasPrefix(lower, "failed"), strings.Contains(lower, "network connection"):
 		return "error"
-	case strings.Contains(lower, "originals only"), strings.Contains(lower, "oversea only"), strings.Contains(lower, "partial"):
+	case strings.Contains(lower, "originals only"), strings.Contains(lower, "oversea only"), strings.Contains(lower, "only available"), strings.Contains(lower, "partial"):
 		return "partial"
 	case strings.HasPrefix(lower, "yes"), strings.HasPrefix(lower, "serviced by"):
 		return "unlocked"
@@ -2545,7 +2545,8 @@ func profileRRCParseOutput(raw, category, group string) []map[string]any {
 	seen := map[string]int{}
 	for _, rawLine := range strings.Split(cleaned, "\n") {
 		line := strings.TrimSpace(rawLine)
-		if line == "" || strings.HasPrefix(line, "jq: parse error") || strings.HasPrefix(line, "curl:") {
+		if line == "" || strings.HasPrefix(line, "jq: parse error") || strings.HasPrefix(line, "curl:") ||
+			strings.HasPrefix(line, "bash:") || strings.Contains(line, "command not found") {
 			continue
 		}
 		if strings.HasPrefix(line, "---") && strings.HasSuffix(line, "---") {
