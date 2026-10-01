@@ -80,6 +80,7 @@ export const ENV = {
   abuseIpdbApiKey: process.env.ABUSEIPDB_API_KEY ?? "",
   maxMindAccountId: process.env.MAXMIND_ACCOUNT_ID ?? "",
   maxMindLicenseKey: process.env.MAXMIND_LICENSE_KEY ?? "",
+  dbIpApiKey: process.env.DBIP_API_KEY ?? "",
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN ?? "",
   telegramBotPolling: process.env.TELEGRAM_BOT_POLLING !== "false",
   isProduction: process.env.NODE_ENV === "production",
