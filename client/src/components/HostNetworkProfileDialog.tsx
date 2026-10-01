@@ -194,9 +194,9 @@ export function HostNetworkProfileDialog({
     .join(" · ");
   const maxmind = identity.maxmind || {};
   const ipinfoBasic = identity.ipinfoBasic || {};
-  const usingMaxMind = Object.keys(maxmind).length > 0;
+  const basicProvider = String(identity.basicProvider || (Object.keys(ipinfoBasic).length ? "IPinfo" : "ipwho.is"));
+  const usingMaxMind = basicProvider === "MaxMind";
   const basic = usingMaxMind ? maxmind : ipinfoBasic;
-  const basicProvider = String(identity.basicProvider || (usingMaxMind ? "MaxMind" : Object.keys(ipinfoBasic).length ? "IPinfo" : "ipwho.is"));
   const basicLat = Number(basic.latitude ?? identity.latitude);
   const basicLon = Number(basic.longitude ?? identity.longitude);
   const hasCoordinates = Number.isFinite(basicLat) && Number.isFinite(basicLon);
@@ -224,7 +224,7 @@ export function HostNetworkProfileDialog({
   const riskOrder = ["IP2Location", "Scamalytics", "ipapi", "AbuseIPDB", "IPQS", "DB-IP"];
   const scoredRiskSources = riskOrder.map((name) => {
     const source = riskSources.find((item: any) => item?.name === name || (name === "ipapi" && item?.name === "ipapi.is"));
-    return source || { name, level: "unknown", error: "无可用数据" };
+    return source ? { ...source, displayName: name } : { name, displayName: name, level: "unknown", error: "无可用数据" };
   });
   const typeSourceNames = ["IPinfo", "ipregistry", "ipapi.is", "IP2Location", "AbuseIPDB"];
   const typeSources = typeSourceNames.map((name) => {
@@ -371,7 +371,7 @@ export function HostNetworkProfileDialog({
                   const marker = hasScore ? Math.max(0, Math.min(100, score)) : 0;
                   return (
                     <div key={source.name} className="grid grid-cols-[96px_minmax(0,1fr)_54px_auto] items-center gap-2 text-xs">
-                      <div className="font-medium">{source.name}</div>
+                      <div className="font-medium">{source.displayName || source.name}</div>
                       <div className="relative h-2 overflow-visible rounded-full bg-muted">
                         <div className="absolute inset-0 flex overflow-hidden rounded-full opacity-70">
                           <span className="w-1/5 bg-emerald-500/70" />
