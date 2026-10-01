@@ -15,31 +15,38 @@ jobs:
     if: contains(github.event.head_commit.message, 'probe network profile providers')
     runs-on: ubuntu-latest
     steps:
-      - name: Probe provider endpoints
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+      - name: Probe live fallback parsers
         shell: bash
         run: |
-          set -u
-          IP="85.149.212.98"
-          probe() {
-            local name="$1"
-            local url="$2"
-            echo
-            echo "===== $name ====="
-            tmp="$(mktemp)"
-            code="$(curl -L --compressed -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/154 Safari/537.36' -H 'Accept: application/json,text/plain,text/html,*/*' -sS -m 20 -o "$tmp" -w '%{http_code}' "$url" || true)"
-            echo "HTTP=$code"
-            echo "TYPE=$(file -b --mime-type "$tmp" 2>/dev/null || true)"
-            echo "SIZE=$(wc -c < "$tmp" | tr -d ' ')"
-            head -c 1200 "$tmp" | tr '\n' ' '
-            echo
-            rm -f "$tmp"
+          cat > agent/network_profile_live_probe_test.go <<'EOF'
+          package main
+
+          import (
+            "fmt"
+            "testing"
+            "time"
+          )
+
+          func TestLiveProviderFallbacks(t *testing.T) {
+            client := profileHTTPClient("ipv4", 20*time.Second)
+            ip := "85.149.212.98"
+            sources := []profileRiskSource{
+              profileIPAPIDirectSource(client, ip),
+              profileIP2LocationDemoSource(client, ip),
+              profileIP2LocationDirectSource(client, ip),
+              profileFFraudFallbackSource(client, ip),
+              profileIP99FallbackSource(client, ip),
+            }
+            for _, source := range sources {
+              fmt.Printf("LIVE_SOURCE name=%s score=%v level=%s country=%s network=%q company=%q proxy=%v vpn=%v tor=%v dc=%v abuser=%v bot=%v error=%q\n",
+                source.Name, source.Score, source.Level, source.Country, source.NetworkType, source.CompanyType,
+                source.IsProxy, source.IsVPN, source.IsTor, source.IsDatacenter, source.IsAbuser, source.IsBot, source.Error)
+            }
           }
-          probe "check.place ipapi" "https://ipinfo.check.place/$IP?db=ipapi"
-          probe "check.place AbuseIPDB" "https://ipinfo.check.place/$IP?db=abuseipdb"
-          probe "check.place IP2Location" "https://ipinfo.check.place/$IP?db=ip2location"
-          probe "ipapi.is" "https://api.ipapi.is/?q=$IP"
-          probe "IP2Location.io" "https://api.ip2location.io/?ip=$IP"
-          probe "IP2Location demo" "https://www.ip2location.com/demo/$IP"
-          probe "FFraud" "https://api.ffraud.com/public/ip/$IP"
-          probe "IP99" "https://ip99.com/v1/ip/$IP"
-          probe "IPinfo demo" "https://ipinfo.io/widget/demo/$IP"
+          EOF
+          (cd agent && go test -run TestLiveProviderFallbacks -v)
+          rm -f agent/network_profile_live_probe_test.go
