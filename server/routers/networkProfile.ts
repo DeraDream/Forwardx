@@ -67,7 +67,7 @@ async function fetchBGPGraphDataUrl(rawPath: unknown) {
       cache: "no-store",
       headers: {
         Accept: "image/svg+xml,image/*;q=0.8,*/*;q=0.5",
-        "User-Agent": "ForwardX-Panel (+https://github.com/DeraDream/Forwardx)",
+        "User-Agent": "Mozilla/5.0 AppleWebKit/537.36 Chrome/122 Safari/537.36",
         Referer: "https://bgp.tools/",
       },
       signal: controller.signal,
@@ -81,6 +81,7 @@ async function fetchBGPGraphDataUrl(rawPath: unknown) {
     }
     const svg = Buffer.from(bytes).toString("utf8").trim();
     if (!/<svg\b/i.test(svg.slice(0, 2048))) throw new Error("BGP.Tools 未返回 SVG");
+    if (svg.includes("Not_Visible") && svg.includes("in_DFZ")) throw new Error("该 Prefix 当前未在 DFZ 中可见");
     const dataUrl = `data:image/svg+xml;base64,${Buffer.from(svg, "utf8").toString("base64")}`;
     bgpGraphCache.set(graphUrl, {
       expiresAt: Date.now() + BGP_GRAPH_CACHE_MS,
