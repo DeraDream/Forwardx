@@ -40,6 +40,62 @@ function riskPercent(data: any): number | null {
   return Math.min(100, derived);
 }
 
+
+function ipTypeLabel(value: unknown) {
+  const raw = String(value || "").trim();
+  if (!raw) return "—";
+  const first = raw.split("/")[0].trim().toLowerCase();
+  const labels: Record<string, string> = {
+    business: "商业",
+    com: "商业",
+    isp: "家宽",
+    "fixed line isp": "家宽",
+    hosting: "机房",
+    dch: "机房",
+    "data center/web hosting/transit": "机房",
+    education: "教育",
+    edu: "教育",
+    government: "政府",
+    gov: "政府",
+    banking: "银行",
+    organization: "组织",
+    org: "组织",
+    military: "军队",
+    mil: "军队",
+    library: "图书馆",
+    lib: "图书馆",
+    cdn: "CDN",
+    "content delivery network": "CDN",
+    mob: "手机",
+    "mobile isp": "手机",
+    ses: "蜘蛛",
+    "search engine spider": "蜘蛛",
+    rsv: "保留",
+    reserved: "保留",
+  };
+  return labels[first] || raw;
+}
+
+function ipTypeBadgeClass(value: unknown) {
+  const label = ipTypeLabel(value);
+  if (label === "机房" || label === "CDN") return "border-red-200 bg-red-500/15 text-red-700 dark:text-red-300";
+  if (label === "家宽" || label === "手机") return "border-emerald-200 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300";
+  if (label === "—") return "border-border bg-muted/30 text-muted-foreground";
+  return "border-amber-200 bg-amber-500/15 text-amber-700 dark:text-amber-300";
+}
+
+function coordinateDMS(value: unknown, latitude: boolean) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "";
+  const absolute = Math.abs(number);
+  const degrees = Math.floor(absolute);
+  const minutesFloat = (absolute - degrees) * 60;
+  const minutes = Math.floor(minutesFloat);
+  const seconds = Math.round((minutesFloat - minutes) * 60);
+  const direction = latitude ? (number >= 0 ? "N" : "S") : (number >= 0 ? "E" : "W");
+  return `${degrees}°${minutes}′${seconds}″${direction}`;
+}
+
 export function HostNetworkProfileDialog({
   hostId,
   hostName,
@@ -108,6 +164,35 @@ export function HostNetworkProfileDialog({
     .map((item: any) => [item?.provider, item?.country].filter(Boolean).join(" "))
     .filter(Boolean)
     .join(" · ");
+  const maxmind = identity.maxmind || {};
+  const maxmindLat = Number(maxmind.latitude ?? identity.latitude);
+  const maxmindLon = Number(maxmind.longitude ?? identity.longitude);
+  const hasCoordinates = Number.isFinite(maxmindLat) && Number.isFinite(maxmindLon);
+  const coordinateText = hasCoordinates
+    ? `${coordinateDMS(maxmindLon, false)}, ${coordinateDMS(maxmindLat, true)}`
+    : "待检测";
+  const mapUrl = hasCoordinates
+    ? `https://check.place/${maxmindLat},${maxmindLon},${Number(maxmind.accuracyRadius) || 1001},cn`
+    : "";
+  const maxmindCityText = [maxmind.subdivision, maxmind.city, maxmind.postalCode].filter(Boolean).join(" · ");
+  const maxmindUsageText = [
+    maxmind.countryCode ? `[${maxmind.countryCode}]` : "",
+    maxmind.country || identity.country,
+    maxmind.continentCode ? `[${maxmind.continentCode}]` : "",
+    maxmind.continent || identity.continent,
+  ].filter(Boolean).join(" ");
+  const maxmindRegisteredText = [
+    maxmind.registeredCountryCode ? `[${maxmind.registeredCountryCode}]` : (identity.registeredCountryCode ? `[${identity.registeredCountryCode}]` : ""),
+    maxmind.registeredCountry,
+  ].filter(Boolean).join(" ");
+  const typeSourceNames = ["IPinfo", "ipregistry", "ipapi.is", "IP2Location"];
+  const typeSources = typeSourceNames.map((name) => {
+    const source = (Array.isArray(risk.sources) ? risk.sources : []).find((item: any) => item?.name === name);
+    return {
+      name: name === "ipapi.is" ? "ipapi" : name,
+      source,
+    };
+  });
   const relationClass = (relation: string, index: number) => {
     const value = String(relation || "").toLowerCase();
     if (value.includes("left")) return "border-sky-300 bg-sky-500/10 text-sky-700 dark:text-sky-300";
@@ -174,7 +259,8 @@ export function HostNetworkProfileDialog({
                       {registeredEvidence.length > 0 ? <div title={evidenceText(registeredEvidence)}>注册/分配：{evidenceText(registeredEvidence)}</div> : null}
                     </div>
                   )}
-                  <div><span className="text-muted-foreground">使用类型：</span><span className="font-medium text-amber-700 dark:text-amber-300">{networkType || "待检测"}</span>{identity.domain ? <span className="text-muted-foreground"> · {identity.domain}</span> : null}</div>
+                  <div><span className="text-muted-foreground">使用类型：</span><span className="font-medium text-amber-700 dark:text-amber-300">{ipTypeLabel(networkType) || "待检测"}</span></div>
+                  {identity.domain ? <div><span className="text-muted-foreground">网络域名：</span><span className="font-medium">{identity.domain}</span></div> : null}
                 </div>
               </div>
               <div className="rounded-lg border border-amber-200/70 bg-amber-500/[0.035] p-3">
@@ -197,6 +283,59 @@ export function HostNetworkProfileDialog({
               </div>
             </div>
 
+            <div className="rounded-lg border border-sky-200/60 bg-sky-500/[0.025] p-3">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div className="text-sm font-medium text-sky-700 dark:text-sky-300">基础信息 <span className="font-normal text-muted-foreground">（MaxMind 数据库）</span></div>
+                <span className="text-[10px] text-muted-foreground">对应 IPQuality 基础信息字段</span>
+              </div>
+              <div className="grid gap-x-4 gap-y-1.5 text-xs sm:grid-cols-2">
+                <div><span className="text-muted-foreground">自治系统号：</span><span className="font-medium">{maxmind.asn ? `AS${maxmind.asn}` : identity.asnNumber ? `AS${identity.asnNumber}` : "待检测"}</span></div>
+                <div><span className="text-muted-foreground">组织：</span><span className="font-medium">{maxmind.organization || identity.company || "待检测"}</span></div>
+                <div className="sm:col-span-2"><span className="text-muted-foreground">坐标：</span><span className="font-mono">{coordinateText}</span></div>
+                <div className="sm:col-span-2">
+                  <span className="text-muted-foreground">地图：</span>
+                  {mapUrl ? <a href={mapUrl} target="_blank" rel="noreferrer" className="font-medium text-sky-700 underline decoration-dotted underline-offset-2 dark:text-sky-300">{mapUrl}</a> : <span>待检测</span>}
+                </div>
+                <div><span className="text-muted-foreground">城市：</span><span className="font-medium">{maxmindCityText || [identity.region, identity.city, identity.postalCode].filter(Boolean).join(" · ") || "待检测"}</span></div>
+                <div><span className="text-muted-foreground">使用地：</span><span className="font-medium text-emerald-700 dark:text-emerald-300">{maxmindUsageText || "待检测"}</span></div>
+                <div><span className="text-muted-foreground">注册地：</span><span className="font-medium text-amber-700 dark:text-amber-300">{maxmindRegisteredText || identity.registeredCountryCode || "待确认"}</span></div>
+                <div><span className="text-muted-foreground">时区：</span><span className="font-medium">{maxmind.timezone || identity.timezone || "待检测"}</span></div>
+                <div><span className="text-muted-foreground">IP 类型：</span><span className={identity.ipNature === "broadcast" ? "font-semibold text-red-600 dark:text-red-400" : identity.ipNature === "native" ? "font-semibold text-emerald-600 dark:text-emerald-400" : "font-medium text-amber-700 dark:text-amber-300"}>{ipNatureText[String(identity.ipNature || "unknown")] || "待确认"}</span></div>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-fuchsia-200/60 bg-fuchsia-500/[0.02] p-3">
+              <div className="mb-2 text-sm font-medium text-fuchsia-700 dark:text-fuchsia-300">IP 类型属性</div>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[520px] text-xs">
+                  <thead>
+                    <tr className="border-b text-muted-foreground">
+                      <th className="py-2 text-left font-medium">数据库</th>
+                      {typeSources.map((item) => <th key={item.name} className="px-2 py-2 text-center font-medium">{item.name}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr className="border-b">
+                      <td className="py-2 text-muted-foreground">使用类型</td>
+                      {typeSources.map((item) => (
+                        <td key={item.name} className="px-2 py-2 text-center">
+                          <Badge variant="outline" className={ipTypeBadgeClass(item.source?.networkType)}>{ipTypeLabel(item.source?.networkType)}</Badge>
+                        </td>
+                      ))}
+                    </tr>
+                    <tr>
+                      <td className="py-2 text-muted-foreground">公司类型</td>
+                      {typeSources.map((item) => (
+                        <td key={item.name} className="px-2 py-2 text-center">
+                          <Badge variant="outline" className={ipTypeBadgeClass(item.source?.companyType)}>{ipTypeLabel(item.source?.companyType)}</Badge>
+                        </td>
+                      ))}
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div className="mt-2 text-[10px] text-muted-foreground">“使用类型”和“公司类型”来自各数据库自己的分类口径；它们是网络归类，不等同于 VPN/Proxy 风险判定。</div>
+            </div>
 
             <div className="rounded-lg border border-violet-200/60 bg-violet-500/[0.025] p-3">
               <div className="mb-1 flex items-center justify-between"><div className="text-sm font-medium text-violet-700 dark:text-violet-300">应用解锁 / 可达性</div><span className="text-xs text-muted-foreground">{apps.length ? `${apps.length} 项已返回` : "等待结果"}</span></div>
