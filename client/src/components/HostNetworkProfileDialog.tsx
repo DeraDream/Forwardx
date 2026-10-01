@@ -161,6 +161,7 @@ export function HostNetworkProfileDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const [family, setFamily] = useState<Family>("ipv4");
+  const [bgpFullscreen, setBgpFullscreen] = useState(false);
   const query = trpc.networkProfile.status.useQuery(
     { hostId },
     { enabled: open && hostId > 0, refetchInterval: open ? 800 : false, refetchOnWindowFocus: false },
@@ -552,9 +553,14 @@ export function HostNetworkProfileDialog({
               </div>
               {(bgpGraphPath || bgpPrefix) ? (
                 bgpDisplayDataUrl ? (
-                  <div className="overflow-auto rounded-md border bg-white p-2">
-                    <img src={bgpDisplayDataUrl} alt={`BGP 路由拓扑 ${bgpPrefix || detectedIp || ""}`} className="mx-auto block h-auto max-w-none" />
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setBgpFullscreen(true)}
+                    className="block w-full cursor-zoom-in overflow-hidden rounded-md border bg-white p-2 text-left"
+                    title="点击全屏查看 BGP 拓扑"
+                  >
+                    <img src={bgpDisplayDataUrl} alt={`BGP 路由拓扑 ${bgpPrefix || detectedIp || ""}`} className="mx-auto h-auto min-w-[680px] max-w-none lg:min-w-0 lg:max-w-full" />
+                  </button>
                 ) : bgpGraphQuery.isLoading ? (
                   <div className="flex min-h-40 items-center justify-center rounded-md border border-dashed text-xs text-muted-foreground">
                     <Activity className="mr-2 h-4 w-4 animate-spin" />正在加载 BGP 拓扑图…
@@ -569,10 +575,36 @@ export function HostNetworkProfileDialog({
                   当前未获得 Prefix，无法生成 BGP 拓扑图。
                 </div>
               )}
-              <div className="mt-2 text-[10px] text-muted-foreground">图像来自 BGP.Tools Connectivity；直接按 SVG 原始尺寸渲染，避免把约 963pt 的矢量图强制压缩到卡片宽度；超出区域可横向滚动。</div>
+              <div className="mt-2 text-[10px] text-muted-foreground">图像来自 BGP.Tools Connectivity；面板内自适应卡片宽度，点击拓扑图可全屏按矢量原图查看。</div>
             </div>
           </div>
         )}
+
+        {bgpFullscreen && bgpDisplayDataUrl ? (
+          <div
+            className="fixed inset-0 z-[120] flex bg-black/90 p-3 sm:p-5"
+            role="dialog"
+            aria-modal="true"
+            aria-label="BGP 路由拓扑全屏预览"
+            onClick={() => setBgpFullscreen(false)}
+          >
+            <button
+              type="button"
+              onClick={() => setBgpFullscreen(false)}
+              className="fixed right-4 top-4 z-[121] inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-black/60 text-white transition hover:bg-black/80"
+              aria-label="关闭全屏预览"
+            >
+              <XCircle className="h-6 w-6" />
+            </button>
+            <div className="m-auto max-h-full max-w-full overflow-auto rounded-lg bg-white p-3 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+              <img
+                src={bgpDisplayDataUrl}
+                alt={`BGP 路由拓扑 ${bgpPrefix || detectedIp || ""}`}
+                className="block h-auto max-w-none"
+              />
+            </div>
+          </div>
+        ) : null}
 
         <DialogFooter className="items-center sm:justify-between">
           <div className="text-xs text-muted-foreground">
