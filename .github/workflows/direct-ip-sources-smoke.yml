@@ -35,3 +35,5 @@ jobs:
           grep -ioE '.{0,120}(Usage Type|Fraud Score|Proxy Type|ASN|Data Center|Hosting).{0,180}' /tmp/ip2demo.out | head -40 || true
           echo "=== grep ipapiweb ==="
           grep -ioE '.{0,120}(abuser_score|company[^<]{0,80}type|asn[^<]{0,80}type|is_datacenter|fraud|hosting).{0,180}' /tmp/ipapiweb.out | head -60 || true
+          echo "=== query-specific ipapiweb ==="
+          grep -ioE '.{0,160}(85\.149\.212\.98|BAGE CLOUD|AS63150).{0,260}' /tmp/ipapiweb.out | head -30 || true
