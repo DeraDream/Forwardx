@@ -226,13 +226,10 @@ export function HostNetworkProfileDialog({
     const source = riskSources.find((item: any) => item?.name === name || (name === "ipapi" && item?.name === "ipapi.is"));
     return source ? { ...source, displayName: name } : { name, displayName: name, level: "unknown", error: "无可用数据" };
   });
-  const typeSourceNames = ["IPinfo", "ipregistry", "ipapi.is", "IP2Location", "AbuseIPDB"];
+  const typeSourceNames = ["IPinfo", "ipregistry", "ipapi", "IP2Location", "AbuseIPDB"];
   const typeSources = typeSourceNames.map((name) => {
     const source = riskSources.find((item: any) => item?.name === name);
-    return {
-      name: name === "ipapi.is" ? "ipapi" : name,
-      source,
-    };
+    return { name, source };
   });
   const mail = data.mail || {};
   const mailProviders = Array.isArray(mail.providers) ? mail.providers : [];
@@ -329,7 +326,11 @@ export function HostNetworkProfileDialog({
                         <td className="py-2 text-muted-foreground">使用类型</td>
                         {typeSources.map((item) => (
                           <td key={item.name} className="px-2 py-2 text-center">
-                            <Badge variant="outline" className={ipTypeBadgeClass(item.source?.networkType)}>{ipTypeLabel(item.source?.networkType)}</Badge>
+                            {item.source?.networkType
+                              ? <Badge variant="outline" className={ipTypeBadgeClass(item.source.networkType)}>{ipTypeLabel(item.source.networkType)}</Badge>
+                              : item.source?.error
+                                ? <span className="text-[10px] text-red-600 dark:text-red-400" title={item.source.error}>检测失败</span>
+                                : <span className="text-[10px] text-muted-foreground">未返回</span>}
                           </td>
                         ))}
                       </tr>
@@ -337,7 +338,13 @@ export function HostNetworkProfileDialog({
                         <td className="py-2 text-muted-foreground">公司类型</td>
                         {typeSources.map((item) => (
                           <td key={item.name} className="px-2 py-2 text-center">
-                            {item.source?.companyType ? <Badge variant="outline" className={ipTypeBadgeClass(item.source.companyType)}>{ipTypeLabel(item.source.companyType)}</Badge> : <span className="text-muted-foreground">—</span>}
+                            {item.source?.companyType
+                              ? <Badge variant="outline" className={ipTypeBadgeClass(item.source.companyType)}>{ipTypeLabel(item.source.companyType)}</Badge>
+                              : item.name === "AbuseIPDB"
+                                ? <span className="text-[10px] text-muted-foreground">接口不提供</span>
+                                : item.source?.error
+                                  ? <span className="text-[10px] text-red-600 dark:text-red-400" title={item.source.error}>检测失败</span>
+                                  : <span className="text-[10px] text-muted-foreground">未返回</span>}
                           </td>
                         ))}
                       </tr>

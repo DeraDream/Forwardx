@@ -51,7 +51,7 @@ func profileHTTPClient(family string, timeout time.Duration) *http.Client {
 			return dialer.DialContext(ctx, network, address)
 		},
 		TLSHandshakeTimeout: 4 * time.Second,
-		ResponseHeaderTimeout: 5 * time.Second,
+		ResponseHeaderTimeout: 10 * time.Second,
 		MaxIdleConns: 8,
 		IdleConnTimeout: 20 * time.Second,
 	}
@@ -138,11 +138,19 @@ func profilePanelRiskProxy(cfg Config, ip, provider string) (map[string]any, err
 func profileGetJSONWithPanelFallback(cfg Config, client *http.Client, rawURL, ip, provider string) (map[string]any, error) {
 	var payload map[string]any
 	directErr := profileGetJSONRetry(client, rawURL, &payload, 2)
-	if directErr == nil && payload != nil { return payload, nil }
+	if directErr == nil && len(payload) > 0 {
+		return payload, nil
+	}
 	panelPayload, panelErr := profilePanelRiskProxy(cfg, ip, provider)
-	if panelErr == nil && panelPayload != nil { return panelPayload, nil }
-	if directErr == nil { directErr = fmt.Errorf("empty direct response") }
-	if panelErr == nil { panelErr = fmt.Errorf("empty panel proxy response") }
+	if panelErr == nil && len(panelPayload) > 0 {
+		return panelPayload, nil
+	}
+	if directErr == nil {
+		directErr = fmt.Errorf("empty direct response")
+	}
+	if panelErr == nil {
+		panelErr = fmt.Errorf("empty panel proxy response")
+	}
 	return nil, fmt.Errorf("direct %v; panel fallback %v", directErr, panelErr)
 }
 
@@ -1041,6 +1049,10 @@ func profileIPAPISource(cfg Config, client *http.Client, ip string) profileRiskS
 	source.IsDatacenter = profileBoolPtr(payload["is_datacenter"])
 	source.IsAbuser = profileBoolPtr(payload["is_abuser"])
 	source.IsBot = profileBoolPtr(payload["is_crawler"])
+	if source.Country == "" && source.NetworkType == "" && source.CompanyType == "" && source.Score == nil &&
+		source.IsProxy == nil && source.IsVPN == nil && source.IsTor == nil && source.IsDatacenter == nil && source.IsAbuser == nil && source.IsBot == nil {
+		source.Error = "ipapi data unavailable"
+	}
 	return source
 }
 
@@ -1067,6 +1079,9 @@ func profileAbuseIPDBSource(cfg Config, client *http.Client, ip string) profileR
 	source.NetworkType = profileString(data["usageType"])
 	server := strings.Contains(strings.ToLower(source.NetworkType), "data center") || strings.Contains(strings.ToLower(source.NetworkType), "hosting")
 	source.IsDatacenter = &server
+	if source.Country == "" && source.NetworkType == "" && source.Score == nil {
+		source.Error = "AbuseIPDB data unavailable"
+	}
 	return source
 }
 
@@ -1118,6 +1133,11 @@ func profileIP2LocationSource(cfg Config, client *http.Client, ip string) profil
 		server := strings.Contains(lowerType, "data center") || strings.Contains(lowerType, "hosting") || strings.HasPrefix(strings.ToUpper(source.NetworkType), "DCH")
 		source.IsDatacenter = &server
 	}
+	if source.Country == "" && source.NetworkType == "" && source.CompanyType == "" && source.Score == nil &&
+		source.IsProxy == nil && source.IsVPN == nil && source.IsTor == nil && source.IsAbuser == nil && source.IsBot == nil &&
+		profileMap(payload["proxy"]) == nil {
+		source.Error = "IP2Location data unavailable"
+	}
 	return source
 }
 
@@ -1141,44 +1161,61 @@ func profileRiskAnyTrue(sources []profileRiskSource, selector func(profileRiskSo
 
 func profileRisk(cfg Config, client *http.Client, ip string) map[string]any {
 	sources := make([]profileRiskSource, 9)
-	var wg sync.WaitGroup
-	checks := []func() profileRiskSource{
-		func() profileRiskSource { return profileProxyCheckSource(cfg, client, ip) },
-		func() profileRiskSource { return profileIPInfoSource(client, ip) },
-		func() profileRiskSource { return profileIPRegistrySource(client, ip) },
-		func() profileRiskSource { return profileIPAPIDirectSource(client, ip) },
-		func() profileRiskSource { return profileDBIPSource(client, ip) },
-		func() profileRiskSource { return profileScamalyticsSource(cfg, client, ip) },
-		func() profileRiskSource { return profileIPQSSource(cfg, client, ip) },
-		func() profileRiskSource { return profileAbuseIPDBSource(cfg, client, ip) },
-		func() profileRiskSource { return profileIP2LocationSource(cfg, client, ip) },
+
+	// Independent providers can run in parallel.
+	directChecks := []struct {
+		index int
+		check func() profileRiskSource
+	}{
+		{0, func() profileRiskSource { return profileProxyCheckSource(cfg, client, ip) }},
+		{1, func() profileRiskSource { return profileIPInfoSource(client, ip) }},
+		{2, func() profileRiskSource { return profileIPRegistrySource(client, ip) }},
+		{4, func() profileRiskSource { return profileDBIPSource(client, ip) }},
 	}
-	for index := range checks {
-		index := index
+	var wg sync.WaitGroup
+	for _, item := range directChecks {
+		item := item
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if index >= 5 {
-				// check.place-backed sources are optional. Keep the independent
-				// direct providers fast and stagger only the shared edge requests.
-				time.Sleep(time.Duration(index-4) * 350 * time.Millisecond)
-			}
-			sources[index] = checks[index]()
+			sources[item.index] = item.check()
 		}()
 	}
 	wg.Wait()
 
-	// Public risk APIs occasionally rate-limit bursts from VPS addresses.
-	// Retry only failed sources one-by-one so a transient failure does not collapse
-	// the matrix to ProxyCheck-only results.
-	for index := range sources {
-		if strings.TrimSpace(sources[index].Error) == "" {
+	// IPQuality queries check.place databases one by one. Do the same here:
+	// it is slower than a burst, but substantially more reliable on VPS egress IPs.
+	checkPlaceChecks := []struct {
+		index int
+		check func() profileRiskSource
+	}{
+		{3, func() profileRiskSource { return profileIPAPISource(cfg, client, ip) }},
+		{5, func() profileRiskSource { return profileScamalyticsSource(cfg, client, ip) }},
+		{6, func() profileRiskSource { return profileIPQSSource(cfg, client, ip) }},
+		{7, func() profileRiskSource { return profileAbuseIPDBSource(cfg, client, ip) }},
+		{8, func() profileRiskSource { return profileIP2LocationSource(cfg, client, ip) }},
+	}
+	for _, item := range checkPlaceChecks {
+		sources[item.index] = item.check()
+		if strings.TrimSpace(sources[item.index].Error) != "" {
+			time.Sleep(450 * time.Millisecond)
+			retry := item.check()
+			if strings.TrimSpace(retry.Error) == "" {
+				sources[item.index] = retry
+			}
+		}
+		time.Sleep(220 * time.Millisecond)
+	}
+
+	// Retry failed independent providers once, also sequentially.
+	for _, item := range directChecks {
+		if strings.TrimSpace(sources[item.index].Error) == "" {
 			continue
 		}
-		time.Sleep(650 * time.Millisecond)
-		retry := checks[index]()
+		time.Sleep(350 * time.Millisecond)
+		retry := item.check()
 		if strings.TrimSpace(retry.Error) == "" {
-			sources[index] = retry
+			sources[item.index] = retry
 		}
 	}
 
@@ -1188,7 +1225,6 @@ func profileRisk(cfg Config, client *http.Client, ip string) map[string]any {
 	preferredTypeSources := map[string]bool{
 		"IPinfo": true,
 		"ipregistry": true,
-		"ipapi.is": true,
 		"ipapi": true,
 		"IP2Location": true,
 		"AbuseIPDB": true,
@@ -2384,7 +2420,7 @@ func runNetworkProfile(cfg Config, request networkProfileRequest) {
 	if request.TaskID == "" || (request.Family != "ipv4" && request.Family != "ipv6") {
 		return
 	}
-	client := profileHTTPClient(request.Family, 8*time.Second)
+	client := profileHTTPClient(request.Family, 12*time.Second)
 	report := func(stage, status string, data any, message string) {
 		reportNetworkProfile(cfg, networkProfileReport{
 			TaskID: request.TaskID, Family: request.Family, Stage: stage,
