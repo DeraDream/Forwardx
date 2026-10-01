@@ -251,6 +251,43 @@ func TestProfileMergeRiskSourceFallbackPreservesExactData(t *testing.T) {
 	}
 }
 
+func TestProfileApplySharedRiskFallbacks(t *testing.T) {
+	score := 20.0
+	hosting := true
+	proxy := false
+	ffraud := profileRiskSource{
+		Name: "FFraud",
+		Score: &score,
+		Level: "low",
+		Country: "SG",
+		NetworkType: "Data Center",
+		CompanyType: "hosting",
+		IsProxy: &proxy,
+		IsDatacenter: &hosting,
+	}
+	ip99Score := 0.0
+	ip99 := profileRiskSource{Name: "IP99", Score: &ip99Score, Level: "very_low", Country: "SG", NetworkType: "DYN"}
+	proxyCheckScore := 5.0
+	proxyCheck := profileRiskSource{Name: "ProxyCheck", Score: &proxyCheckScore, Level: "low"}
+
+	for _, name := range []string{"Scamalytics", "IPQS", "AbuseIPDB", "ipapi"} {
+		target := profileRiskSource{Name: name, Error: "HTTP 403"}
+		profileApplySharedRiskFallbacks(&target, ffraud, ip99, proxyCheck)
+		if target.Score == nil || *target.Score != 20 {
+			t.Fatalf("%s fallback score=%v", name, target.Score)
+		}
+		if target.Level != "low" || target.NetworkType != "Data Center" || target.CompanyType != "hosting" {
+			t.Fatalf("%s fallback target=%+v", name, target)
+		}
+		if target.FallbackProvider != "FFraud" {
+			t.Fatalf("%s fallback provider=%q", name, target.FallbackProvider)
+		}
+		if target.Error != "" {
+			t.Fatalf("%s fallback error=%q", name, target.Error)
+		}
+	}
+}
+
 func TestProfileRiskLevelFromText(t *testing.T) {
 	score := 95.0
 	cases := map[string]string{
