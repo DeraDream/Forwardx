@@ -31,6 +31,8 @@ jobs:
           testurl abuseapi "https://api.abuseipdb.com/api/v2/check?ipAddress=$IP&maxAgeInDays=90"
           testurl ip2demo "https://www.ip2location.com/demo/$IP"
           testurl ipapiweb "https://ipapi.is/?q=$IP"
+          testurl ffraud "https://api.ffraud.com/public/ip/$IP"
+          testurl ip99 "https://ip99.com/v1/ip/$IP"
           echo "=== grep ip2demo ==="
           grep -ioE '.{0,120}(Usage Type|Fraud Score|Proxy Type|ASN|Data Center|Hosting).{0,180}' /tmp/ip2demo.out | head -40 || true
           echo "=== grep ipapiweb ==="
