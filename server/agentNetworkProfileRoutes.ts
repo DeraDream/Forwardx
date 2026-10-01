@@ -15,6 +15,7 @@ const NETWORK_PROFILE_PROXY_CACHE_LIMIT = 2_048;
 const NETWORK_PROFILE_PROXY_PROVIDERS = new Set([
   "maxmind",
   "maxmind-insights",
+  "dbip",
   "proxycheck",
   "abuseipdb",
 ]);
@@ -44,6 +45,16 @@ function networkProfileProxyRequest(ip: string, provider: string) {
         Authorization: `Basic ${basic}`,
         Accept: "application/vnd.maxmind.com-insights+json; charset=UTF-8; version=2.1",
       },
+    };
+  }
+  if (provider === "dbip") {
+    const apiKey = ENV.dbIpApiKey.trim();
+    if (!apiKey) {
+      throw new Error("DB-IP API key is not configured");
+    }
+    return {
+      url: `https://api.db-ip.com/v2/${encodeURIComponent(apiKey)}/${escapedIp}`,
+      headers: { Accept: "application/json" },
     };
   }
   if (provider === "proxycheck") {
