@@ -225,16 +225,14 @@ export function HostNetworkProfileDialog({
   ].filter(Boolean).join(" ");
   const baseCountry = usageCode;
   const riskSources = Array.isArray(risk.sources) ? risk.sources : [];
-  const riskOrder = ["IP2Location", "Scamalytics", "ipapi", "AbuseIPDB", "IPQS", "DB-IP"];
-  const scoredRiskSources = riskOrder.map((name) => {
-    const source = riskSources.find((item: any) => item?.name === name || (name === "ipapi" && item?.name === "ipapi.is"));
-    return source ? { ...source, displayName: name } : { name, displayName: name, level: "unknown", error: "无可用数据" };
-  });
-  const typeSourceNames = ["IPinfo", "ipregistry", "ipapi", "IP2Location", "AbuseIPDB"];
-  const typeSources = typeSourceNames.map((name) => {
-    const source = riskSources.find((item: any) => item?.name === name);
-    return { name, source };
-  });
+  const riskOrder = ["ProxyCheck", "FFraud", "IP99", "IP2Location", "DB-IP", "AbuseIPDB"];
+  const scoredRiskSources = riskOrder
+    .map((name) => riskSources.find((item: any) => item?.name === name))
+    .filter((source: any) => source && Number.isFinite(Number(source?.score)));
+  const typeSourceNames = ["IPinfo", "ipregistry", "FFraud", "IP2Location", "AbuseIPDB", "ProxyCheck"];
+  const typeSources = typeSourceNames
+    .map((name) => ({ name, source: riskSources.find((item: any) => item?.name === name) }))
+    .filter((item) => item.source && (item.source.networkType || item.source.companyType));
   const mail = data.mail || {};
   const mailProviders = Array.isArray(mail.providers) ? mail.providers : [];
   const dnsbl = mail.dnsbl || {};
@@ -333,7 +331,6 @@ export function HostNetworkProfileDialog({
                             {item.source?.networkType ? (
                               <div className="flex flex-col items-center gap-1">
                                 <Badge variant="outline" className={ipTypeBadgeClass(item.source.networkType)}>{ipTypeLabel(item.source.networkType)}</Badge>
-                                {item.source?.fallbackProvider ? <span className="text-[9px] text-muted-foreground" title={`主数据源不可用，使用 ${item.source.fallbackProvider} 补齐`}>回退 {item.source.fallbackProvider}</span> : null}
                               </div>
                             ) : item.source?.error
                               ? <span className="text-[10px] text-red-600 dark:text-red-400" title={item.source.error}>检测失败</span>
@@ -348,7 +345,6 @@ export function HostNetworkProfileDialog({
                             {item.source?.companyType ? (
                               <div className="flex flex-col items-center gap-1">
                                 <Badge variant="outline" className={ipTypeBadgeClass(item.source.companyType)}>{ipTypeLabel(item.source.companyType)}</Badge>
-                                {item.source?.fallbackProvider ? <span className="text-[9px] text-muted-foreground" title={`主数据源不可用，使用 ${item.source.fallbackProvider} 补齐`}>回退 {item.source.fallbackProvider}</span> : null}
                               </div>
                             ) : item.name === "AbuseIPDB"
                               ? <span className="text-[10px] text-muted-foreground">接口不提供</span>
@@ -367,7 +363,7 @@ export function HostNetworkProfileDialog({
             <div className="rounded-lg border border-amber-200/70 bg-amber-500/[0.025] p-3">
               <div className="mb-3 flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 text-sm font-medium text-amber-700 dark:text-amber-300"><ShieldCheck className="h-4 w-4" />IP 风险</div>
-                <span className="text-[10px] text-muted-foreground">主数据源优先；受限时明确标注备用源评分</span>
+                <span className="text-[10px] text-muted-foreground">仅展示真实直连数据库评分；无评分来源自动隐藏</span>
               </div>
               <div className="mb-3">
                 <div className="grid grid-cols-5 text-center text-[10px] text-muted-foreground">
@@ -382,15 +378,16 @@ export function HostNetworkProfileDialog({
                 </div>
               </div>
               <div className="space-y-2.5">
-                {scoredRiskSources.map((source: any) => {
+                {scoredRiskSources.length === 0 ? (
+                  <div className="rounded-md border border-dashed py-4 text-center text-xs text-muted-foreground">暂无可用风险评分</div>
+                ) : scoredRiskSources.map((source: any) => {
                   const score = Number(source?.score);
                   const hasScore = Number.isFinite(score);
                   const marker = hasScore ? Math.max(0, Math.min(100, score)) : 0;
                   return (
                     <div key={source.name} className="grid grid-cols-[96px_minmax(0,1fr)_54px_auto] items-center gap-2 text-xs">
                       <div className="min-w-0">
-                        <div className="font-medium">{source.displayName || source.name}</div>
-                        {source.fallbackProvider ? <div className="truncate text-[9px] text-muted-foreground" title={`主数据源不可用，使用 ${source.fallbackProvider} 补齐`}>回退 {source.fallbackProvider}</div> : null}
+                        <div className="font-medium">{source.name}</div>
                       </div>
                       <div className="relative h-2 overflow-visible rounded-full bg-muted">
                         <div className="absolute inset-0 flex overflow-hidden rounded-full opacity-70">
@@ -403,7 +400,7 @@ export function HostNetworkProfileDialog({
                         {hasScore ? <span className="absolute top-1/2 h-3.5 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-foreground shadow-sm" style={{ left: `${marker}%` }} /> : null}
                       </div>
                       <div className="text-right font-mono">{riskScoreText(source)}</div>
-                      <Badge variant="outline" title={source.fallbackProvider ? `回退数据源：${source.fallbackProvider}` : (source.error || "")} className={riskLevelBadgeClass(source.level)}>{riskLevelText(source.level)}</Badge>
+                      <Badge variant="outline" title={source.error || ""} className={riskLevelBadgeClass(source.level)}>{riskLevelText(source.level)}</Badge>
                     </div>
                   );
                 })}
