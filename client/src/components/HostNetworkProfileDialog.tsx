@@ -182,6 +182,7 @@ export function HostNetworkProfileDialog({
   const data = current?.data || {};
   const identity = data.identity || {};
   const risk = data.risk || {};
+  const unlockWarnings = Array.isArray(data.unlock?.warnings) ? data.unlock.warnings.filter(Boolean) : [];
   const bgpGraphPath = String(data.network?.bgpGraphPath || "").trim();
   const bgpPrefix = String(data.network?.prefix || "").trim();
   const embeddedBGPGraphDataUrl = String(data.network?.bgpGraphDataUrl || "").trim();
@@ -481,6 +482,11 @@ export function HostNetworkProfileDialog({
               <div className="mb-3 text-[11px] text-muted-foreground">
                 AI 平台使用 ForwardX 原有检测；流媒体参考 RegionRestrictionCheck，并根据当前出口使用地自动检测跨国平台与对应区域平台。
               </div>
+              {unlockWarnings.length > 0 ? (
+                <div className="mb-3 rounded-md border border-amber-200/70 bg-amber-500/5 px-2.5 py-2 text-[10px] text-amber-700 dark:text-amber-300">
+                  {unlockWarnings.join(" · ")}
+                </div>
+              ) : null}
               <div className="space-y-3">
                 {appSections.map((section) => (
                   <div key={section.key}>
