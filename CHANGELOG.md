@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.3.394] - 2026-10-01
+
+### 网络画像风险源改为真实直连数据库
+
+- IP 风险不再请求 check.place 的 ipapi / Scamalytics / IPQS / AbuseIPDB / IP2Location 数据库，也不再把 FFraud / IP99 / ProxyCheck 的结果伪装成这些数据库的“回退评分”。
+- 风险主力来源改为真实可直连的数据源：ProxyCheck、FFraud、IP99、IP2Location 官方公开 Demo / keyless API、DB-IP；仅当配置 `ABUSEIPDB_API_KEY` 时额外显示官方 AbuseIPDB。
+- Scamalytics、IPQS、ipapi 风险行从 UI 移除；没有真实评分的数据源直接隐藏，不再显示横杠或用其他数据库的分数补位。
+- IP 类型属性改为从 IPinfo、ipregistry、FFraud、IP2Location、可用时的 AbuseIPDB、ProxyCheck 中动态展示真实返回字段。
+- Panel 风险代理只保留 MaxMind 基础信息、ProxyCheck 直连中继和官方 AbuseIPDB；其中风险检测不再通过 check.place。MaxMind/check.place 仅继续用于独立的基础信息/注册地逻辑。
+- 清理 Agent 中已退休的 Scamalytics / IPQS / ipapi / check.place 风险解析与合成回退代码，FFraud 与 IP99 正式提升为一级数据源。
+- Panel / APK Release 升级至 `2.3.394`；Agent 升级至 `2.2.224`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.3.393] - 2026-10-01
 
 ### 网络画像风险源容灾补全与实网验证
