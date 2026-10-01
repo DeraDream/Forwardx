@@ -169,6 +169,28 @@ func TestProfileBGPCountryPattern(t *testing.T) {
 }
 
 
+func TestProfileIP2LocationDemoFields(t *testing.T) {
+	body := `
+		<table>
+		  <tr><th><label><input aria-label="usageType" name="fields"><strong>Usage Type</strong></label></th><td class="col-sm-7">(DCH) Data Center/Web Hosting/Transit</td></tr>
+		  <tr><th><label><input aria-label="asUsageType" name="fields"><strong>AS Usage Type</strong></label></th><td class="col-sm-7">(DCH) Data Center/Web Hosting/Transit</td></tr>
+		  <tr><th><label><input aria-label="px_fraudScore" name="fields"><strong>Fraud Score</strong></label></th><td class="col-sm-7">20</td></tr>
+		  <tr><th><label><input aria-label="px_proxyType" name="fields"><strong>Proxy Type</strong></label></th><td class="col-sm-7">-</td></tr>
+		</table>`
+	if got := profileIP2LocationDemoField(body, "usageType"); got != "(DCH) Data Center/Web Hosting/Transit" {
+		t.Fatalf("usageType=%q", got)
+	}
+	if got := profileIP2LocationDemoField(body, "asUsageType"); got != "(DCH) Data Center/Web Hosting/Transit" {
+		t.Fatalf("asUsageType=%q", got)
+	}
+	if got := profileIP2LocationDemoField(body, "px_fraudScore"); got != "20" {
+		t.Fatalf("px_fraudScore=%q", got)
+	}
+	if got := profileIP2LocationDemoField(body, "px_proxyType"); got != "-" {
+		t.Fatalf("px_proxyType=%q", got)
+	}
+}
+
 func TestProfileMergeRiskSourceFallback(t *testing.T) {
 	score := 20.0
 	hosting := true
