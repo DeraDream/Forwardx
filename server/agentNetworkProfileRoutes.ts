@@ -23,9 +23,16 @@ type NetworkProfileProxyCacheEntry = {
   payload: Record<string, unknown>;
 };
 
+type NetworkProfileProxyRequest = {
+  url: string;
+  method?: "GET" | "POST";
+  body?: string;
+  headers: Record<string, string>;
+};
+
 const networkProfileProxyCache = new Map<string, NetworkProfileProxyCacheEntry>();
 
-async function networkProfileProxyRequest(ip: string, provider: string) {
+async function networkProfileProxyRequest(ip: string, provider: string): Promise<NetworkProfileProxyRequest> {
   const escapedIp = encodeURIComponent(ip);
   if (provider === "ipapi") {
     const apiKey = String((await db.getSetting("networkProfileIpapiApiKey")) || "").trim();
