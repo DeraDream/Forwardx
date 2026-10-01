@@ -3085,6 +3085,18 @@ function RulesContent() {
   const [copyTargetResourceIds, setCopyTargetResourceIds] = useState<number[]>(
     [],
   );
+  const copyTargetSelectionRef = useRef<{
+    scopeType: RuleTransferScopeType;
+    resourceIds: number[];
+  }>({ scopeType: "local", resourceIds: [] });
+  const commitCopyTargetSelection = useCallback((scopeType: RuleTransferScopeType, resourceIds: readonly number[]) => {
+    const normalizedIds = Array.from(new Set(resourceIds
+      .map((id) => Number(id))
+      .filter((id) => Number.isInteger(id) && id > 0)));
+    copyTargetSelectionRef.current = { scopeType, resourceIds: normalizedIds };
+    setCopyTargetScopeType(scopeType);
+    setCopyTargetResourceIds(normalizedIds);
+  }, []);
   const [copyTargetSearch, setCopyTargetSearch] = useState("");
   const [copyConflictStrategy, setCopyConflictStrategy] = useState<
     "skip" | "auto" | "error"
@@ -4600,7 +4612,7 @@ function RulesContent() {
   const switchCopyManageMode = (mode: RuleBatchManageMode) => {
     setCopyManageMode(mode);
     if (mode === "edit") {
-      setCopyTargetResourceIds([]);
+      commitCopyTargetSelection(copyTargetSelectionRef.current.scopeType, []);
       setBatchEditForm(buildEmptyBatchEditForm());
     }
     if (mode === "import") {
@@ -4633,12 +4645,15 @@ function RulesContent() {
     }));
   };
 
-  const toggleCopyTargetResource = (resourceId: number, checked: boolean) => {
-    setCopyTargetResourceIds((prev) => {
-      if (!checked) return prev.filter((id) => id !== resourceId);
-      if (copyManageMode === "edit") return [resourceId];
-      return Array.from(new Set([...prev, resourceId]));
-    });
+  const toggleCopyTargetResource = (resourceId: number, checked: boolean, renderedScopeType: RuleTransferScopeType) => {
+    const current = copyTargetSelectionRef.current;
+    const currentIds = current.scopeType === renderedScopeType ? current.resourceIds : [];
+    const nextIds = !checked
+      ? currentIds.filter((id) => id !== resourceId)
+      : copyManageMode === "edit"
+        ? [resourceId]
+        : Array.from(new Set([...currentIds, resourceId]));
+    commitCopyTargetSelection(renderedScopeType, nextIds);
   };
 
   const buildBatchCopyRulePayload = (
@@ -4778,20 +4793,37 @@ function RulesContent() {
       toast.error("请选择要复制的规则");
       return;
     }
-    if (selectedCopyTargetResources.length === 0) {
-      toast.error("请选择目标" + copyTargetScopeLabel);
+    const targetSelection = copyTargetSelectionRef.current;
+    const targetType = targetSelection.scopeType;
+    const targetResources = targetType === "local"
+      ? availablePortForwardGroups
+      : targetType === "tunnel"
+        ? supportedTunnels
+        : targetType === "chain"
+          ? availableForwardChainGroups
+          : availableFailoverForwardGroups;
+    const selectedTargetIds = new Set(targetSelection.resourceIds.map(Number));
+    const selectedTargets = targetResources.filter((resource: any) => selectedTargetIds.has(Number(resource.id)));
+    if (selectedTargets.length === 0) {
+      toast.error("请选择目标" + ruleTransferScopeLabels[targetType]);
       return;
     }
+    const targetNames = selectedTargets.map((resource: any) =>
+      `${getTransferResourceLabel(targetType, resource)} (#${Number(resource.id)})`
+    );
+    const targetSummary = targetNames.length <= 3
+      ? targetNames.join("、")
+      : `${targetNames.slice(0, 3).join("、")} 等 ${targetNames.length} 个目标`;
     setCopyWorking(true);
     let copied = 0;
     let skipped = 0;
     try {
       const jobs: Array<{ resource: any; rule: any }> =
-        selectedCopyTargetResources.flatMap((resource: any) =>
+        selectedTargets.flatMap((resource: any) =>
           copySelectedRules.map((rule: any) => ({ resource, rule })),
         );
       const results = await runBatchOperations(jobs, 6, ({ resource, rule }) =>
-        createBatchCopyRule(rule, copyTargetScopeType, resource),
+        createBatchCopyRule(rule, targetType, resource),
       );
       for (const result of results) {
         if (result.status === "rejected") continue;
@@ -4813,10 +4845,7 @@ function RulesContent() {
         );
       } else {
         toast.success(
-          "已复制 " +
-            copied +
-            " 条规则" +
-            (skipped ? "，跳过 " + skipped + " 条" : ""),
+          `已复制 ${copied} 条规则到 ${targetSummary}${skipped ? "，跳过 " + skipped + " 条" : ""}`,
         );
         if (copied > 0) setShowCopyDialog(false);
       }
@@ -5368,6 +5397,12 @@ function RulesContent() {
         .includes(keyword);
     });
   }, [copyTargetResources, copyTargetScopeType, copyTargetSearch, hosts]);
+  useEffect(() => {
+    copyTargetSelectionRef.current = {
+      scopeType: copyTargetScopeType,
+      resourceIds: copyTargetResourceIds,
+    };
+  }, [copyTargetResourceIds, copyTargetScopeType]);
   const selectedCopyTargetResources = useMemo(() => {
     const selected = new Set(copyTargetResourceIds.map(Number));
     return copyTargetResources.filter((resource: any) =>
@@ -12056,6 +12091,7 @@ function RulesContent() {
                                     toggleCopyTargetResource(
                                       Number(resource.id),
                                       event.target.checked,
+                                      copyTargetScopeType,
                                     )
                                   }
                                 />
