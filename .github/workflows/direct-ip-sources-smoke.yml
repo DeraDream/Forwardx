@@ -1,0 +1,30 @@
+name: Direct IP Sources Smoke
+on:
+  push:
+    branches:
+      - smoke-direct-ip-sources-85-149-212-98
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe direct sources
+        shell: bash
+        run: |
+          set -u
+          IP="85.149.212.98"
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125 Safari/537.36"
+          testurl () {
+            NAME="$1"; URL="$2"; OUT="/tmp/$NAME.out"
+            echo "=== $NAME ==="
+            CODE=$(curl -L -sS -A "$UA" --connect-timeout 10 --max-time 20 -D "/tmp/$NAME.h" -o "$OUT" -w "%{http_code}" "$URL" || true)
+            echo "HTTP=$CODE bytes=$(wc -c < "$OUT" 2>/dev/null || echo 0)"
+            grep -i '^content-type:' "/tmp/$NAME.h" | tail -1 || true
+            python3 - "$OUT" <<'PY'
+          import sys, pathlib
+          p=pathlib.Path(sys.argv[1]); b=p.read_bytes() if p.exists() else b''
+          print(repr(b[:1000]))
+          PY
+          }
+          testurl ipapi "https://api.ipapi.is/?q=$IP"
+          testurl ip2location "https://api.ip2location.io/?ip=$IP"
+          testurl abusepage "https://www.abuseipdb.com/check/$IP"
