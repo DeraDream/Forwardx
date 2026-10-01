@@ -1701,6 +1701,12 @@ function publicSystemSettings(all: Record<string, string | null>, activeProtocol
       waveSize: Math.min(100, Math.max(1, Math.floor(Number(all.agentUpgradeWaveSize || 5) || 5))),
       waveIntervalSeconds: Math.min(300, Math.max(1, Math.floor(Number(all.agentUpgradeWaveIntervalSeconds || 15) || 15))),
     },
+    networkProfileApi: {
+      ipapiConfigured: false,
+      ipapiKeyMasked: "",
+      abuseIpdbConfigured: false,
+      abuseIpdbKeyMasked: "",
+    },
     database: databaseSettingsSummary(all, false),
     mysql: {
       configured: false,
