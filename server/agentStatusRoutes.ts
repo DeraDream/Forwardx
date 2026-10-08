@@ -177,10 +177,16 @@ async function applyAgentRuleStatus(host: any, payload: any): Promise<AgentStatu
       if (String(service.status) === "removing") {
         // A delayed success report from an older apply action must never
         // resurrect a service that the user has explicitly deleted.
-        if (!isRunning) {
+        if (!isRunning && payload?.actionSucceeded === true && payload?.actionOp === "remove") {
           await db.deleteLandingService(landingServiceId);
+        } else if (message || payload?.actionSucceeded === false) {
+          await db.updateLandingService(landingServiceId, { statusMessage: message || "Agent 清理失败，等待重试" });
         }
         return { status: 200, body: { success: true, removing: true } };
+      }
+      if (!service.isEnabled) {
+        await db.updateLandingService(landingServiceId, { status: "disabled", statusMessage: message || (isRunning ? "等待 Agent 停止服务" : "Agent 已停止服务") });
+        return { status: 200, body: { success: true } };
       }
       await db.updateLandingService(landingServiceId, {
         status: isRunning ? "running" : "error",
@@ -366,7 +372,7 @@ async function applyAgentRuleStatus(host: any, payload: any): Promise<AgentStatu
   }
 
   const wasRunning = !!(rule as any).isRunning;
-  await db.updateRuleRunningStatus(ruleId, !!isRunning);
+  await db.updateRuleRunningStatus(ruleId, !!isRunning, !isRunning && payload?.actionSucceeded === true && payload?.actionOp === "remove");
   await applyFullChainRuleStatus(ruleId, !!isRunning, message);
   if (
     (wasRunning || !!message)

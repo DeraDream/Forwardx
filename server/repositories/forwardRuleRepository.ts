@@ -884,7 +884,6 @@ export async function getForwardRulesForAgent(hostId?: number) {
   if (!db) return [];
   const conds: any[] = [
     sql`COALESCE(${forwardRules.isForwardGroupTemplate}, ${sqlBool(false)}) = ${sqlBool(false)}`,
-    sql`(COALESCE(${forwardRules.pendingDelete}, ${sqlBool(false)}) = ${sqlBool(false)} OR ${forwardRules.isRunning} = ${sqlBool(true)})`,
   ];
   if (hostId) {
     conds.push(sql`(
@@ -918,7 +917,6 @@ export async function getForwardRulesForAgentScope(hostId: number, tunnelIds: nu
     : eq(forwardRules.hostId, hostId);
   return db.select().from(forwardRules).where(and(
     sql`COALESCE(${forwardRules.isForwardGroupTemplate}, ${sqlBool(false)}) = ${sqlBool(false)}`,
-    sql`(COALESCE(${forwardRules.pendingDelete}, ${sqlBool(false)}) = ${sqlBool(false)} OR ${forwardRules.isRunning} = ${sqlBool(true)})`,
     scope,
   )).orderBy(desc(forwardRules.createdAt));
 }
@@ -1224,11 +1222,11 @@ export async function toggleForwardRule(id: number, isEnabled: boolean) {
   }
 }
 
-export async function updateRuleRunningStatus(id: number, isRunning: boolean) {
+export async function updateRuleRunningStatus(id: number, isRunning: boolean, cleanupConfirmed = false) {
   const db = await getDb();
   if (!db) return;
   const rule = await getForwardRuleById(id);
-  if (rule && (rule as any).pendingDelete && !isRunning) {
+  if (rule && (rule as any).pendingDelete && !isRunning && cleanupConfirmed) {
     await finalizeForwardRuleDelete(id);
     return;
   }

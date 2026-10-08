@@ -13,18 +13,20 @@ const actionStatusRetryMinDelay = time.Second
 const actionStatusRetryMaxDelay = 30 * time.Second
 
 type actionStatusPayload struct {
-	RuleID      int    `json:"ruleId"`
-	TunnelID    int    `json:"tunnelId"`
-	StatusType  string `json:"statusType,omitempty"`
-	SourcePort  int    `json:"sourcePort,omitempty"`
-	TargetPort  int    `json:"targetPort,omitempty"`
-	IsRunning   bool   `json:"isRunning"`
-	Message     string `json:"message,omitempty"`
-	ForwardType string `json:"forwardType,omitempty"`
-	Protocol    string `json:"protocol,omitempty"`
-	LandingServiceID int `json:"landingServiceId,omitempty"`
+	RuleID             int    `json:"ruleId"`
+	TunnelID           int    `json:"tunnelId"`
+	StatusType         string `json:"statusType,omitempty"`
+	SourcePort         int    `json:"sourcePort,omitempty"`
+	TargetPort         int    `json:"targetPort,omitempty"`
+	IsRunning          bool   `json:"isRunning"`
+	ActionOp           string `json:"actionOp,omitempty"`
+	ActionSucceeded    bool   `json:"actionSucceeded"`
+	Message            string `json:"message,omitempty"`
+	ForwardType        string `json:"forwardType,omitempty"`
+	Protocol           string `json:"protocol,omitempty"`
+	LandingServiceID   int    `json:"landingServiceId,omitempty"`
 	LandingPortCheckID string `json:"landingPortCheckId,omitempty"`
-	IssuedAt    int64  `json:"issuedAt,omitempty"`
+	IssuedAt           int64  `json:"issuedAt,omitempty"`
 }
 
 type actionStatusReport struct {
@@ -55,18 +57,23 @@ func actionStatusReportKey(payload actionStatusPayload) string {
 
 func enqueueActionStatusReport(cfg Config, a action, running bool, message string) {
 	payload := actionStatusPayload{
-		RuleID:      a.RuleID,
-		TunnelID:    a.TunnelID,
-		StatusType:  strings.TrimSpace(a.StatusType),
-		SourcePort:  a.SourcePort,
-		TargetPort:  a.TargetPort,
-		IsRunning:   running,
-		Message:     strings.TrimSpace(message),
-		ForwardType: strings.TrimSpace(a.ForwardType),
-		Protocol:    strings.TrimSpace(a.Protocol),
-		LandingServiceID: a.LandingServiceID,
+		RuleID:             a.RuleID,
+		TunnelID:           a.TunnelID,
+		StatusType:         strings.TrimSpace(a.StatusType),
+		SourcePort:         a.SourcePort,
+		TargetPort:         a.TargetPort,
+		IsRunning:          running,
+		ActionOp:           strings.TrimSpace(a.Op),
+		ActionSucceeded:    (a.Op == "remove" && strings.TrimSpace(message) == "") || (a.Op != "remove" && running),
+		Message:            strings.TrimSpace(message),
+		ForwardType:        strings.TrimSpace(a.ForwardType),
+		Protocol:           strings.TrimSpace(a.Protocol),
+		LandingServiceID:   a.LandingServiceID,
 		LandingPortCheckID: a.LandingPortCheckID,
-		IssuedAt:    a.IssuedAt,
+		IssuedAt:           a.IssuedAt,
+	}
+	if a.ActionSucceeded != nil {
+		payload.ActionSucceeded = *a.ActionSucceeded
 	}
 	if payload.StatusType == "" {
 		payload.StatusType = "rule"

@@ -3,6 +3,7 @@ import { z } from "zod";
 import * as db from "../db";
 import { pushAgentRefresh, requestHostTcping } from "../agentEvents";
 import { pushTunnelEndpointRefresh } from "./helpers";
+import { reserveSpecificHostPort } from "../portReservations";
 import { getLandingPortCheck, requestLandingPortCheck } from "../landingPortChecks";
 
 const METHODS = [
@@ -166,15 +167,15 @@ export const landingRouter = router({
     const host = input.hostId ? await requireEligibleHost(ctx.user, input.hostId) : null;
     const wants2022 = input.protocol === "ss2022";
     if (wants2022 !== input.method.startsWith("2022-")) throw new Error("SS2022 必须使用 2022 加密方式，普通 SS 不能使用 2022 加密方式");
-    if (host) {
-      const port = await db.getLandingServicesForHost(input.hostId!);
-      if (port.some((item: any) => Number(item.port) === input.port)) throw new Error("端口已被另一个落地服务使用");
-    }
+    const reservation = host ? await reserveSpecificHostPort({ hostId: input.hostId!, port: input.port, protocol: "both", isUsed: (port) => db.isPortUsedOnHost(input.hostId!, port, undefined, "both") }) : null;
+    if (host && !reservation) throw new Error("端口已被转发、落地或待清理服务占用");
+    try {
     const latencyTarget = parseLandingLatencyTarget(input.latencyTargetHost, input.latencyTargetPort);
     const external = !host;
     const id = await db.createLandingService({ ...input, hostId: host ? input.hostId : -Math.floor(1 + Math.random() * 2_000_000_000), latencyTargetHost: latencyTarget.host, latencyTargetPort: latencyTarget.port, endpoint: input.endpoint || exitEndpoint(host), userId: Number(host?.userId || ctx.user.id), isEnabled: true, status: external ? "external" : "pending", statusMessage: external ? "外部 SS，未由本面板托管" : "等待 Agent 部署" });
     if (host) pushAgentRefresh(input.hostId!, "landing-service-create", { urgent: true });
     return { id, status: external ? "external" : "pending", external };
+    } finally { reservation?.release(); }
   }),
   update: protectedProcedure.input(z.object({
     id: z.number().int().positive(), name: z.string().trim().min(1).max(80), protocol: z.enum(["ss", "ss2022"]), method: z.enum(METHODS), password: z.string().trim().min(8).max(256), port: z.number().int().min(1).max(65535), endpoint: z.string().trim().min(1).max(255), latencyTargetHost: z.string().trim().min(1).max(255), latencyTargetPort: z.number().int().min(1).max(65535),
@@ -182,12 +183,19 @@ export const landingRouter = router({
     const service = await db.getLandingServiceById(input.id, true) as any;
     if (!service) throw new Error("落地服务不存在");
     if (!isAdmin(ctx.user) && Number(service.userId) !== Number(ctx.user.id)) throw new Error("无权编辑该服务");
+    if (service.status === "removing") throw new Error("落地服务正在删除，请等待清理完成");
     const wants2022 = input.protocol === "ss2022";
     if (wants2022 !== input.method.startsWith("2022-")) throw new Error("SS2022 必须使用 2022 加密方式，普通 SS 不能使用 2022 加密方式");
     if (!service.isExternal) {
       const peers = await db.getLandingServicesForHost(Number(service.hostId), true, true);
       if (peers.some((item: any) => Number(item.id) !== input.id && Number(item.port) === input.port)) throw new Error("端口已被另一个落地服务使用");
     }
+    const reservation = !service.isExternal ? await reserveSpecificHostPort({ hostId: Number(service.hostId), port: input.port, protocol: "both", isUsed: async (port) => {
+      const rules = await db.getForwardRules();
+      return rules.some((rule: any) => !rule.isForwardGroupTemplate && Number(rule.hostId) === Number(service.hostId) && Number(rule.sourcePort) === port && (rule.isEnabled || rule.pendingDelete)) || (port !== Number(service.port) && await db.isPortUsedOnHost(Number(service.hostId), port, undefined, "both"));
+    } }) : null;
+    if (!service.isExternal && !reservation) throw new Error("端口已被转发、落地或待清理服务占用");
+    try {
     const latencyTarget = parseLandingLatencyTarget(input.latencyTargetHost, input.latencyTargetPort);
     await db.updateLandingService(input.id, { ...input, previousPort: service.isExternal ? null : Number(service.port), recreatePending: !service.isExternal, latencyTargetHost: latencyTarget.host, latencyTargetPort: latencyTarget.port, status: service.isExternal ? "external" : "pending", statusMessage: service.isExternal ? "外部 SS，未由本面板托管" : "等待 Agent 删除旧服务并创建新服务" });
     const referencedRules = (await db.getForwardRules()).filter((rule: any) => Number(rule.targetLandingServiceId) === input.id && !rule.pendingDelete);
@@ -202,14 +210,16 @@ export const landingRouter = router({
     }
     if (!service.isExternal) pushAgentRefresh(Number(service.hostId), "landing-service-update", { urgent: true });
     return { success: true };
+    } finally { reservation?.release(); }
   }),
   toggle: protectedProcedure.input(z.object({ id: z.number().int().positive(), isEnabled: z.boolean() })).mutation(async ({ input, ctx }) => {
     const service = await db.getLandingServiceById(input.id, true) as any;
     if (!service) throw new Error("落地服务不存在");
     if (!isAdmin(ctx.user) && Number(service.userId) !== Number(ctx.user.id)) throw new Error("无权操作此服务");
+    if (service.status === "removing") throw new Error("落地服务正在删除，请等待清理完成");
     await db.updateLandingService(input.id, {
       isEnabled: input.isEnabled,
-      status: service.isExternal ? (input.isEnabled ? "external" : "disabled") : input.isEnabled ? "pending" : "removing",
+      status: service.isExternal ? (input.isEnabled ? "external" : "disabled") : input.isEnabled ? "pending" : "disabled",
       statusMessage: service.isExternal ? "外部 SS，未由本面板托管" : input.isEnabled ? "等待 Agent 启动服务" : "等待 Agent 停止服务",
     });
     if (!service.isExternal) pushAgentRefresh(Number(service.hostId), input.isEnabled ? "landing-service-enable" : "landing-service-disable", { urgent: true });

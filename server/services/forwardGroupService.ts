@@ -349,6 +349,10 @@ export async function getForwardGroupDeleteImpact(groupId: number) {
 export async function deleteForwardGroupWithImpact(id: number, confirmRules?: boolean) {
   const group = await db.getForwardGroupById(id);
   if (!group) throw new Error("转发组不存在");
+  const ownedRules = [...await db.getForwardGroupTemplateRules(id), ...await db.getForwardGroupChildRules(id)] as any[];
+  const ownedIds = new Set(ownedRules.map((rule) => Number(rule.id)));
+  const references = (await db.getForwardRules()).filter((rule: any) => !rule.pendingDelete && !ownedIds.has(Number(rule.id)) && ownedIds.has(Number(rule.targetRuleId)));
+  if (references.length) throw new Error(`该转发组仍被 ${references.length} 条外部转发规则引用，无法删除：${references.map((rule: any) => rule.name || `规则 #${rule.id}`).join("、")}。请先删除或修改引用规则`);
   const impact = await getForwardGroupDeleteImpact(id);
   if (impact.forwardRuleCount > 0 && !confirmRules) {
     throw new Error(`此转发组仍有关联转发规则 ${impact.forwardRuleCount} 条，请确认后再删除`);

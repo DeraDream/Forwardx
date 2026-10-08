@@ -440,12 +440,20 @@ export function buildIptablesForwardCleanupCmds(rule: any): string[] {
   const targetIp = cleanAddress(rule.targetIp);
   const binary = iptablesBinaryForTarget(targetIp);
   const protos = forwardRuleProtocols(rule.protocol);
+  const selector = `-m conntrack --ctorigdstport ${rule.sourcePort}`;
   const cmds: string[] = buildIptablesForwardPortCleanupCmds(Number(rule.sourcePort), rule.protocol);
   for (const proto of protos) {
     cmds.push(iptablesDelete(binary, "nat", `PREROUTING -p ${proto} --dport ${rule.sourcePort} -j DNAT --to-destination ${iptablesDnatTarget(targetIp, rule.targetPort)}`));
-    cmds.push(iptablesDelete(binary, "nat", `POSTROUTING -p ${proto} -d ${targetIp} --dport ${rule.targetPort} -j MASQUERADE`));
-    cmds.push(iptablesDelete(binary, null, `FORWARD -p ${proto} -d ${targetIp} --dport ${rule.targetPort} -j ACCEPT`));
-    cmds.push(iptablesDelete(binary, null, `FORWARD -p ${proto} -s ${targetIp} --sport ${rule.targetPort} ${proto === "tcp" ? "-m state --state ESTABLISHED,RELATED " : ""}-j ACCEPT`));
+    cmds.push(iptablesDelete(binary, "nat", `POSTROUTING -p ${proto} -d ${targetIp} --dport ${rule.targetPort} ${selector} -j MASQUERADE`));
+    cmds.push(iptablesDelete(binary, null, `FORWARD -p ${proto} -d ${targetIp} --dport ${rule.targetPort} ${selector} -j ACCEPT`));
+    cmds.push(iptablesDelete(binary, null, `FORWARD -p ${proto} -s ${targetIp} --sport ${rule.targetPort} ${proto === "tcp" ? "-m state --state ESTABLISHED,RELATED " : ""}${selector} -j ACCEPT`));
+    const legacy = [
+      iptablesDelete(binary, "nat", `POSTROUTING -p ${proto} -d ${targetIp} --dport ${rule.targetPort} -j MASQUERADE`),
+      iptablesDelete(binary, null, `FORWARD -p ${proto} -d ${targetIp} --dport ${rule.targetPort} -j ACCEPT`),
+      iptablesDelete(binary, null, `FORWARD -p ${proto} -s ${targetIp} --sport ${rule.targetPort} ${proto === "tcp" ? "-m state --state ESTABLISHED,RELATED " : ""}-j ACCEPT`),
+    ];
+    const remaining = `printf '%s\\n' "$remaining_rules" | awk -v p=${shQuote(proto)} -v t=${shQuote(iptablesDnatTarget(targetIp, rule.targetPort))} '$0 ~ "-p " p " " { for (i=1;i<NF;i++) if ($i == "--to-destination" && $(i+1) == t) found=1 } END {exit !found}'`;
+    cmds.push(`remaining_rules=$(${binary} -t nat -S PREROUTING) || exit 1; if ${remaining}; then :; else ${legacy.join("; ")}; fi`);
   }
   return cmds;
 }
@@ -454,6 +462,7 @@ export function buildIptablesForwardCmds(rule: any): string[] {
   const targetIp = cleanAddress(rule.targetIp);
   const binary = iptablesBinaryForTarget(targetIp);
   const protos = forwardRuleProtocols(rule.protocol);
+  const selector = `-m conntrack --ctorigdstport ${rule.sourcePort}`;
   const cmds = [
     binary === "ip6tables"
       ? `sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null`
@@ -462,9 +471,9 @@ export function buildIptablesForwardCmds(rule: any): string[] {
   ];
   for (const proto of protos) {
     cmds.push(iptablesEnsure(binary, "nat", `PREROUTING -p ${proto} --dport ${rule.sourcePort} -j DNAT --to-destination ${iptablesDnatTarget(targetIp, rule.targetPort)}`));
-    cmds.push(iptablesEnsure(binary, "nat", `POSTROUTING -p ${proto} -d ${targetIp} --dport ${rule.targetPort} -j MASQUERADE`));
-    cmds.push(iptablesEnsure(binary, null, `FORWARD -p ${proto} -d ${targetIp} --dport ${rule.targetPort} -j ACCEPT`));
-    cmds.push(iptablesEnsure(binary, null, `FORWARD -p ${proto} -s ${targetIp} --sport ${rule.targetPort} ${proto === "tcp" ? "-m state --state ESTABLISHED,RELATED " : ""}-j ACCEPT`));
+    cmds.push(iptablesEnsure(binary, "nat", `POSTROUTING -p ${proto} -d ${targetIp} --dport ${rule.targetPort} ${selector} -j MASQUERADE`));
+    cmds.push(iptablesEnsure(binary, null, `FORWARD -p ${proto} -d ${targetIp} --dport ${rule.targetPort} ${selector} -j ACCEPT`));
+    cmds.push(iptablesEnsure(binary, null, `FORWARD -p ${proto} -s ${targetIp} --sport ${rule.targetPort} ${proto === "tcp" ? "-m state --state ESTABLISHED,RELATED " : ""}${selector} -j ACCEPT`));
   }
   return cmds;
 }

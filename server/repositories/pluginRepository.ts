@@ -1458,14 +1458,26 @@ function githubTreeApiUrl(repository: string, branch: string) {
   return `https://api.github.com/repos/${owner}/${repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`;
 }
 
+async function fetchPluginDownload(url: string, accept: string) {
+  let currentUrl = url;
+  for (let redirects = 0; redirects <= 5; redirects++) {
+    const safeUrl = await assertSafePluginHttpUrl(currentUrl);
+    const response = await fetch(safeUrl, {
+      redirect: "manual",
+      headers: { "User-Agent": "ForwardX-Plugin-Installer", Accept: accept },
+    });
+    if (![301, 302, 303, 307, 308].includes(response.status)) return response;
+    const location = response.headers.get("location");
+    await response.body?.cancel();
+    if (!location) throw new Error("插件下载重定向缺少目标地址");
+    if (redirects === 5) throw new Error("插件下载重定向次数过多");
+    currentUrl = new URL(location, safeUrl).toString();
+  }
+  throw new Error("插件下载重定向次数过多");
+}
+
 async function fetchText(url: string, maxBytes = MAX_PLUGIN_ASSET_BYTES) {
-  await assertSafePluginHttpUrl(url);
-  const response = await fetch(url, {
-    headers: {
-      "User-Agent": "ForwardX-Plugin-Installer",
-      Accept: "application/json,text/plain,*/*",
-    },
-  });
+  const response = await fetchPluginDownload(url, "application/json,text/plain,*/*");
   if (!response.ok) {
     throw new Error(`请求失败 ${response.status}`);
   }
@@ -1478,13 +1490,7 @@ async function fetchText(url: string, maxBytes = MAX_PLUGIN_ASSET_BYTES) {
 }
 
 async function fetchBuffer(url: string) {
-  await assertSafePluginHttpUrl(url);
-  const response = await fetch(url, {
-    headers: {
-      "User-Agent": "ForwardX-Plugin-Installer",
-      Accept: "application/gzip,application/zip,application/octet-stream,*/*",
-    },
-  });
+  const response = await fetchPluginDownload(url, "application/gzip,application/zip,application/octet-stream,*/*");
   if (!response.ok) {
     throw new Error(`请求失败 ${response.status}`);
   }
@@ -3969,6 +3975,7 @@ async function executePluginHttpAction(plugin: any, action: PluginActionDefiniti
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   const startedAt = Date.now();
   let response: Response;
+  let responseText: string;
   try {
     response = await fetch(safeUrl, {
       method: action.request.method,
@@ -3977,8 +3984,14 @@ async function executePluginHttpAction(plugin: any, action: PluginActionDefiniti
       redirect: "manual",
       signal: controller.signal,
     });
+    const contentLength = Number(response.headers.get("content-length") || 0);
+    if (contentLength > MAX_PLUGIN_HTTP_RESPONSE_BYTES) {
+      await response.body?.cancel();
+      throw new Error(`插件 HTTP 响应过大，不能超过 ${formatByteLimit(MAX_PLUGIN_HTTP_RESPONSE_BYTES)}`);
+    }
+    responseText = await readResponseTextLimited(response, MAX_PLUGIN_HTTP_RESPONSE_BYTES);
   } catch (error) {
-    const message = error instanceof Error && error.name === "AbortError"
+    const message = controller.signal.aborted
       ? `插件 HTTP 请求超时（${timeoutMs}ms）`
       : `插件 HTTP 请求失败：${error instanceof Error ? error.message : String(error)}`;
     throw new Error(redactText(message, secrets));
@@ -3986,11 +3999,6 @@ async function executePluginHttpAction(plugin: any, action: PluginActionDefiniti
     clearTimeout(timeout);
   }
   const durationMs = Date.now() - startedAt;
-  const contentLength = Number(response.headers.get("content-length") || 0);
-  if (contentLength > MAX_PLUGIN_HTTP_RESPONSE_BYTES) {
-    throw new Error(`插件 HTTP 响应过大，不能超过 ${formatByteLimit(MAX_PLUGIN_HTTP_RESPONSE_BYTES)}`);
-  }
-  const responseText = await readResponseTextLimited(response, MAX_PLUGIN_HTTP_RESPONSE_BYTES);
   const responseHeaders: Record<string, string> = {};
   response.headers.forEach((value, key) => {
     if (key.toLowerCase() === "set-cookie") return;

@@ -13,6 +13,7 @@ import {
   forwardGroupMembers,
   forwardGroups,
   tunnelLatencyStats,
+  landingServices,
 } from "../../drizzle/schema";
 import { executeRaw, getDatabaseKind, getDb, insertAndGetId, nowDate, queryRaw, withDatabaseTransaction } from "../dbRuntime";
 import { boolValue, quoteIdentifier, sqlCountAll } from "../dbCompat";
@@ -873,6 +874,7 @@ export async function findAvailableTunnelExitPort(
 ): Promise<number | null> {
   const db = await getDb();
   if (!db) return null;
+  const landingRows = await db.select({ port: landingServices.port, previousPort: landingServices.previousPort }).from(landingServices).where(eq(landingServices.hostId, exitHostId));
   const excludedIds = Array.from(new Set(excludeRuleIds.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0)));
   const excludeRulesSql = excludedIds.length > 0
     ? sql`${forwardRules.id} NOT IN (${sql.join(excludedIds.map((id) => sql`${id}`), sql`, `)})`
@@ -890,8 +892,7 @@ export async function findAvailableTunnelExitPort(
   const usedRuleConds: any[] = [
     eq(forwardRules.hostId, exitHostId),
     eq(forwardRules.isForwardGroupTemplate, false),
-    eq(forwardRules.isEnabled, true),
-    eq(forwardRules.pendingDelete, false),
+    or(eq(forwardRules.isEnabled, true), eq(forwardRules.pendingDelete, true)),
   ];
   if (excludeRulesSql) usedRuleConds.push(excludeRulesSql);
   const usedRulePorts = await db.select({ port: forwardRules.sourcePort }).from(forwardRules).where(and(...usedRuleConds));
@@ -904,8 +905,7 @@ export async function findAvailableTunnelExitPort(
   const usedExitConds: any[] = [
     eq(tunnels.exitHostId, exitHostId),
     eq(forwardRules.isForwardGroupTemplate, false),
-    eq(forwardRules.isEnabled, true),
-    eq(forwardRules.pendingDelete, false),
+    or(eq(forwardRules.isEnabled, true), eq(forwardRules.pendingDelete, true)),
   ];
   if (excludeRulesSql) usedExitConds.push(excludeRulesSql);
   const usedExitPorts = await db.select({ port: forwardRules.tunnelExitPort })
@@ -916,6 +916,7 @@ export async function findAvailableTunnelExitPort(
   if (excludeMappingsSql) usedMappedExitConds.push(excludeMappingsSql);
   const usedMappedExitPorts = await db.select({ port: forwardRuleTunnelExits.tunnelExitPort }).from(forwardRuleTunnelExits).where(and(...usedMappedExitConds));
   const used = new Set<number>();
+  landingRows.forEach((row: any) => { used.add(Number(row.port)); if (row.previousPort) used.add(Number(row.previousPort)); });
   reservedPorts.forEach((port) => {
     const n = Number(port);
     if (Number.isInteger(n) && n > 0) used.add(n);
@@ -1677,6 +1678,7 @@ export async function getUsedPortsOnHost(
 ): Promise<Set<number>> {
   const db = await getDb();
   if (!db) return new Set();
+  const landingRows = await db.select({ port: landingServices.port, previousPort: landingServices.previousPort }).from(landingServices).where(eq(landingServices.hostId, hostId));
   const excludedIds = Array.from(new Set(
     (Array.isArray(excludeRuleId) ? excludeRuleId : [excludeRuleId])
       .map((id) => Number(id || 0))
@@ -1694,8 +1696,7 @@ export async function getUsedPortsOnHost(
   const usedRuleConds: any[] = [
     eq(forwardRules.hostId, hostId),
     eq(forwardRules.isForwardGroupTemplate, false),
-    eq(forwardRules.isEnabled, true),
-    eq(forwardRules.pendingDelete, false),
+    or(eq(forwardRules.isEnabled, true), eq(forwardRules.pendingDelete, true)),
   ];
   if (excludeRulesSql) usedRuleConds.push(excludeRulesSql);
   if (protocolCond) usedRuleConds.push(protocolCond);
@@ -1703,8 +1704,7 @@ export async function getUsedPortsOnHost(
   const usedPrimaryExitConds: any[] = [
     eq(tunnels.exitHostId, hostId),
     eq(forwardRules.isForwardGroupTemplate, false),
-    eq(forwardRules.isEnabled, true),
-    eq(forwardRules.pendingDelete, false),
+    or(eq(forwardRules.isEnabled, true), eq(forwardRules.pendingDelete, true)),
   ];
   if (excludeRuleExitPorts && excludeRulesSql) usedPrimaryExitConds.push(excludeRulesSql);
   if (protocolCond) usedPrimaryExitConds.push(protocolCond);
@@ -1746,6 +1746,7 @@ export async function getUsedPortsOnHost(
     const port = Number(value);
     if (Number.isInteger(port) && port >= 1 && port <= 65535) used.add(port);
   };
+  landingRows.forEach((row: any) => { addPort(row.port); addPort(row.previousPort); });
   usedRules.forEach((row: any) => addPort(row.port));
   usedPrimaryExits.forEach((row: any) => addPort(row.port));
   usedMappedExits.forEach((row: any) => addPort(row.port));
@@ -1779,6 +1780,8 @@ export async function isPortUsedOnHost(
 ): Promise<boolean> {
   const db = await getDb();
   if (!db) return false;
+  const landingRows = await db.select({ id: landingServices.id }).from(landingServices).where(and(eq(landingServices.hostId, hostId), or(eq(landingServices.port, sourcePort), eq(landingServices.previousPort, sourcePort)))).limit(1);
+  if (landingRows.length) return true;
   const excludedIds = Array.from(new Set(
     (Array.isArray(excludeRuleId) ? excludeRuleId : [excludeRuleId])
       .map((id) => Number(id || 0))
@@ -1792,13 +1795,13 @@ export async function isPortUsedOnHost(
     eq(forwardRules.hostId, hostId),
     eq(forwardRules.sourcePort, sourcePort),
     eq(forwardRules.isForwardGroupTemplate, false),
-    eq(forwardRules.isEnabled, true),
-    eq(forwardRules.pendingDelete, false),
+    or(eq(forwardRules.isEnabled, true), eq(forwardRules.pendingDelete, true)),
   ];
   const protocolCond = protocolConflictCondition(protocol);
   if (protocolCond) conds.push(protocolCond);
   if (excludedIds.length > 0) {
     conds.push(sql`${forwardRules.id} NOT IN (${sql.join(excludedIds.map((id) => sql`${id}`), sql`, `)})`);
+    conds.push(sql`NOT (${forwardRules.pendingDelete} = ${sqlBool(true)} AND COALESCE(${forwardRules.forwardGroupRuleId}, 0) IN (${sql.join(excludedIds.map((id) => sql`${id}`), sql`, `)}))`);
   }
   const r = await db.select({ count: sqlCountAll() }).from(forwardRules).where(and(...conds));
   if ((Number(r[0]?.count) || 0) > 0) return true;
@@ -1806,8 +1809,7 @@ export async function isPortUsedOnHost(
     eq(tunnels.exitHostId, hostId),
     eq(forwardRules.tunnelExitPort, sourcePort),
     eq(forwardRules.isForwardGroupTemplate, false),
-    eq(forwardRules.isEnabled, true),
-    eq(forwardRules.pendingDelete, false),
+    or(eq(forwardRules.isEnabled, true), eq(forwardRules.pendingDelete, true)),
   ];
   if (excludeRuleExitPorts && excludedIds.length > 0) {
     primaryExitConds.push(sql`${forwardRules.id} NOT IN (${sql.join(excludedIds.map((id) => sql`${id}`), sql`, `)})`);

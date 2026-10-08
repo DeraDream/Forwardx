@@ -3572,6 +3572,9 @@ export async function replaceForwardGroupMembers(
 export async function deleteForwardGroup(id: number) {
   const db = await getDb();
   const childRules = await getForwardGroupChildRules(id);
+  const ownedIds = new Set([...childRules, ...await getForwardGroupTemplateRules(id)].map((rule: any) => Number(rule.id)));
+  const references = (await getForwardRules()).filter((rule: any) => !rule.pendingDelete && !ownedIds.has(Number(rule.id)) && ownedIds.has(Number(rule.targetRuleId)));
+  if (references.length) throw new Error(`该转发组仍被 ${references.length} 条外部转发规则引用，无法删除：${references.map((rule: any) => rule.name || `规则 #${rule.id}`).join("、")}`);
   for (const rule of childRules as any[]) await removeManagedRule(Number(rule.id));
   const templates = await getForwardGroupTemplateRules(id);
   for (const template of templates as any[]) {

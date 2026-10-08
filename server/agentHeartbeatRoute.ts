@@ -247,11 +247,12 @@ function landingServiceAction(service: any) {
   // host the process can need a short moment before both listeners are bound;
   // checking only once races that startup and incorrectly marks a healthy
   // landing service as failed in the panel.
-  const verifyListeners = `if command -v ss >/dev/null 2>&1; then for i in $(seq 1 50); do tcp_ready=0; udp_ready=0; ss -ltnH | awk '{print $4}' | grep -Eq "[:.]${port}$" && tcp_ready=1; ss -lunH | awk '{print $5}' | grep -Eq "[:.]${port}$" && udp_ready=1; if [ "$tcp_ready" = 1 ] && [ "$udp_ready" = 1 ]; then exit 0; fi; sleep 0.2; done; echo "[landing] listener did not become ready on port ${port}" >&2; exit 1; fi`;
+  const verifyListeners = `if command -v ss >/dev/null 2>&1; then for i in $(seq 1 50); do tcp_ready=0; udp_ready=0; ss -ltnH | awk '{print $4}' | grep -Eq "[:.]${port}$" && tcp_ready=1; ss -lunH | awk '{print $4}' | grep -Eq "[:.]${port}$" && udp_ready=1; if [ "$tcp_ready" = 1 ] && [ "$udp_ready" = 1 ]; then exit 0; fi; sleep 0.2; done; echo "[landing] listener did not become ready on port ${port}" >&2; exit 1; fi`;
+  const verifyRemoved = `if systemctl is-active --quiet ${shQuote(unitName)}.service; then echo '[landing] service still active after cleanup' >&2; exit 1; fi; test ! -e ${shQuote(`/etc/systemd/system/${unitName}.service`)} && test ! -e ${shQuote(configPath)} || exit 1; for bin in iptables ip6tables; do command -v $bin >/dev/null 2>&1 || continue; for table in filter mangle; do rules=$($bin -t $table -S 2>/dev/null) || { echo '[landing] cannot verify firewall cleanup' >&2; exit 1; }; if printf '%s\\n' "$rules" | grep -Fq 'fwx-landing-${id}:'; then echo '[landing] firewall cleanup incomplete' >&2; exit 1; fi; done; done; if command -v nft >/dev/null 2>&1 && nft list chain inet nft_manager_firewall input >/dev/null 2>&1; then if nft list chain inet nft_manager_firewall input | grep -Fq '${nftFirewallComment}'; then exit 1; fi; fi; if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi '^Status: active'; then if ufw status | grep -Eq 'ForwardX landing ${id}([[:space:]]|$)'; then exit 1; fi; fi`;
   if (service.isEnabled === false) return {
     op: "remove", statusType: "runtime", forwardType: `landing-ss-service-${id}`, landingServiceId: id,
     sourcePort: port, protocol: "both", reportStatus: true,
-    commands: [`systemctl disable --now ${shQuote(unitName)}.service 2>/dev/null || true; ${removeUfwRules}; ${removeNativeNftInputRules}; ${removeInputRules}; for bin in iptables ip6tables; do command -v $bin >/dev/null 2>&1 || continue; $bin -t mangle -D PREROUTING -p tcp --dport ${port} -m conntrack --ctstate NEW -m comment --comment fwx-landing-${id}:conn -j CONNMARK --restore-mark 2>/dev/null || true; for proto in tcp udp; do $bin -t mangle -D PREROUTING -p $proto --dport ${port} -m comment --comment fwx-landing-${id}:in -j CONNMARK --restore-mark 2>/dev/null || true; $bin -t mangle -D POSTROUTING -p $proto -m conntrack --ctorigdstport ${port} -m comment --comment fwx-landing-${id}:out -j CONNMARK --restore-mark 2>/dev/null || true; done; done; rm -f ${shQuote(`/etc/systemd/system/${unitName}.service`)} ${shQuote(configPath)}; systemctl daemon-reload`],
+    commands: [`${previousPort !== port ? `${removeExistingService}; ` : ""}systemctl disable --now ${shQuote(unitName)}.service 2>/dev/null || true; ${removeUfwRules}; ${removeNativeNftInputRules}; ${removeInputRules}; for bin in iptables ip6tables; do command -v $bin >/dev/null 2>&1 || continue; $bin -t mangle -D PREROUTING -p tcp --dport ${port} -m conntrack --ctstate NEW -m comment --comment fwx-landing-${id}:conn -j CONNMARK --restore-mark 2>/dev/null || true; for proto in tcp udp; do $bin -t mangle -D PREROUTING -p $proto --dport ${port} -m comment --comment fwx-landing-${id}:in -j CONNMARK --restore-mark 2>/dev/null || true; $bin -t mangle -D POSTROUTING -p $proto -m conntrack --ctorigdstport ${port} -m comment --comment fwx-landing-${id}:out -j CONNMARK --restore-mark 2>/dev/null || true; done; done; rm -f ${shQuote(`/etc/systemd/system/${unitName}.service`)} ${shQuote(configPath)}; systemctl daemon-reload; ${verifyRemoved}`],
   };
   const config = JSON.stringify({ server: "0.0.0.0", server_port: port, password: String(service.password || ""), method: String(service.method || "aes-256-gcm"), mode: "tcp_and_udp" });
   const config64 = Buffer.from(config, "utf8").toString("base64");
@@ -6076,17 +6077,6 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       })
       .filter(Boolean)
       .sort((left: any, right: any) => Number(left.ruleId) - Number(right.ruleId));
-    const templateIds = Array.from(
-      new Set(
-        (agentAllRules as any[])
-          .map((rule: any) => Number(rule.forwardGroupRuleId || 0))
-          .filter((id: number) => id > 0),
-      ),
-    );
-    const templateById = new Map(
-      (templateIds.length ? await db.getForwardRulesByIds(templateIds) : [])
-        .map((rule: any) => [Number(rule.id), rule]),
-    );
     for (const rule of agentAllRules as any[]) {
       if (
         !rule ||
@@ -6095,15 +6085,6 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         !rule.isRunning ||
         Number(rule.tunnelId || 0) > 0 ||
         !isRuleProtocolEnabled(forwardProtocolSettings, rule)
-      )
-        continue;
-      const template = Number(rule.forwardGroupRuleId || 0)
-        ? templateById.get(Number(rule.forwardGroupRuleId))
-        : rule;
-      if (
-        !template ||
-        (!Number(template.targetRuleId || 0) &&
-          !Number(template.targetLandingServiceId || 0))
       )
         continue;
       const probe = buildDirectRuleLatencyProbe({

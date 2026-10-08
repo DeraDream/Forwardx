@@ -1394,7 +1394,16 @@ func trafficCollectBackoffInterval(base time.Duration, elapsed time.Duration) ti
 
 func collectTCPing(cfg Config, ruleProbes []ruleLatencyProbe, probes []tunnelProbe, groupProbes []forwardGroupProbe, serviceProbes []hostProbeServiceProbe, force bool, startActionEpoch uint64, startedWithActionsPending bool) {
 	ruleTasks := []tcpingTask{}
+	explicitRuleIDs := map[int]bool{}
+	for _, probe := range ruleProbes {
+		if _, ok := buildExplicitRuleLatencyProbeTask(probe); ok {
+			explicitRuleIDs[probe.RuleID] = true
+		}
+	}
 	for _, state := range readLocalRuleStates() {
+		if explicitRuleIDs[state.RuleID] {
+			continue
+		}
 		if task, ok := buildRuleLatencyProbeTask(state); ok {
 			ruleTasks = append(ruleTasks, task)
 		}
@@ -1625,7 +1634,7 @@ func buildExplicitRuleLatencyProbeTask(probe ruleLatencyProbe) (tcpingTask, bool
 	if method != "ping" {
 		method = "tcping"
 	}
-	if probe.RuleID <= 0 || probe.TunnelID <= 0 || strings.TrimSpace(probe.TargetIP) == "" || probe.TargetPort <= 0 {
+	if probe.RuleID <= 0 || probe.TunnelID < 0 || strings.TrimSpace(probe.TargetIP) == "" || probe.TargetPort <= 0 {
 		return tcpingTask{}, false
 	}
 	probeKey := strings.TrimSpace(probe.ProbeKey)
@@ -2002,10 +2011,19 @@ func executeTCPingTaskWithProbes(
 }
 
 func tcpLatencyWithProbes(host string, port int, timeout time.Duration, count int) probeMeasurement {
-	if count < 1 { count = 1 }
-	if count > tcpingTCPProbeCount { count = tcpingTCPProbeCount }
-	if timeout <= 0 { timeout = tcpingProbeTimeout }
-	type result struct { latency int; reachable bool }
+	if count < 1 {
+		count = 1
+	}
+	if count > tcpingTCPProbeCount {
+		count = tcpingTCPProbeCount
+	}
+	if timeout <= 0 {
+		timeout = tcpingProbeTimeout
+	}
+	type result struct {
+		latency   int
+		reachable bool
+	}
 	results := make(chan result, count)
 	deadline := time.Now().Add(timeout)
 	var wg sync.WaitGroup
@@ -2014,7 +2032,10 @@ func tcpLatencyWithProbes(host string, port int, timeout time.Duration, count in
 		go func() {
 			defer wg.Done()
 			remaining := time.Until(deadline)
-			if remaining <= 0 { results <- result{}; return }
+			if remaining <= 0 {
+				results <- result{}
+				return
+			}
 			latency, reachable, _ := tcpLatencyResolved(host, port, remaining)
 			results <- result{latency: latency, reachable: reachable}
 		}()
@@ -2023,14 +2044,20 @@ func tcpLatencyWithProbes(host string, port int, timeout time.Duration, count in
 	close(results)
 	latencyTotal, successes := 0, 0
 	for item := range results {
-		if !item.reachable { continue }
+		if !item.reachable {
+			continue
+		}
 		successes++
-		if item.latency > 0 { latencyTotal += item.latency }
+		if item.latency > 0 {
+			latencyTotal += item.latency
+		}
 	}
 	measurement := probeMeasurement{ProbeCount: count, ProbeSuccesses: successes, Reachable: successes > 0}
 	if successes > 0 {
 		measurement.LatencyMs = latencyTotal / successes
-		if measurement.LatencyMs < 1 { measurement.LatencyMs = 1 }
+		if measurement.LatencyMs < 1 {
+			measurement.LatencyMs = 1
+		}
 	}
 	return measurement
 }

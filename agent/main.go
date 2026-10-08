@@ -37,7 +37,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.229"
+var Version = "2.2.231"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -1413,6 +1413,7 @@ type kernelForwardSnapshot struct {
 	nftTable                string
 	iptablesLoaded          map[string]bool
 	iptablesNatRule         map[string]string
+	iptablesAuxRule         map[string]string
 	iptablesMangleLoaded    bool
 	iptablesForwardxMarkers map[int]bool
 }
@@ -1918,10 +1919,55 @@ func nftDnatLinePresent(text string, ruleID int, proto string, sourcePort int, t
 	return false
 }
 
+func (s *kernelForwardSnapshot) iptablesAuxText(binary, table, chain string) string {
+	if s.iptablesAuxRule == nil {
+		s.iptablesAuxRule = map[string]string{}
+	}
+	key := binary + ":" + table + ":" + chain
+	if text, exists := s.iptablesAuxRule[key]; exists {
+		return text
+	}
+	raw, err := commandOutputWithTimeout(5*time.Second, binary, "-t", table, "-S", chain)
+	text := ""
+	if err == nil {
+		text = string(raw)
+	}
+	s.iptablesAuxRule[key] = text
+	return text
+}
+
+func iptablesTargetSupportPresent(text, proto, target, addrFlag, portFlag, jump string, targetPort, sourcePort int) bool {
+	for _, line := range strings.Split(text, "\n") {
+		fields := strings.Fields(line)
+		values := map[string]string{}
+		for i := 0; i+1 < len(fields); i++ {
+			if strings.HasPrefix(fields[i], "-") {
+				values[fields[i]] = fields[i+1]
+			}
+		}
+		if values["-p"] != proto || values["-j"] != jump || kernelCleanAddress(strings.Split(values[addrFlag], "/")[0]) != target || values[portFlag] != strconv.Itoa(targetPort) {
+			continue
+		}
+		if original := values["--ctorigdstport"]; original != "" && original != strconv.Itoa(sourcePort) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 func (s *kernelForwardSnapshot) iptablesForwardRulePresent(sourcePort int, targetIP string, targetPort int, protocol string) bool {
 	target := kernelCleanAddress(targetIP)
+	binary := iptablesAgentBinaryForTarget(target)
 	for _, proto := range runtimeProtocols(protocol) {
-		if !iptablesDnatLinePresent(s.iptablesNatPreroutingText(iptablesAgentBinaryForTarget(target)), proto, sourcePort, target, targetPort) {
+		if !iptablesDnatLinePresent(s.iptablesNatPreroutingText(binary), proto, sourcePort, target, targetPort) {
+			return false
+		}
+		if !iptablesTargetSupportPresent(s.iptablesAuxText(binary, "nat", "POSTROUTING"), proto, target, "-d", "--dport", "MASQUERADE", targetPort, sourcePort) {
+			return false
+		}
+		forward := s.iptablesAuxText(binary, "filter", "FORWARD")
+		if !iptablesTargetSupportPresent(forward, proto, target, "-d", "--dport", "ACCEPT", targetPort, sourcePort) || !iptablesTargetSupportPresent(forward, proto, target, "-s", "--sport", "ACCEPT", targetPort, sourcePort) {
 			return false
 		}
 	}
@@ -2376,6 +2422,7 @@ type action struct {
 	FXPEntryGroup             *fxpSpec            `json:"-"`
 	WireGuard                 *wireGuardSpec      `json:"wireGuard,omitempty"`
 	Failover                  *failoverSpec       `json:"failover,omitempty"`
+	ActionSucceeded           *bool               `json:"-"`
 	ReportStatus              *bool               `json:"reportStatus,omitempty"`
 	FailureMessage            string              `json:"failureMessage,omitempty"`
 	ForceRuntimeSync          bool                `json:"forceRuntimeSync,omitempty"`
@@ -5003,7 +5050,9 @@ func handleActionJobWithRuntimeSnapshot(cfg Config, a action, releaseRuntimeGate
 			if a.CaptureOutput {
 				var output string
 				ok, output = runShellBatchWithOutput(commands)
-				if strings.TrimSpace(output) != "" { actionMessage.set("%s", strings.TrimSpace(output)) }
+				if strings.TrimSpace(output) != "" {
+					actionMessage.set("%s", strings.TrimSpace(output))
+				}
 			} else {
 				ok = runRuntimeShellBatch(commands, "sync") && ok
 			}
@@ -5064,12 +5113,6 @@ func handleActionJobWithRuntimeSnapshot(cfg Config, a action, releaseRuntimeGate
 		// best-effort provisioning step returned non-zero. The unit's live
 		// state is authoritative: once ssserver is active, converge the action
 		// and let the panel render the real service state.
-		landingHealthyAfterApply := strings.HasPrefix(strings.TrimSpace(a.ForwardType), "landing-ss-service-") && a.LandingServiceID > 0 && strings.TrimSpace(a.Op) != "remove" && runtimeActionServicesHealthy(a)
-		if !ok && landingHealthyAfterApply {
-			logf("landing SS action had a non-critical command failure but service is active; reporting healthy service=%d", a.LandingServiceID)
-			ok = true
-			actionMessage.set("")
-		}
 		rememberRuntimeActionResult(a, ok)
 		invalidateLocalRuntimeReadinessCache()
 		if a.ReportStatus != nil && *a.ReportStatus {
@@ -5083,6 +5126,7 @@ func handleActionJobWithRuntimeSnapshot(cfg Config, a action, releaseRuntimeGate
 				}
 				actionMessage.set("%s", message)
 			}
+			a.ActionSucceeded = &ok
 			reportActionStatus(cfg, a, runtimeActionStatusRunning(a, ok), actionMessage.get())
 		}
 		return ok
@@ -5192,6 +5236,12 @@ func handleActionJobWithRuntimeSnapshot(cfg Config, a action, releaseRuntimeGate
 		removeState(a.SourcePort)
 	}
 	if skippedStaleRemove {
+		// The old rule was deliberately left untouched because a newer rule
+		// owns the same listener. Report the stale remove as successfully
+		// reconciled so the panel can retire its pending-delete record.
+		succeeded := true
+		a.ActionSucceeded = &succeeded
+		reportActionStatus(cfg, a, false, "stale remove skipped: listener reassigned to a newer rule")
 		requestLocalRuntimeStateUpload()
 		return ok
 	}
@@ -5200,6 +5250,10 @@ func handleActionJobWithRuntimeSnapshot(cfg Config, a action, releaseRuntimeGate
 		invalidateLocalRuntimeReadinessCache()
 		return ok
 	}
+	if !ok && strings.TrimSpace(actionMessage.get()) == "" {
+		actionMessage.set("action failed: %s", a.Op)
+	}
+	a.ActionSucceeded = &ok
 	running := ok && a.Op == "apply"
 	reportActionStatus(cfg, a, running, actionMessage.get())
 	invalidateLocalRuntimeReadinessCache()
@@ -5655,7 +5709,7 @@ func runtimeActionStatusRunning(a action, succeeded bool) bool {
 	// makes the panel show "error" while ssserver is listening and forwarding
 	// traffic.  For an apply action, the managed unit is the source of truth.
 	if strings.HasPrefix(strings.TrimSpace(a.ForwardType), "landing-ss-service-") && a.LandingServiceID > 0 && strings.TrimSpace(a.Op) != "remove" {
-		return runtimeActionServicesHealthy(a)
+		return succeeded && runtimeActionServicesHealthy(a)
 	}
 	return succeeded && strings.TrimSpace(a.Op) != "remove"
 }
@@ -8220,7 +8274,14 @@ func iptablesAgentTargetCleanupCmds(port string, targetIP string, targetPort int
 			{"mangle", fmt.Sprintf(`FORWARD -p %s -s %s --sport %s -j FWX_OUT_%s`, proto, target, targetPortText, port)},
 		}
 		for _, item := range rules {
-			commands = append(commands, iptablesAgentDelete(binary, item.table, item.rule))
+			cmd := iptablesAgentDelete(binary, item.table, item.rule)
+			if strings.HasPrefix(item.rule, "POSTROUTING ") && item.table == "nat" || strings.HasPrefix(item.rule, "FORWARD ") && item.table == "" {
+				scoped := strings.Replace(item.rule, " -j ", " -m conntrack --ctorigdstport "+port+" -j ", 1)
+				commands = append(commands, iptablesAgentDelete(binary, item.table, scoped))
+				remaining := fmt.Sprintf(`printf '%%s\n' "$remaining_rules" | awk -v p=%q -v t=%q '$0 ~ "-p " p " " {for(i=1;i<NF;i++) if($i=="--to-destination" && $(i+1)==t) found=1} END {exit !found}'`, proto, dnatTarget)
+				cmd = "remaining_rules=$(" + binary + " -t nat -S PREROUTING) || exit 1; if " + remaining + "; then :; else " + cmd + "; fi"
+			}
+			commands = append(commands, cmd)
 		}
 	}
 	return commands

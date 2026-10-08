@@ -19,6 +19,7 @@ import {
   type Iperf3Status,
 } from "../iperf3AgentTasks";
 import { requireHostAccess } from "./helpers";
+import { isRestrictedOutboundIp } from "../ssrf";
 
 const methodSchema = z.enum(["ping", "ping6", "traceroute", "traceroute6", "mtr", "mtr6", "tcp"]);
 
@@ -48,43 +49,6 @@ function normalizeTarget(target: string) {
   return value.replace(/^\[|\]$/g, "");
 }
 
-function isPrivateIpv4(ip: string) {
-  const parts = ip.split(".").map((part) => Number.parseInt(part, 10));
-  if (parts.length !== 4 || parts.some((part) => Number.isNaN(part) || part < 0 || part > 255)) return true;
-  const [a, b] = parts;
-  return (
-    a === 0 ||
-    a === 10 ||
-    a === 127 ||
-    (a === 100 && b >= 64 && b <= 127) ||
-    (a === 169 && b === 254) ||
-    (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168) ||
-    (a === 198 && (b === 18 || b === 19)) ||
-    a >= 224
-  );
-}
-
-function isPrivateIpv6(ip: string) {
-  const normalized = ip.toLowerCase();
-  return (
-    normalized === "::1" ||
-    normalized === "::" ||
-    normalized.startsWith("fc") ||
-    normalized.startsWith("fd") ||
-    normalized.startsWith("fe80:") ||
-    normalized.startsWith("fec0:") ||
-    normalized.startsWith("ff")
-  );
-}
-
-function isPrivateAddress(address: string) {
-  const family = net.isIP(address);
-  if (family === 4) return isPrivateIpv4(address);
-  if (family === 6) return isPrivateIpv6(address);
-  return true;
-}
-
 async function resolvePublicTarget(target: string, method: LookingGlassMethod) {
   const family = method.endsWith("6") ? 6 : method === "tcp" ? 0 : 4;
   const literalFamily = net.isIP(target);
@@ -101,7 +65,7 @@ async function resolvePublicTarget(target: string, method: LookingGlassMethod) {
   }
 
   if (resolved.length === 0) throw new Error("目标无法解析");
-  const invalid = resolved.find((entry) => isPrivateAddress(entry.address));
+  const invalid = resolved.find((entry) => isRestrictedOutboundIp(entry.address));
   if (invalid) throw new Error(`目标解析到内网或保留地址，已拒绝执行：${invalid.address}`);
 
   const preferred = resolved.find((entry) => family === 0 || entry.family === family) || resolved[0];

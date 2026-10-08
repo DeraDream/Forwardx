@@ -1473,6 +1473,7 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
         if (Number(rule.hostId || 0) !== Number(host.id)) return null;
         if (report.sourcePort && Number(report.sourcePort) !== Number(rule.sourcePort || 0)) return null;
         if (report.targetPort && Number(report.targetPort) !== Number(rule.targetPort || 0)) return null;
+        if (!sameProbeTarget(report.targetIp, rule.targetIp)) return null;
         if (!isRuleLatencyReportMethodCompatible(rule.protocol, report.method)) return null;
         if (report.topologyKey && report.topologyKey !== directRuleLatencyTopologyKey(rule, host.id)) return null;
         const isTimeout = !!report.isTimeout || baseLatency === null;

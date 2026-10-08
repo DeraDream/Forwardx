@@ -1,5 +1,5 @@
 import { lookup } from "dns/promises";
-import { isIP } from "net";
+import { BlockList, isIP } from "net";
 
 type SafeOutboundOptions = {
   allowPrivate?: boolean;
@@ -32,18 +32,25 @@ function isRestrictedIPv4(value: string, allowPrivate: boolean) {
     || (a === 192 && b === 168);
 }
 
-function isRestrictedIPv6(value: string, allowPrivate: boolean) {
-  const ip = value.toLowerCase();
-  if (ip === "::" || ip === "::1" || ip.startsWith("::ffff:")) return true;
-  if (ip.startsWith("fe8") || ip.startsWith("fe9") || ip.startsWith("fea") || ip.startsWith("feb") || ip.startsWith("ff")) return true;
-  if (ip.startsWith("2001:db8")) return true;
-  return !allowPrivate && (ip.startsWith("fc") || ip.startsWith("fd"));
-}
+// Numeric subnet checks handle every equivalent IPv6 representation.
+const restrictedIpv6 = new BlockList();
+restrictedIpv6.addAddress("::", "ipv6");
+restrictedIpv6.addAddress("::1", "ipv6");
+restrictedIpv6.addSubnet("::ffff:0:0", 96, "ipv6");
+restrictedIpv6.addSubnet("fe80::", 10, "ipv6");
+restrictedIpv6.addSubnet("fec0::", 10, "ipv6");
+restrictedIpv6.addSubnet("ff00::", 8, "ipv6");
+restrictedIpv6.addSubnet("2001:db8::", 32, "ipv6");
+const privateIpv6 = new BlockList();
+privateIpv6.addSubnet("fc00::", 7, "ipv6");
 
-function isRestrictedIp(value: string, allowPrivate: boolean) {
+export function isRestrictedOutboundIp(value: string, allowPrivate = false) {
   const version = isIP(value);
   if (version === 4) return isRestrictedIPv4(value, allowPrivate);
-  if (version === 6) return isRestrictedIPv6(value, allowPrivate);
+  if (version === 6) {
+    return restrictedIpv6.check(value, "ipv6")
+      || (!allowPrivate && privateIpv6.check(value, "ipv6"));
+  }
   return true;
 }
 
@@ -55,7 +62,7 @@ export async function assertSafeOutboundHost(rawHost: string, options: SafeOutbo
   }
   const allowPrivate = options.allowPrivate === true;
   if (isIP(host)) {
-    if (isRestrictedIp(host, allowPrivate)) throw blockedHostError(purpose, host);
+    if (isRestrictedOutboundIp(host, allowPrivate)) throw blockedHostError(purpose, host);
     return;
   }
   let records: Array<{ address: string }>;
@@ -64,7 +71,7 @@ export async function assertSafeOutboundHost(rawHost: string, options: SafeOutbo
   } catch {
     throw new Error(`${purpose} 无法解析目标地址 ${host}`);
   }
-  if (records.length === 0 || records.some((record) => isRestrictedIp(record.address, allowPrivate))) {
+  if (records.length === 0 || records.some((record) => isRestrictedOutboundIp(record.address, allowPrivate))) {
     throw blockedHostError(purpose, host);
   }
 }
