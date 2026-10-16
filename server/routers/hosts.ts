@@ -32,6 +32,50 @@ let lastOrphanedAgentHostCleanupAt = 0;
 let orphanedAgentHostCleanupRunning = false;
 const hostProtocolPolicyFields = ["blockHttp", "blockSocks", "blockTls"] as const;
 
+type ForcedHostDeleteJob = { id: string; hostId: number; targetName: string; createdAt: number; targetDeadlineAt: number; targetState: string; status: "cleaning" | "complete"; affectedHosts: Array<{ hostId: number; name: string; online: boolean; resources: string[]; ruleIds: number[]; state: string }> };
+const forcedHostDeleteJobs = new Map<string, ForcedHostDeleteJob>();
+
+async function refreshForcedHostDeleteJob(job: ForcedHostDeleteJob) {
+  const timedOut = Date.now() >= job.targetDeadlineAt;
+  for (const item of job.affectedHosts) {
+    if (item.ruleIds.length === 0 || !item.state.startsWith("清理中")) continue;
+    const rules = await Promise.all(item.ruleIds.map((id) => db.getForwardRuleById(id)));
+    // `deleteForwardRule` optimistically marks a rule stopped before the
+    // remote cleanup runs, so `isRunning=false` is not an acknowledgement.
+    // Only final removal by the Agent status path is a confirmed cleanup.
+    if (rules.every((rule: any) => !rule)) item.state = "清理成功";
+    else if (timedOut) item.state = "清理失败：等待 Agent 回执超时";
+  }
+  if (timedOut) { job.targetState = "清理失败：目标 VPS 20 秒内未回执"; job.status = "complete"; }
+}
+
+async function forcedHostDeleteImpact(hostId: number) {
+  const [host, rules, groups, tunnels, services] = await Promise.all([
+    db.getHostById(hostId), db.getForwardRules(), db.getForwardGroups(undefined, { includeRuntime: true }), db.getTunnelsByHost(hostId), db.getLandingServicesForHost(hostId, true, true),
+  ]);
+  if (!host) throw new Error("主机不存在");
+  const ownRules = (rules as any[]).filter((rule) => Number(rule.hostId) === hostId);
+  const memberGroups = (groups as any[]).filter((group) => (group.members || []).some((member: any) => member.memberType === "host" && Number(member.hostId) === hostId));
+  const landingServiceIds = new Set((services as any[]).map((service: any) => Number(service.id)));
+  const landingReferences = (rules as any[]).filter((rule) => landingServiceIds.has(Number(rule.targetLandingServiceId || 0)));
+  const affected = new Map<number, { hostId: number; name: string; online: boolean; resources: string[] }>();
+  const add = async (id: number, resource: string) => {
+    if (!id || id === hostId) return;
+    const related = await db.getHostById(id) as any;
+    if (!related) return;
+    const entry = affected.get(id) || { hostId: id, name: String(related.name || `主机 #${id}`), online: !!related.isOnline, resources: [] };
+    entry.resources.push(resource); affected.set(id, entry);
+  };
+  for (const group of memberGroups) for (const member of group.members || []) if (member.memberType === "host") await add(Number(member.hostId), `转发组：${group.name}`);
+  for (const rule of landingReferences) await add(Number(rule.hostId), `引用落地 SS 的规则：${rule.name || `规则 #${rule.id}`}`);
+  for (const tunnel of tunnels as any[]) {
+    await add(Number(tunnel.entryHostId), `隧道：${tunnel.name}`); await add(Number(tunnel.exitHostId), `隧道：${tunnel.name}`);
+    for (const hop of await db.getTunnelHops(Number(tunnel.id))) await add(Number((hop as any).hostId), `隧道跳点：${tunnel.name}`);
+    for (const exit of await db.getTunnelExitNodes(Number(tunnel.id))) await add(Number((exit as any).hostId), `隧道出口：${tunnel.name}`);
+  }
+  return { host: { id: Number((host as any).id), name: String((host as any).name), online: !!(host as any).isOnline }, rules: ownRules.map((rule: any) => ({ id: Number(rule.id), name: String(rule.name || `规则 #${rule.id}`), port: Number(rule.sourcePort) })), landingReferences: landingReferences.map((rule: any) => ({ id: Number(rule.id), name: String(rule.name || `规则 #${rule.id}`), hostId: Number(rule.hostId), port: Number(rule.sourcePort) })), groups: memberGroups.map((group: any) => ({ id: Number(group.id), name: String(group.name), mode: String(group.groupMode) })), tunnels: (tunnels as any[]).map((tunnel) => ({ id: Number(tunnel.id), name: String(tunnel.name) })), landingServices: (services as any[]).map((service) => ({ id: Number(service.id), name: String(service.name), port: Number(service.port) })), affectedHosts: Array.from(affected.values()) };
+}
+
 async function refreshHostPolicyRuntime(hostId: number, reason: string) {
   const id = Number(hostId);
   if (!Number.isFinite(id) || id <= 0) return;
@@ -1284,6 +1328,59 @@ export const hostsRouter = router({
         }
         return { success: true };
       }),
+    deleteImpact: protectedProcedure
+      .input(z.object({ id: z.number().int().positive() }))
+      .query(async ({ input, ctx }) => {
+        const host = await db.getHostById(input.id) as any;
+        if (!host) throw new Error("主机不存在");
+        if (ctx.user.role !== "admin" && Number(host.userId) !== Number(ctx.user.id)) throw new Error("无权操作此主机");
+        return forcedHostDeleteImpact(input.id);
+      }),
+    forceDelete: protectedProcedure
+      .input(z.object({ id: z.number().int().positive(), acknowledgeOfflineRisk: z.literal(true) }))
+      .mutation(async ({ input, ctx }) => {
+        const host = await db.getHostById(input.id) as any;
+        if (!host) throw new Error("主机不存在");
+        if (ctx.user.role !== "admin" && Number(host.userId) !== Number(ctx.user.id)) throw new Error("无权操作此主机");
+        const impact = await forcedHostDeleteImpact(input.id);
+        const job: ForcedHostDeleteJob = { id: nanoid(), hostId: input.id, targetName: impact.host.name, createdAt: Date.now(), targetDeadlineAt: Date.now() + 20_000, targetState: "清理中", status: "cleaning", affectedHosts: impact.affectedHosts.map((item) => ({ ...item, ruleIds: impact.landingReferences.filter((rule: any) => Number(rule.hostId) === item.hostId).map((rule: any) => Number(rule.id)), state: "清理中" })) };
+        forcedHostDeleteJobs.set(job.id, job);
+        // Remove desired-state references first. Every remaining affected Agent
+        // is then refreshed so stale listeners and chain rules are reconciled.
+        for (const rule of [...impact.rules, ...impact.landingReferences]) await db.deleteForwardRule(rule.id);
+        for (const group of (await db.getForwardGroups(undefined, { includeRuntime: true }) as any[])) {
+          const members = (group.members || []).filter((member: any) => !(member.memberType === "host" && Number(member.hostId) === input.id));
+          if (members.length === (group.members || []).length) continue;
+          // A chain needs at least two hops.  Removing one node from a
+          // two-node chain therefore invalidates the whole group; retaining
+          // it would leave an unusable configuration and abort host deletion.
+          const minimumMembers = String(group.groupMode || "") === "chain" ? 2 : 1;
+          if (members.length >= minimumMembers) await db.replaceForwardGroupMembers(Number(group.id), members.map((member: any) => ({ memberType: member.memberType, hostId: member.hostId, tunnelId: member.tunnelId, connectHost: member.connectHost, priority: member.priority, isEnabled: member.isEnabled })) as any, { deferRefresh: true });
+          else await db.deleteForwardGroup(Number(group.id));
+        }
+        for (const tunnel of await db.getTunnelsByHost(input.id) as any[]) {
+          await pushTunnelEndpointRefresh(tunnel, "forced-host-delete", { urgent: true });
+          await db.deleteTunnel(Number(tunnel.id));
+        }
+        for (const service of await db.getLandingServicesForHost(input.id, true, true) as any[]) await db.deleteLandingService(Number(service.id));
+        await db.deleteLandingHost(input.id);
+        pushAgentRefresh(input.id, "forced-host-delete", { urgent: true });
+        for (const item of job.affectedHosts) {
+          const delivered = pushAgentRefresh(item.hostId, "forced-host-delete", { urgent: true });
+          item.state = delivered ? "清理中" : "清理失败：Agent 未连接";
+        }
+        await db.deleteHostPermissions(input.id);
+        await db.deleteHost(input.id);
+        // The removed host may never acknowledge the final desired-state push.
+        // Keep this operation visible for the bounded 20-second grace window,
+        // then finish without making the panel wait indefinitely.
+        const timer = setInterval(() => { const current = forcedHostDeleteJobs.get(job.id); if (!current) return clearInterval(timer); void refreshForcedHostDeleteJob(current).then(() => { if (current.status === "complete") clearInterval(timer); }); }, 1000);
+        timer.unref?.();
+        return { jobId: job.id };
+      }),
+    forceDeleteStatus: protectedProcedure
+      .input(z.object({ jobId: z.string().min(1) }))
+      .query(async ({ input }) => { const job = forcedHostDeleteJobs.get(input.jobId); if (job) await refreshForcedHostDeleteJob(job); return job || null; }),
     delete: protectedProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ input, ctx }) => {

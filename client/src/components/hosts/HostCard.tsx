@@ -1,7 +1,14 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { useConfirmDialog } from "@/components/ui/confirm-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -10,7 +17,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Progress } from "@/components/ui/progress";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { trpc } from "@/lib/trpc";
 import {
   Activity,
@@ -30,7 +42,7 @@ import {
   Server,
   Trash2,
 } from "lucide-react";
-import { useEffect, useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   formatBytes,
   formatUptime,
@@ -63,18 +75,20 @@ const dayMs = 24 * 60 * 60 * 1000;
 
 function parseHostDateTime(value: unknown) {
   if (!value) return null;
-  const ms = value instanceof Date
-    ? value.getTime()
-    : typeof value === "number"
-      ? value
-      : Date.parse(String(value));
+  const ms =
+    value instanceof Date
+      ? value.getTime()
+      : typeof value === "number"
+        ? value
+        : Date.parse(String(value));
   return Number.isFinite(ms) ? ms : null;
 }
 
 function formatRemainingTime(purchasedAt: unknown, stoppedAt: unknown) {
   const purchasedMs = parseHostDateTime(purchasedAt);
   const stoppedMs = parseHostDateTime(stoppedAt);
-  if (purchasedMs === null || stoppedMs === null || stoppedMs <= purchasedMs) return null;
+  if (purchasedMs === null || stoppedMs === null || stoppedMs <= purchasedMs)
+    return null;
   const remainingMs = stoppedMs - Date.now();
   if (remainingMs <= 0) return "已到期";
   if (remainingMs < dayMs) return "不足1天";
@@ -82,10 +96,34 @@ function formatRemainingTime(purchasedAt: unknown, stoppedAt: unknown) {
 }
 
 function compactHostOsInfo(value: unknown) {
-  return String(value || "")
-    .replace(/\s*\([^)]*\)\s*/g, " ")
-    .replace(/\s+/g, " ")
-    .trim() || "-";
+  return (
+    String(value || "")
+      .replace(/\s*\([^)]*\)\s*/g, " ")
+      .replace(/\s+/g, " ")
+      .trim() || "-"
+  );
+}
+
+function CleanupStatus({ state }: { state: string }) {
+  const text = String(state || "清理中");
+  if (text.startsWith("清理成功"))
+    return (
+      <span className="inline-flex items-center gap-1 text-xs text-emerald-600">
+        {text}
+      </span>
+    );
+  if (text.startsWith("清理失败"))
+    return (
+      <span className="inline-flex items-center gap-1 text-xs text-destructive">
+        {text}
+      </span>
+    );
+  return (
+    <span className="inline-flex items-center gap-1 text-xs text-amber-600">
+      清理中
+      <Loader2 className="h-3 w-3 animate-spin" />
+    </span>
+  );
 }
 type HostCardProps = {
   host: any;
@@ -109,7 +147,15 @@ type HostCardProps = {
 
 type HostActionButtonsProps = Pick<
   HostCardProps,
-  "host" | "onEdit" | "onDelete" | "onUpgrade" | "onResetTraffic" | "onCorrectTraffic" | "onViewProbeLatency" | "resetTrafficPending" | "canUpgrade"
+  | "host"
+  | "onEdit"
+  | "onDelete"
+  | "onUpgrade"
+  | "onResetTraffic"
+  | "onCorrectTraffic"
+  | "onViewProbeLatency"
+  | "resetTrafficPending"
+  | "canUpgrade"
   | "onReinstall"
 > & {
   className?: string;
@@ -130,7 +176,18 @@ export function HostActionButtons({
   className = "flex shrink-0 items-center justify-end gap-1",
   buttonClassName = "h-7 w-7",
 }: HostActionButtonsProps) {
-  const confirmDialog = useConfirmDialog();
+  const utils = trpc.useUtils();
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [impact, setImpact] = useState<any>(null);
+  const [acknowledged, setAcknowledged] = useState(false);
+  const [jobId, setJobId] = useState("");
+  const forceDelete = trpc.hosts.forceDelete.useMutation({
+    onSuccess: (data) => setJobId(data.jobId),
+  });
+  const job = trpc.hosts.forceDeleteStatus.useQuery(
+    { jobId },
+    { enabled: !!jobId, refetchInterval: jobId ? 1000 : false },
+  );
   const isOnline = !!host.isOnline;
   const agentUpgradeTimedOut = isAgentUpgradeTimedOut(host);
   const upgradeTitle = !isOnline
@@ -140,89 +197,231 @@ export function HostActionButtons({
       : "升级 Agent";
 
   const confirmDelete = async () => {
-    if (await confirmDialog({
-      title: "删除主机",
-      description: "确定要删除此主机吗？删除后相关状态和配置会同步移除。",
-      confirmText: "删除",
-      tone: "destructive",
-    })) onDelete(host.id);
+    setAcknowledged(false);
+    setJobId("");
+    setImpact(null);
+    setDeleteOpen(true);
+    try {
+      setImpact(await utils.hosts.deleteImpact.fetch({ id: host.id }));
+    } catch {
+      setDeleteOpen(false);
+    }
   };
 
   return (
-    <div className={className}>
-      {onViewProbeLatency && (
-        <Button
-          variant="ghost"
-          size="icon"
-          className={buttonClassName}
-          title="查看服务延迟图表"
-          aria-label="查看服务延迟图表"
-          onClick={() => onViewProbeLatency(host)}
-        >
-          <Activity className="h-3.5 w-3.5" />
-        </Button>
-      )}
-      <Button
-        variant="ghost"
-        size="icon"
-        className={buttonClassName}
-        title="编辑主机"
-        aria-label="编辑主机"
-        onClick={() => onEdit(host)}
-      >
-        <Pencil className="h-3.5 w-3.5" />
-      </Button>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
+    <>
+      <div className={className}>
+        {onViewProbeLatency && (
           <Button
             variant="ghost"
             size="icon"
             className={buttonClassName}
-            title="更多操作"
-            aria-label="更多操作"
+            title="查看服务延迟图表"
+            aria-label="查看服务延迟图表"
+            onClick={() => onViewProbeLatency(host)}
           >
-            <MoreHorizontal className="h-4 w-4" />
+            <Activity className="h-3.5 w-3.5" />
           </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-40 min-w-40">
-          {onResetTraffic && (
-            <DropdownMenuItem
-              disabled={resetTrafficPending}
-              onSelect={() => onResetTraffic(host)}
+        )}
+        <Button
+          variant="ghost"
+          size="icon"
+          className={buttonClassName}
+          title="编辑主机"
+          aria-label="编辑主机"
+          onClick={() => onEdit(host)}
+        >
+          <Pencil className="h-3.5 w-3.5" />
+        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className={buttonClassName}
+              title="更多操作"
+              aria-label="更多操作"
             >
-              {resetTrafficPending ? <Loader2 className="animate-spin" /> : <RotateCcw />}
-              <span>{resetTrafficPending ? "正在重置流量" : "重置流量统计"}</span>
+              <MoreHorizontal className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-40 min-w-40">
+            {onResetTraffic && (
+              <DropdownMenuItem
+                disabled={resetTrafficPending}
+                onSelect={() => onResetTraffic(host)}
+              >
+                {resetTrafficPending ? (
+                  <Loader2 className="animate-spin" />
+                ) : (
+                  <RotateCcw />
+                )}
+                <span>
+                  {resetTrafficPending ? "正在重置流量" : "重置流量统计"}
+                </span>
+              </DropdownMenuItem>
+            )}
+            {onCorrectTraffic && (
+              <DropdownMenuItem onSelect={() => onCorrectTraffic(host)}>
+                <Gauge />
+                <span>用量修正</span>
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuItem
+              disabled={!canUpgrade || !isOnline}
+              title={upgradeTitle}
+              onSelect={() => onUpgrade(host)}
+            >
+              <Download />
+              <span>升级 Agent</span>
             </DropdownMenuItem>
-          )}
-          {onCorrectTraffic && (
-            <DropdownMenuItem onSelect={() => onCorrectTraffic(host)}>
-              <Gauge />
-              <span>用量修正</span>
+            <DropdownMenuItem onSelect={() => onReinstall(host)}>
+              <Download />
+              <span>重新安装 Agent</span>
             </DropdownMenuItem>
-          )}
-          <DropdownMenuItem
-            disabled={!canUpgrade || !isOnline}
-            title={upgradeTitle}
-            onSelect={() => onUpgrade(host)}
-          >
-            <Download />
-            <span>升级 Agent</span>
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => onReinstall(host)}>
-            <Download />
-            <span>重新安装 Agent</span>
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem
-            variant="destructive"
-            onSelect={() => void confirmDelete()}
-          >
-            <Trash2 />
-            <span>删除主机</span>
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </div>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              variant="destructive"
+              onSelect={() => void confirmDelete()}
+            >
+              <Trash2 />
+              <span>删除主机</span>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>强制删除主机：{host.name}</DialogTitle>
+            <DialogDescription>
+              将清理所有引用该主机的配置，并通知受影响 VPS 收敛端口与转发规则。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[55vh] space-y-3 overflow-y-auto text-sm">
+            {!impact ? (
+              <p>正在检查关联资源…</p>
+            ) : (
+              <>
+                <div className="rounded-md border p-3">
+                  本机规则 {impact.rules.length} 条 · 引用其落地 SS 的规则{" "}
+                  {impact.landingReferences.length} 条 · 转发组{" "}
+                  {impact.groups.length} 个 · 隧道 {impact.tunnels.length} 条 ·
+                  落地 SS {impact.landingServices.length} 个
+                </div>
+                {jobId && (
+                  <div className="rounded border p-2">
+                    <div className="font-medium">
+                      目标 VPS：{job.data?.targetName || host.name}
+                    </div>
+                    <CleanupStatus state={job.data?.targetState || "清理中"} />
+                  </div>
+                )}
+                {impact.rules.length > 0 && (
+                  <div>
+                    <b>本机规则</b>
+                    <p className="text-muted-foreground">
+                      {impact.rules
+                        .map((item: any) => `${item.name} (${item.port})`)
+                        .join("、")}
+                    </p>
+                  </div>
+                )}
+                {impact.landingReferences.length > 0 && (
+                  <div>
+                    <b>引用该机落地 SS 的规则</b>
+                    <p className="text-muted-foreground">
+                      {impact.landingReferences
+                        .map((item: any) => `${item.name} (${item.port})`)
+                        .join("、")}
+                    </p>
+                  </div>
+                )}
+                {impact.groups.length > 0 && (
+                  <div>
+                    <b>转发组 / 转发链</b>
+                    <p className="text-muted-foreground">
+                      {impact.groups
+                        .map((item: any) => `${item.name} · ${item.mode}`)
+                        .join("、")}
+                    </p>
+                  </div>
+                )}
+                {impact.tunnels.length > 0 && (
+                  <div>
+                    <b>隧道</b>
+                    <p className="text-muted-foreground">
+                      {impact.tunnels.map((item: any) => item.name).join("、")}
+                    </p>
+                  </div>
+                )}
+                <div>
+                  <b>需要清理的其他 VPS</b>
+                  {impact.affectedHosts.length === 0 ? (
+                    <p className="text-muted-foreground">无</p>
+                  ) : (
+                    impact.affectedHosts.map((item: any) => (
+                      <div
+                        key={item.hostId}
+                        className="mt-2 rounded border p-2"
+                      >
+                        <b>{item.name}</b> · {item.online ? "在线" : "离线"}
+                        <p className="text-xs text-muted-foreground">
+                          {item.resources.join("、")}
+                        </p>
+                        {job.data && (
+                          <CleanupStatus
+                            state={
+                              job.data.affectedHosts.find(
+                                (row: any) => row.hostId === item.hostId,
+                              )?.state || "清理中"
+                            }
+                          />
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="mt-0.5 h-4 w-4"
+              checked={acknowledged}
+              onChange={(event) => setAcknowledged(event.target.checked)}
+            />
+            <span>
+              该主机可能已离线；我理解其远端 Agent、服务和防火墙规则可能残留。
+            </span>
+          </label>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteOpen(false)}>
+              取消
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={
+                !impact || !acknowledged || forceDelete.isPending || !!jobId
+              }
+              onClick={() =>
+                forceDelete.mutate({
+                  id: host.id,
+                  acknowledgeOfflineRisk: true,
+                })
+              }
+            >
+              {forceDelete.isPending
+                ? "正在强制删除…"
+                : jobId
+                  ? "清理任务已下发"
+                  : "强制删除"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
@@ -248,52 +447,83 @@ export default function HostCard({
   const hasExternalMetrics = externalMetrics !== undefined;
   const { data: queriedMetrics } = trpc.hosts.metrics.useQuery(
     { hostId: host.id, limit: 2, live: !!refreshInterval },
-    { enabled: !hasExternalMetrics, refetchInterval: hasExternalMetrics ? false : refreshInterval }
+    {
+      enabled: !hasExternalMetrics,
+      refetchInterval: hasExternalMetrics ? false : refreshInterval,
+    },
   );
   const metrics = hasExternalMetrics ? externalMetrics : queriedMetrics;
-  const cachedMetrics = useMemo(() => readCachedHostMetrics(host.id), [host.id]);
-  const displayMetrics = metrics === undefined || metrics === null || metrics.length === 0 ? cachedMetrics : metrics;
+  const cachedMetrics = useMemo(
+    () => readCachedHostMetrics(host.id),
+    [host.id],
+  );
+  const displayMetrics =
+    metrics === undefined || metrics === null || metrics.length === 0
+      ? cachedMetrics
+      : metrics;
   const latestMetric = displayMetrics?.[0];
   const previousMetric = displayMetrics?.[1];
-  const totalNetworkIn = traffic?.bytesIn == null ? null : Number(traffic.bytesIn);
-  const totalNetworkOut = traffic?.bytesOut == null ? null : Number(traffic.bytesOut);
+  const totalNetworkIn =
+    traffic?.bytesIn == null ? null : Number(traffic.bytesIn);
+  const totalNetworkOut =
+    traffic?.bytesOut == null ? null : Number(traffic.bytesOut);
   const trafficLimit = Math.max(0, Number(host.trafficLimit || 0));
-  const trafficMeasureMode = host.trafficMeasureMode === "outbound" || host.trafficMeasureMode === "max" ? host.trafficMeasureMode : "both";
-  const trafficMeasureModeLabel = trafficMeasureMode === "outbound"
-    ? "仅出向"
-    : trafficMeasureMode === "max"
-      ? "取最大值"
-      : "双向";
-  const trafficUsedBytes = trafficMeasureMode === "outbound"
-    ? Math.max(0, totalNetworkOut ?? 0)
-    : trafficMeasureMode === "max"
-      ? Math.max(0, totalNetworkIn ?? 0, totalNetworkOut ?? 0)
-      : Math.max(0, (totalNetworkIn ?? 0) + (totalNetworkOut ?? 0));
-  const trafficPercent = trafficLimit > 0 ? Math.round((trafficUsedBytes / trafficLimit) * 100) : null;
-  const trafficProgress = trafficPercent === null ? 0 : Math.min(100, Math.max(0, trafficPercent));
-  const trafficUsageLabel = trafficPercent === null
-    ? `${formatBytes(trafficUsedBytes)} / ♾️`
-    : `${formatBytes(trafficUsedBytes)} / ${formatBytes(trafficLimit)} (${trafficPercent}%)`;
+  const trafficMeasureMode =
+    host.trafficMeasureMode === "outbound" || host.trafficMeasureMode === "max"
+      ? host.trafficMeasureMode
+      : "both";
+  const trafficMeasureModeLabel =
+    trafficMeasureMode === "outbound"
+      ? "仅出向"
+      : trafficMeasureMode === "max"
+        ? "取最大值"
+        : "双向";
+  const trafficUsedBytes =
+    trafficMeasureMode === "outbound"
+      ? Math.max(0, totalNetworkOut ?? 0)
+      : trafficMeasureMode === "max"
+        ? Math.max(0, totalNetworkIn ?? 0, totalNetworkOut ?? 0)
+        : Math.max(0, (totalNetworkIn ?? 0) + (totalNetworkOut ?? 0));
+  const trafficPercent =
+    trafficLimit > 0
+      ? Math.round((trafficUsedBytes / trafficLimit) * 100)
+      : null;
+  const trafficProgress =
+    trafficPercent === null ? 0 : Math.min(100, Math.max(0, trafficPercent));
+  const trafficUsageLabel =
+    trafficPercent === null
+      ? `${formatBytes(trafficUsedBytes)} / ♾️`
+      : `${formatBytes(trafficUsedBytes)} / ${formatBytes(trafficLimit)} (${trafficPercent}%)`;
   const trafficUsageTooltip = [
     `流量使用（${trafficMeasureModeLabel}）`,
     `入站 ${totalNetworkIn === null ? "--" : formatBytes(totalNetworkIn)} / 出站 ${totalNetworkOut === null ? "--" : formatBytes(totalNetworkOut)}`,
     trafficUsageLabel,
   ].join("\n");
-  const memoryUsed = latestMetric?.memoryUsed == null ? null : Number(latestMetric.memoryUsed);
-  const memoryTotal = host.memoryTotal == null ? null : Number(host.memoryTotal);
-  const swapUsed = latestMetric?.swapUsed == null ? null : Number(latestMetric.swapUsed);
-  const swapTotal = latestMetric?.swapTotal == null ? null : Number(latestMetric.swapTotal);
-  const diskUsed = latestMetric?.diskUsed == null ? null : Number(latestMetric.diskUsed);
-  const diskTotal = latestMetric?.diskTotal == null ? null : Number(latestMetric.diskTotal);
+  const memoryUsed =
+    latestMetric?.memoryUsed == null ? null : Number(latestMetric.memoryUsed);
+  const memoryTotal =
+    host.memoryTotal == null ? null : Number(host.memoryTotal);
+  const swapUsed =
+    latestMetric?.swapUsed == null ? null : Number(latestMetric.swapUsed);
+  const swapTotal =
+    latestMetric?.swapTotal == null ? null : Number(latestMetric.swapTotal);
+  const diskUsed =
+    latestMetric?.diskUsed == null ? null : Number(latestMetric.diskUsed);
+  const diskTotal =
+    latestMetric?.diskTotal == null ? null : Number(latestMetric.diskTotal);
   const cpuUsage = Number(latestMetric?.cpuUsage ?? 0);
   const memoryUsage = Number(latestMetric?.memoryUsage ?? 0);
-  const swapUsage = latestMetric?.swapUsage == null
-    ? swapUsed !== null && swapTotal
-      ? Math.round((swapUsed / swapTotal) * 100)
-      : 0
-    : Number(latestMetric.swapUsage);
+  const swapUsage =
+    latestMetric?.swapUsage == null
+      ? swapUsed !== null && swapTotal
+        ? Math.round((swapUsed / swapTotal) * 100)
+        : 0
+      : Number(latestMetric.swapUsage);
   const diskUsage = Number(latestMetric?.diskUsage ?? 0);
-  const hasSwapReport = latestMetric?.swapUsed != null || latestMetric?.swapTotal != null || latestMetric?.swapUsage != null;
+  const hasSwapReport =
+    latestMetric?.swapUsed != null ||
+    latestMetric?.swapTotal != null ||
+    latestMetric?.swapUsage != null;
   const memoryTooltip = [
     "内存使用详情",
     memoryUsed !== null && memoryTotal
@@ -304,24 +534,46 @@ export default function HostCard({
       : "Swap 未上报",
   ].join("\n");
   const networkSpeed = useMemo(() => {
-    if (!latestMetric) return { in: null as number | null, out: null as number | null };
-    if (latestMetric.networkSpeedIn != null || latestMetric.networkSpeedOut != null) {
+    if (!latestMetric)
+      return { in: null as number | null, out: null as number | null };
+    if (
+      latestMetric.networkSpeedIn != null ||
+      latestMetric.networkSpeedOut != null
+    ) {
       return {
-        in: latestMetric.networkSpeedIn == null ? null : Number(latestMetric.networkSpeedIn),
-        out: latestMetric.networkSpeedOut == null ? null : Number(latestMetric.networkSpeedOut),
+        in:
+          latestMetric.networkSpeedIn == null
+            ? null
+            : Number(latestMetric.networkSpeedIn),
+        out:
+          latestMetric.networkSpeedOut == null
+            ? null
+            : Number(latestMetric.networkSpeedOut),
       };
     }
-    if (!previousMetric) return { in: null as number | null, out: null as number | null };
+    if (!previousMetric)
+      return { in: null as number | null, out: null as number | null };
     const latestAt = new Date(latestMetric.recordedAt).getTime();
     const previousAt = new Date(previousMetric.recordedAt).getTime();
     const seconds = Math.max(1, (latestAt - previousAt) / 1000);
-    const inDelta = Math.max(0, Number(latestMetric.networkIn || 0) - Number(previousMetric.networkIn || 0));
-    const outDelta = Math.max(0, Number(latestMetric.networkOut || 0) - Number(previousMetric.networkOut || 0));
+    const inDelta = Math.max(
+      0,
+      Number(latestMetric.networkIn || 0) -
+        Number(previousMetric.networkIn || 0),
+    );
+    const outDelta = Math.max(
+      0,
+      Number(latestMetric.networkOut || 0) -
+        Number(previousMetric.networkOut || 0),
+    );
     return { in: inDelta / seconds, out: outDelta / seconds };
   }, [latestMetric, previousMetric]);
   const systemNetworkIn = metricBytesOrNull(latestMetric?.networkIn);
   const systemNetworkOut = metricBytesOrNull(latestMetric?.networkOut);
-  const systemNetworkTotal = systemNetworkIn === null && systemNetworkOut === null ? null : (systemNetworkIn ?? 0) + (systemNetworkOut ?? 0);
+  const systemNetworkTotal =
+    systemNetworkIn === null && systemNetworkOut === null
+      ? null
+      : (systemNetworkIn ?? 0) + (systemNetworkOut ?? 0);
   const currentTrafficInLabel = formatNetworkSpeed(networkSpeed.in);
   const currentTrafficOutLabel = formatNetworkSpeed(networkSpeed.out);
   const systemTrafficInLabel = formatOptionalBytes(systemNetworkIn);
@@ -342,7 +594,12 @@ export default function HostCard({
       <span className="inline-flex shrink-0 items-center text-muted-foreground">
         <Icon className="h-3 w-3 shrink-0" />
       </span>
-      <span className="min-w-0 truncate text-right font-medium tabular-nums" title={value}>{value}</span>
+      <span
+        className="min-w-0 truncate text-right font-medium tabular-nums"
+        title={value}
+      >
+        {value}
+      </span>
     </div>
   );
   const renderTrafficColumn = ({
@@ -372,27 +629,47 @@ export default function HostCard({
   const renderTrafficSplitBox = () => (
     <div className={`rounded-md border px-2.5 py-2 ${trafficPanelClass}`}>
       <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)] divide-x divide-border/40">
-        {renderTrafficColumn({ label: "当前", inValue: currentTrafficInLabel, outValue: currentTrafficOutLabel, title: currentTrafficTitle, className: "pr-2" })}
-        {renderTrafficColumn({ label: "累计", inValue: systemTrafficInLabel, outValue: systemTrafficOutLabel, title: systemTrafficTitle, className: "pl-2" })}
+        {renderTrafficColumn({
+          label: "当前",
+          inValue: currentTrafficInLabel,
+          outValue: currentTrafficOutLabel,
+          title: currentTrafficTitle,
+          className: "pr-2",
+        })}
+        {renderTrafficColumn({
+          label: "累计",
+          inValue: systemTrafficInLabel,
+          outValue: systemTrafficOutLabel,
+          title: systemTrafficTitle,
+          className: "pl-2",
+        })}
       </div>
     </div>
   );
-  const remainingTimeLabel = formatRemainingTime(host.purchasedAt, host.stoppedAt);
+  const remainingTimeLabel = formatRemainingTime(
+    host.purchasedAt,
+    host.stoppedAt,
+  );
   const hostName = String(host.name || "-").trim() || "-";
   const osInfoText = compactHostOsInfo(host.osInfo);
-  const remainingTimeClass = remainingTimeLabel === "已到期"
-    ? "border-destructive/30 bg-destructive/10 text-destructive"
-    : remainingTimeLabel === "不足1天"
-      ? "border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400"
-      : "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400";
-  const agentNeedsUpdate = isAgentVersionBehind(host.agentVersion, latestAgentVersion);
+  const remainingTimeClass =
+    remainingTimeLabel === "已到期"
+      ? "border-destructive/30 bg-destructive/10 text-destructive"
+      : remainingTimeLabel === "不足1天"
+        ? "border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400"
+        : "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400";
+  const agentNeedsUpdate = isAgentVersionBehind(
+    host.agentVersion,
+    latestAgentVersion,
+  );
   const agentUpgradeTimedOut = isAgentUpgradeTimedOut(host);
   const isOnline = !!host.isOnline;
-  const trafficUsageProgressClass = trafficLimit > 0
-    ? metricUsageProgressClass(trafficProgress, isOnline)
-    : isOnline
-      ? "h-1.5 bg-muted [&>div]:bg-muted-foreground/30"
-      : "h-1.5 bg-muted [&>div]:bg-muted-foreground/20";
+  const trafficUsageProgressClass =
+    trafficLimit > 0
+      ? metricUsageProgressClass(trafficProgress, isOnline)
+      : isOnline
+        ? "h-1.5 bg-muted [&>div]:bg-muted-foreground/30"
+        : "h-1.5 bg-muted [&>div]:bg-muted-foreground/20";
   const infoPanelClass = isOnline
     ? "border-border/40 bg-background/30"
     : "border-muted-foreground/20 bg-muted/25";
@@ -401,7 +678,8 @@ export default function HostCard({
     : "border-muted-foreground/20 bg-muted/25";
   const cardMinHeightClass = compact ? "min-h-[260px]" : "min-h-[420px]";
   const compactMetricPanelClass = `rounded-md border px-2.5 py-2 ${trafficPanelClass}`;
-  const compactMetricItemClass = "grid min-w-0 grid-cols-[18px_minmax(0,1fr)_42px] items-center gap-2 rounded px-1 py-0.5 transition-colors hover:bg-background/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50";
+  const compactMetricItemClass =
+    "grid min-w-0 grid-cols-[18px_minmax(0,1fr)_42px] items-center gap-2 rounded px-1 py-0.5 transition-colors hover:bg-background/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50";
   const compactMetricItems = [
     {
       key: "cpu",
@@ -410,7 +688,9 @@ export default function HostCard({
       value: cpuUsage,
       valueLabel: `${cpuUsage}%`,
       progressClass: metricUsageProgressClass(cpuUsage, isOnline),
-      tooltip: host.cpuInfo ? `CPU 使用率 ${cpuUsage}%\n${host.cpuInfo}` : `CPU 使用率 ${cpuUsage}%`,
+      tooltip: host.cpuInfo
+        ? `CPU 使用率 ${cpuUsage}%\n${host.cpuInfo}`
+        : `CPU 使用率 ${cpuUsage}%`,
     },
     {
       key: "memory",
@@ -428,9 +708,10 @@ export default function HostCard({
       value: diskUsage,
       valueLabel: `${diskUsage}%`,
       progressClass: metricUsageProgressClass(diskUsage, isOnline),
-      tooltip: diskUsed !== null && diskTotal
-        ? `磁盘使用率 ${diskUsage}%\n${formatBytes(diskUsed)} / ${formatBytes(diskTotal)}`
-        : `磁盘使用率 ${diskUsage}%`,
+      tooltip:
+        diskUsed !== null && diskTotal
+          ? `磁盘使用率 ${diskUsage}%\n${formatBytes(diskUsed)} / ${formatBytes(diskTotal)}`
+          : `磁盘使用率 ${diskUsage}%`,
     },
     {
       key: "traffic",
@@ -444,8 +725,13 @@ export default function HostCard({
   ];
 
   const addressRegionBlock = (regionCompact = false) => (
-    <div className={`mt-0.5 min-w-0 space-y-1 ${isOnline ? "" : "opacity-70 grayscale"}`}>
-      <p className="min-w-0 truncate font-mono text-xs leading-5" title={hostPrimaryAddressText(host)}>
+    <div
+      className={`mt-0.5 min-w-0 space-y-1 ${isOnline ? "" : "opacity-70 grayscale"}`}
+    >
+      <p
+        className="min-w-0 truncate font-mono text-xs leading-5"
+        title={hostPrimaryAddressText(host)}
+      >
         <span className="mr-1.5 text-muted-foreground">地址</span>
         {hostPrimaryAddressText(host)}
       </p>
@@ -462,11 +748,13 @@ export default function HostCard({
   }, [host.id, metrics]);
 
   return (
-    <Card className={`${cardMinHeightClass} host-card-shell ${dragHandle ? "group/sortable" : ""} ${sortableClassName || ""} backdrop-blur-md transition-[min-height,border-color,background-color,box-shadow,opacity] duration-200 ease-out ${
-      isOnline
-        ? "border-border/40 bg-card/60 hover:border-border/60"
-        : "border-muted-foreground/20 bg-muted/35 shadow-none hover:border-muted-foreground/30"
-    }`}>
+    <Card
+      className={`${cardMinHeightClass} host-card-shell ${dragHandle ? "group/sortable" : ""} ${sortableClassName || ""} backdrop-blur-md transition-[min-height,border-color,background-color,box-shadow,opacity] duration-200 ease-out ${
+        isOnline
+          ? "border-border/40 bg-card/60 hover:border-border/60"
+          : "border-muted-foreground/20 bg-muted/35 shadow-none hover:border-muted-foreground/30"
+      }`}
+    >
       <CardHeader className={compact ? "px-3.5 pb-2 pt-3.5" : "pb-2"}>
         {compact ? (
           <div className="flex min-w-0 items-center justify-between gap-2">
@@ -508,32 +796,49 @@ export default function HostCard({
           </div>
         )}
       </CardHeader>
-      <CardContent className={`host-card-mode-content ${compact ? "host-card-mode-content-compact space-y-2 px-3.5 pb-3.5" : "host-card-mode-content-standard space-y-3"} ${isOnline ? "" : "text-muted-foreground"}`}>
+      <CardContent
+        className={`host-card-mode-content ${compact ? "host-card-mode-content-compact space-y-2 px-3.5 pb-3.5" : "host-card-mode-content-standard space-y-3"} ${isOnline ? "" : "text-muted-foreground"}`}
+      >
         {compact ? (
           <div className="space-y-2">
-            <div className={`min-w-0 rounded-md border px-2.5 py-1.5 ${infoPanelClass}`}>
+            <div
+              className={`min-w-0 rounded-md border px-2.5 py-1.5 ${infoPanelClass}`}
+            >
               <div className="flex min-w-0 items-center gap-2">
                 <span
                   className={`h-2 w-2 shrink-0 rounded-full ${isOnline ? "bg-chart-2 shadow-sm shadow-chart-2/50 animate-pulse" : "bg-destructive shadow-sm shadow-destructive/50"}`}
                   title={isOnline ? "在线" : "离线"}
                 />
-                <span className="min-w-0 truncate text-sm font-semibold leading-5" title={hostName}>{hostName}</span>
+                <span
+                  className="min-w-0 truncate text-sm font-semibold leading-5"
+                  title={hostName}
+                >
+                  {hostName}
+                </span>
                 <span
                   className={`shrink-0 rounded border bg-background/40 px-1.5 py-0.5 font-mono text-[10px] font-normal leading-none text-muted-foreground ${
-                    isOnline ? "border-border/50" : "border-muted-foreground/20 bg-muted/20"
+                    isOnline
+                      ? "border-border/50"
+                      : "border-muted-foreground/20 bg-muted/20"
                   }`}
                 >
                   {host.agentVersion ? `v${host.agentVersion}` : "未上报"}
                 </span>
                 {agentNeedsUpdate && (
-                  <Badge variant="outline" className="shrink-0 border-amber-500/30 px-1.5 py-0 text-[10px] text-amber-500">
+                  <Badge
+                    variant="outline"
+                    className="shrink-0 border-amber-500/30 px-1.5 py-0 text-[10px] text-amber-500"
+                  >
                     新版
                   </Badge>
                 )}
               </div>
               {host.agentUpgradeRequested && (
                 <div className="mt-1 flex flex-wrap gap-1.5">
-                  <Badge variant="outline" className={`shrink-0 px-1.5 py-0 text-[10px] ${agentUpgradeTimedOut ? "border-destructive/30 text-destructive" : "border-primary/25 text-primary"}`}>
+                  <Badge
+                    variant="outline"
+                    className={`shrink-0 px-1.5 py-0 text-[10px] ${agentUpgradeTimedOut ? "border-destructive/30 text-destructive" : "border-primary/25 text-primary"}`}
+                  >
                     {agentUpgradeTimedOut ? "升级失败" : "升级中"}
                   </Badge>
                 </div>
@@ -543,44 +848,69 @@ export default function HostCard({
           </div>
         ) : (
           <div className={compact ? "space-y-1.5" : "space-y-2"}>
-            <div className={`min-w-0 rounded-md border px-2.5 ${compact ? "py-1.5" : "py-2"} ${infoPanelClass}`}>
+            <div
+              className={`min-w-0 rounded-md border px-2.5 ${compact ? "py-1.5" : "py-2"} ${infoPanelClass}`}
+            >
               <div className="flex min-w-0 items-center gap-2">
                 <span
                   className={`h-2 w-2 shrink-0 rounded-full ${isOnline ? "bg-chart-2 shadow-sm shadow-chart-2/50 animate-pulse" : "bg-destructive shadow-sm shadow-destructive/50"}`}
                   title={isOnline ? "在线" : "离线"}
                 />
-                <span className="min-w-0 truncate text-sm font-semibold leading-5" title={hostName}>{hostName}</span>
+                <span
+                  className="min-w-0 truncate text-sm font-semibold leading-5"
+                  title={hostName}
+                >
+                  {hostName}
+                </span>
                 <span
                   className={`shrink-0 rounded border bg-background/40 px-1.5 py-0.5 font-mono text-[10px] font-normal leading-none text-muted-foreground ${
-                    isOnline ? "border-border/50" : "border-muted-foreground/20 bg-muted/20"
+                    isOnline
+                      ? "border-border/50"
+                      : "border-muted-foreground/20 bg-muted/20"
                   }`}
                 >
                   {host.agentVersion ? `v${host.agentVersion}` : "未上报"}
                 </span>
                 {agentNeedsUpdate && (
-                  <Badge variant="outline" className="shrink-0 border-amber-500/30 px-1.5 py-0 text-[10px] text-amber-500">
+                  <Badge
+                    variant="outline"
+                    className="shrink-0 border-amber-500/30 px-1.5 py-0 text-[10px] text-amber-500"
+                  >
                     新版
                   </Badge>
                 )}
               </div>
               {host.agentUpgradeRequested && (
                 <div className="mt-1 flex flex-wrap gap-1.5">
-                  <Badge variant="outline" className={`shrink-0 px-1.5 py-0 text-[10px] ${agentUpgradeTimedOut ? "border-destructive/30 text-destructive" : "border-primary/25 text-primary"}`}>
+                  <Badge
+                    variant="outline"
+                    className={`shrink-0 px-1.5 py-0 text-[10px] ${agentUpgradeTimedOut ? "border-destructive/30 text-destructive" : "border-primary/25 text-primary"}`}
+                  >
                     {agentUpgradeTimedOut ? "升级失败" : "升级中"}
                   </Badge>
                 </div>
               )}
               {addressRegionBlock(false)}
             </div>
-            <div className={`flex min-w-0 items-center gap-3 overflow-hidden whitespace-nowrap ${compact ? "text-xs" : "text-sm"}`}>
+            <div
+              className={`flex min-w-0 items-center gap-3 overflow-hidden whitespace-nowrap ${compact ? "text-xs" : "text-sm"}`}
+            >
               <div className="flex shrink-0 items-center gap-1.5">
                 <Activity className="h-3.5 w-3.5 text-muted-foreground" />
-                <span className={isOnline ? "" : "font-medium text-destructive"}>{isOnline ? "在线" : "离线"}</span>
+                <span
+                  className={isOnline ? "" : "font-medium text-destructive"}
+                >
+                  {isOnline ? "在线" : "离线"}
+                </span>
               </div>
-              {!compact && <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
-                <Server className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                <span className="min-w-0 truncate" title={host.osInfo || ""}>{osInfoText}</span>
-              </div>}
+              {!compact && (
+                <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
+                  <Server className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 truncate" title={host.osInfo || ""}>
+                    {osInfoText}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -589,19 +919,33 @@ export default function HostCard({
           compact ? (
             <div className="space-y-2 border-t border-border/30 pt-2">
               <TooltipProvider delayDuration={120}>
-                <div className={`${compactMetricPanelClass} space-y-1.5 text-xs`}>
+                <div
+                  className={`${compactMetricPanelClass} space-y-1.5 text-xs`}
+                >
                   {compactMetricItems.map((item) => {
                     const Icon = item.icon;
                     return (
                       <Tooltip key={item.key}>
                         <TooltipTrigger asChild>
-                          <div className={compactMetricItemClass} aria-label={item.tooltip} tabIndex={0}>
+                          <div
+                            className={compactMetricItemClass}
+                            aria-label={item.tooltip}
+                            tabIndex={0}
+                          >
                             <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                            <Progress value={item.value} className={item.progressClass} />
-                            <span className="shrink-0 text-right font-semibold leading-none tabular-nums">{item.valueLabel}</span>
+                            <Progress
+                              value={item.value}
+                              className={item.progressClass}
+                            />
+                            <span className="shrink-0 text-right font-semibold leading-none tabular-nums">
+                              {item.valueLabel}
+                            </span>
                           </div>
                         </TooltipTrigger>
-                        <TooltipContent collisionPadding={12} className="max-w-[240px] whitespace-pre-line text-xs">
+                        <TooltipContent
+                          collisionPadding={12}
+                          className="max-w-[240px] whitespace-pre-line text-xs"
+                        >
                           {item.tooltip}
                         </TooltipContent>
                       </Tooltip>
@@ -614,82 +958,134 @@ export default function HostCard({
                 <Clock className="h-3 w-3 text-muted-foreground" />
                 <span className="text-muted-foreground">运行</span>
                 {remainingTimeLabel && (
-                  <span className={`shrink-0 whitespace-nowrap rounded border px-1.5 py-0.5 text-[10px] font-medium leading-none ${remainingTimeClass}`}>
+                  <span
+                    className={`shrink-0 whitespace-nowrap rounded border px-1.5 py-0.5 text-[10px] font-medium leading-none ${remainingTimeClass}`}
+                  >
                     {remainingTimeLabel}
                   </span>
                 )}
-                <span className="ml-auto shrink-0 whitespace-nowrap text-right font-medium tabular-nums">{formatUptime(latestMetric.uptime)}</span>
+                <span className="ml-auto shrink-0 whitespace-nowrap text-right font-medium tabular-nums">
+                  {formatUptime(latestMetric.uptime)}
+                </span>
               </div>
             </div>
           ) : (
-          <div className="space-y-3 border-t border-border/30 pt-2">
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-muted-foreground flex items-center gap-1"><Cpu className="h-3 w-3" /> CPU</span>
-                <span className="font-medium tabular-nums">{latestMetric.cpuUsage ?? 0}%</span>
+            <div className="space-y-3 border-t border-border/30 pt-2">
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground flex items-center gap-1">
+                    <Cpu className="h-3 w-3" /> CPU
+                  </span>
+                  <span className="font-medium tabular-nums">
+                    {latestMetric.cpuUsage ?? 0}%
+                  </span>
+                </div>
+                <p
+                  className="truncate text-[11px] text-muted-foreground"
+                  title={host.cpuInfo || ""}
+                >
+                  {host.cpuInfo || "未上报 CPU 型号"}
+                </p>
+                <Progress
+                  value={latestMetric.cpuUsage ?? 0}
+                  className={metricUsageProgressClass(
+                    latestMetric.cpuUsage,
+                    isOnline,
+                  )}
+                />
               </div>
-              <p className="truncate text-[11px] text-muted-foreground" title={host.cpuInfo || ""}>
-                {host.cpuInfo || "未上报 CPU 型号"}
-              </p>
-              <Progress value={latestMetric.cpuUsage ?? 0} className={metricUsageProgressClass(latestMetric.cpuUsage, isOnline)} />
-            </div>
-            <TooltipProvider delayDuration={120}>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <div className="space-y-1.5 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50" aria-label={memoryTooltip} tabIndex={0}>
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="text-muted-foreground flex items-center gap-1"><MemoryStick className="h-3 w-3" /> 内存</span>
-                      <span className="max-w-[70%] truncate text-right font-medium tabular-nums">
-                        {memoryUsed !== null && memoryTotal
-                          ? `${formatBytes(memoryUsed)} / ${formatBytes(memoryTotal)} (${latestMetric.memoryUsage ?? 0}%)`
-                          : `${latestMetric.memoryUsage ?? 0}%`}
-                      </span>
+              <TooltipProvider delayDuration={120}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div
+                      className="space-y-1.5 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                      aria-label={memoryTooltip}
+                      tabIndex={0}
+                    >
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-muted-foreground flex items-center gap-1">
+                          <MemoryStick className="h-3 w-3" /> 内存
+                        </span>
+                        <span className="max-w-[70%] truncate text-right font-medium tabular-nums">
+                          {memoryUsed !== null && memoryTotal
+                            ? `${formatBytes(memoryUsed)} / ${formatBytes(memoryTotal)} (${latestMetric.memoryUsage ?? 0}%)`
+                            : `${latestMetric.memoryUsage ?? 0}%`}
+                        </span>
+                      </div>
+                      <Progress
+                        value={latestMetric.memoryUsage ?? 0}
+                        className={metricUsageProgressClass(
+                          latestMetric.memoryUsage,
+                          isOnline,
+                        )}
+                      />
                     </div>
-                    <Progress value={latestMetric.memoryUsage ?? 0} className={metricUsageProgressClass(latestMetric.memoryUsage, isOnline)} />
-                  </div>
-                </TooltipTrigger>
-                <TooltipContent collisionPadding={12} className="max-w-[260px] whitespace-pre-line text-xs">
-                  {memoryTooltip}
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-muted-foreground flex items-center gap-1"><HardDrive className="h-3 w-3" /> 磁盘</span>
-                <span className="max-w-[70%] truncate text-right font-medium tabular-nums">
-                  {diskUsed !== null && diskTotal
-                    ? `${formatBytes(diskUsed)} / ${formatBytes(diskTotal)} (${latestMetric.diskUsage ?? 0}%)`
-                    : `-- / -- (${latestMetric.diskUsage ?? 0}%)`}
+                  </TooltipTrigger>
+                  <TooltipContent
+                    collisionPadding={12}
+                    className="max-w-[260px] whitespace-pre-line text-xs"
+                  >
+                    {memoryTooltip}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground flex items-center gap-1">
+                    <HardDrive className="h-3 w-3" /> 磁盘
+                  </span>
+                  <span className="max-w-[70%] truncate text-right font-medium tabular-nums">
+                    {diskUsed !== null && diskTotal
+                      ? `${formatBytes(diskUsed)} / ${formatBytes(diskTotal)} (${latestMetric.diskUsage ?? 0}%)`
+                      : `-- / -- (${latestMetric.diskUsage ?? 0}%)`}
+                  </span>
+                </div>
+                <Progress
+                  value={latestMetric.diskUsage ?? 0}
+                  className={metricUsageProgressClass(
+                    latestMetric.diskUsage,
+                    isOnline,
+                  )}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between gap-3 text-xs">
+                  <span className="text-muted-foreground flex items-center gap-1">
+                    <Activity className="h-3 w-3" /> 流量
+                  </span>
+                  <span
+                    className="max-w-[70%] truncate text-right font-medium tabular-nums"
+                    title={trafficUsageTooltip}
+                  >
+                    {trafficUsageLabel}
+                  </span>
+                </div>
+                <Progress
+                  value={trafficProgress}
+                  className={trafficUsageProgressClass}
+                />
+              </div>
+              <div className="pt-1">{renderTrafficSplitBox()}</div>
+              <div className="flex items-center gap-2 text-xs pt-1">
+                <Clock className="h-3 w-3 text-muted-foreground" />
+                <span className="text-muted-foreground">运行时间</span>
+                {remainingTimeLabel && (
+                  <span
+                    className={`shrink-0 whitespace-nowrap rounded border px-1.5 py-0.5 text-[10px] font-medium leading-none ${remainingTimeClass}`}
+                  >
+                    {remainingTimeLabel}
+                  </span>
+                )}
+                <span className="ml-auto shrink-0 whitespace-nowrap text-right font-medium tabular-nums">
+                  {formatUptime(latestMetric.uptime)}
                 </span>
               </div>
-              <Progress value={latestMetric.diskUsage ?? 0} className={metricUsageProgressClass(latestMetric.diskUsage, isOnline)} />
             </div>
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between gap-3 text-xs">
-                <span className="text-muted-foreground flex items-center gap-1"><Activity className="h-3 w-3" /> 流量</span>
-                <span className="max-w-[70%] truncate text-right font-medium tabular-nums" title={trafficUsageTooltip}>
-                  {trafficUsageLabel}
-                </span>
-              </div>
-              <Progress value={trafficProgress} className={trafficUsageProgressClass} />
-            </div>
-            <div className="pt-1">
-              {renderTrafficSplitBox()}
-            </div>
-            <div className="flex items-center gap-2 text-xs pt-1">
-              <Clock className="h-3 w-3 text-muted-foreground" />
-              <span className="text-muted-foreground">运行时间</span>
-              {remainingTimeLabel && (
-                <span className={`shrink-0 whitespace-nowrap rounded border px-1.5 py-0.5 text-[10px] font-medium leading-none ${remainingTimeClass}`}>
-                  {remainingTimeLabel}
-                </span>
-              )}
-              <span className="ml-auto shrink-0 whitespace-nowrap text-right font-medium tabular-nums">{formatUptime(latestMetric.uptime)}</span>
-            </div>
-          </div>
           )
         ) : (
-          <div className={`border-t border-border/30 text-center text-muted-foreground/60 ${compact ? "py-3" : "py-4"}`}>
+          <div
+            className={`border-t border-border/30 text-center text-muted-foreground/60 ${compact ? "py-3" : "py-4"}`}
+          >
             <p className="text-xs">暂无监控数据</p>
           </div>
         )}

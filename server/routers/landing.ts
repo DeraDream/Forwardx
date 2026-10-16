@@ -53,6 +53,14 @@ function landingReferenceKind(rule: any, groupModes: Map<number, string>) {
   return String(rule?.forwardType || "") === "gost" && Number(rule?.tunnelId || 0) > 0 ? "tunnel" : "port";
 }
 
+async function activeLandingServiceReferences(serviceId: number) {
+  // A rule which is already pending removal no longer has a usable runtime
+  // reference.  It must not keep a landing service stuck in the UI while its
+  // own Agent cleanup is finishing.
+  const rules = await db.getForwardRules();
+  return rules.filter((rule: any) => Number(rule.targetLandingServiceId || 0) === serviceId && !rule.pendingDelete);
+}
+
 export const landingRouter = router({
   eligibleHosts: protectedProcedure.query(async ({ ctx }) => {
     const ownerUserId = isAdmin(ctx.user) ? undefined : ctx.user.id;
@@ -230,12 +238,35 @@ export const landingRouter = router({
     const service = await db.getLandingServiceById(input.id, true) as any;
     if (!service) return { success: true };
     if (!isAdmin(ctx.user) && Number(service.userId) !== Number(ctx.user.id)) throw new Error("无权删除该服务");
+    const references = await activeLandingServiceReferences(input.id);
+    if (references.length > 0) {
+      throw new Error(`该落地 SS 仍被 ${references.length} 条端口转发/转发组/转发链规则引用，请先删除或解除对应规则`);
+    }
     if (service.isExternal) {
       await db.deleteLandingService(input.id);
       return { success: true };
     }
+    if (service.status === "removing") return { success: true, removing: true };
     await db.updateLandingService(input.id, { isEnabled: false, status: "removing", statusMessage: "等待 Agent 清理" });
     pushAgentRefresh(Number(service.hostId), "landing-service-remove", { urgent: true });
     return { success: true };
+  }),
+  forceRemove: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ input, ctx }) => {
+    const service = await db.getLandingServiceById(input.id, true) as any;
+    if (!service) return { success: true };
+    if (!isAdmin(ctx.user) && Number(service.userId) !== Number(ctx.user.id)) throw new Error("无权删除该服务");
+    if (service.isExternal || service.status !== "removing") throw new Error("仅可强制移除等待清理的托管落地 SS");
+    const host = await db.getHostById(Number(service.hostId)) as any;
+    if (host?.isOnline) throw new Error("主机仍在线，请等待 Agent 完成清理");
+    const references = await activeLandingServiceReferences(input.id);
+    if (references.length > 0) {
+      throw new Error(`该落地 SS 仍被 ${references.length} 条端口转发/转发组/转发链规则引用，请先删除或解除对应规则`);
+    }
+    // The host is offline (or no longer exists), so it cannot acknowledge the
+    // remove action.  Removing the desired-state row prevents a permanently
+    // disabled UI; if this machine later returns, its old local SS unit must
+    // be cleaned manually because the panel no longer manages it.
+    await db.deleteLandingService(input.id);
+    return { success: true, forced: true };
   }),
 });
