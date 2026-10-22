@@ -752,6 +752,11 @@ const IMPORT_TABLE_ORDER = [
   "plugin_store_sources",
   "plugin_assets",
   "plugin_agent_states",
+  "proxy_nodes",
+  "proxy_subscriptions",
+  "proxy_node_subscriptions",
+  "proxy_templates",
+  "proxy_subscription_logs",
   "config_audit_events",
   "system_settings",
 ] as const;

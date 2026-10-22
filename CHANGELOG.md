@@ -7,6 +7,7 @@
 - 新增代理订阅模块：节点库、配置订阅、独立节点订阅与模板管理。
 - 支持 SS、SSR、VMess、VLESS 节点及 Clash、Egern、Loon 配置输出。
 - 支持订阅令牌轮换、有效期、访问次数限制、撤销、访问日志、二维码、预览、下载和 Clash/Loon 导入。
+- Panel / APK Release 升级至 `2.3.403`；Agent 保持 `2.2.231`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
 
 ## [2.3.402] - 2026-10-16
 
