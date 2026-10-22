@@ -32,6 +32,8 @@ test("template subscription links nodes, a selected template and strategy-group 
 
   const nodePayload = await renderProxyNodeSubscription("nodes-token");
   assert.equal(Buffer.from(nodePayload || "", "base64").toString("utf8"), "ss://YWVzLTI1Ni1nY206cGFzc0BleGFtcGxlLm5ldDo0NDM#JP-B\n");
+  assert.equal(await renderProxySubscription("nodes-token", "clash"), null, "节点订阅 token 绝不能作为模板配置订阅读取");
+  assert.equal(await renderProxyNodeSubscription("template-token"), null, "模板配置订阅 token 绝不能作为节点订阅读取");
   const accesses = await queryRaw<any>("SELECT subscriptionKind, format FROM proxy_subscription_logs ORDER BY id");
   assert.deepEqual(accesses.map((item) => [item.subscriptionKind, item.format]), [["config", "clash"], ["nodes", "raw"]]);
 });
