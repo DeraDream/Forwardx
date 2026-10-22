@@ -18,7 +18,7 @@ function proxy(link: string, fallback: string): any | null {
       let raw = link.slice(5).split(/[?#]/)[0];
       if (!raw.includes("@")) raw = decoded(raw);
       const url = new URL(`ss://${raw}`);
-      let auth = decodeURIComponent(url.username || "");
+      let auth = url.password ? `${decodeURIComponent(url.username || "")}:${decodeURIComponent(url.password)}` : decodeURIComponent(url.username || "");
       if (!auth.includes(":")) auth = decoded(auth);
       const separator = auth.indexOf(":");
       if (separator < 1) return null;
@@ -68,8 +68,12 @@ export async function renderProxySubscription(token: string, format: string, acc
   const sub = rows[0];
   if (!sub || sub.revoked || (sub.expiresAt && Number(sub.expiresAt) < Math.floor(Date.now() / 1000))) return null;
   if (Number(sub.accessLimit || 0) > 0 && Number(sub.accessCount || 0) >= Number(sub.accessLimit)) return null;
+  const templateRow = sub.templateId ? (await queryRaw<any>("SELECT content, filename FROM proxy_templates WHERE id=? LIMIT 1", [sub.templateId]))[0] : null;
+  // Existing subscriptions retain their old format query parameter; template-driven
+  // subscriptions select their renderer from the single chosen template instead.
+  if (templateRow) format = /loon/i.test(String(templateRow.filename)) ? "loon" : /egern/i.test(String(templateRow.filename)) ? "egern" : "clash";
   const allowed = JSON.parse(sub.formatsJson || "[]");
-  if (!allowed.includes(format)) return null;
+  if (!templateRow && !allowed.includes(format)) return null;
   const ids = JSON.parse(sub.nodeIdsJson || "[]").map(Number).filter(Number.isFinite);
   if (!ids.length) return "";
   const marks = ids.map(() => "?").join(",");
@@ -84,11 +88,18 @@ export async function renderProxySubscription(token: string, format: string, acc
   await executeRaw("UPDATE proxy_subscriptions SET accessCount=accessCount+1, updatedAt=? WHERE id=?", [Math.floor(Date.now() / 1000), sub.id]);
   await executeRaw("INSERT INTO proxy_subscription_logs (subscriptionId, subscriptionKind, ip, userAgent, format, accessedAt) VALUES (?, ?, ?, ?, ?, ?)", [sub.id, "config", String(access?.ip || "unknown").slice(0, 64), String(access?.userAgent || "").slice(0, 1000), format, Math.floor(Date.now() / 1000)]);
   const rendered = format === "clash" ? clash(parsed) : format === "egern" ? egern(parsed) : loon(parsed, ordered.map((node: any) => node.link));
-  const templates = await queryRaw<any>("SELECT content FROM proxy_templates WHERE format=? LIMIT 1", [format]);
-  const template = String(templates[0]?.content || "");
+  const templates = templateRow ? [templateRow] : await queryRaw<any>("SELECT content FROM proxy_templates WHERE format=? LIMIT 1", [format]);
+  let template = String(templates[0]?.content || "");
   if (!template.includes("{{PROXY_NODES}}")) return rendered;
   const entries = format === "clash" ? rendered.replace(/^proxies:\n/, "") : format === "egern" ? rendered.replace(/^# Egern Profile\nproxy:\n/, "") : rendered.replace(/^# ForwardX proxy subscription\n\[Proxy\]\n/, "");
-  return template.replaceAll("{{PROXY_NODES}}", entries.trimEnd());
+  template = template.replaceAll("{{PROXY_NODES}}", entries.trimEnd());
+  const groups = JSON.parse(sub.strategyGroupsJson || "[]");
+  for (const group of Array.isArray(groups) ? groups : []) {
+    const selected = (group.nodeIds || []).map(Number).map((id: number) => ordered.find((node: any) => Number(node.id) === id)).filter(Boolean);
+    const names = selected.map((node: any) => proxy(node.link, node.name)?.name || node.name).join(", ");
+    template = template.replaceAll(`{{PROXY_GROUP:${String(group.name)}}}`, names);
+  }
+  return template;
 }
 
 /** A client-neutral Base64 subscription, kept separate from rendered profiles like SublinkX node subscriptions. */

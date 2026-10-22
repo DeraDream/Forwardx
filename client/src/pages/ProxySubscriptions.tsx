@@ -53,7 +53,7 @@ import {
   ArrowDown,
   ArrowUp,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useLocation, useSearch } from "wouter";
 
@@ -62,11 +62,6 @@ const formatLabels: Record<string, string> = {
   egern: "Egern",
   loon: "Loon",
   raw: "原始节点",
-};
-const defaultTemplates: Record<string, string> = {
-  clash: "proxies:\n{{PROXY_NODES}}\n",
-  egern: "# Egern Profile\nproxy:\n{{PROXY_NODES}}\n",
-  loon: "[Proxy]\n{{PROXY_NODES}}\n",
 };
 type NodeForm = {
   id?: number;
@@ -86,10 +81,11 @@ const emptyNode: NodeForm = {
   groupName: "",
   enabled: true,
 };
-type ProxySubscriptionTab = "nodes" | "subscriptions" | "templates";
+type ProxySubscriptionTab = "nodes" | "subscriptions" | "nodeSubscriptions" | "templates";
 const proxySubscriptionTabItems: readonly SlidingTabItem<ProxySubscriptionTab>[] = [
   { value: "nodes", label: "节点库", icon: Server },
   { value: "subscriptions", label: "订阅管理", icon: Link2 },
+  { value: "nodeSubscriptions", label: "节点订阅", icon: ListPlus },
   { value: "templates", label: "模板管理", icon: FileCode2 },
 ];
 
@@ -139,6 +135,7 @@ export default function ProxySubscriptionsPage() {
   const { data: nodeSubscriptions = [] } =
     trpc.proxySubscriptions.nodeSubscriptions.useQuery();
   const { data: templates = [] } = trpc.proxySubscriptions.templates.useQuery();
+  const { data: detectedStrategyGroups = [] } = trpc.proxySubscriptions.templateStrategyGroups.useQuery({ templateId: selectedTemplateId || 1 }, { enabled: !!selectedTemplateId });
   const [nodeDialog, setNodeDialog] = useState<NodeForm | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [importText, setImportText] = useState("");
@@ -149,13 +146,17 @@ export default function ProxySubscriptionsPage() {
   const [importReplaceIpId, setImportReplaceIpId] = useState<number | null>(null);
   const [importDuplicateStrategy, setImportDuplicateStrategy] = useState<"skip" | "replace" | "allow">("skip");
   const [importNewGroupName, setImportNewGroupName] = useState("");
-  const [templateFormat, setTemplateFormat] = useState("clash");
-  const [templateText, setTemplateText] = useState("");
+  const [templateDialog, setTemplateDialog] = useState<{ id?: number; filename: string; content: string } | null>(null);
+  const [selectedTemplateIds, setSelectedTemplateIds] = useState<number[]>([]);
+  const templateFileInput = useRef<HTMLInputElement>(null);
   const [subscriptionOpen, setSubscriptionOpen] = useState(false);
+  const [generatedSubscription, setGeneratedSubscription] = useState<{ name: string; token: string; filename: string } | null>(null);
   const [nodeSubscriptionOpen, setNodeSubscriptionOpen] = useState(false);
   const [subscriptionName, setSubscriptionName] = useState("");
   const [selectedNodeIds, setSelectedNodeIds] = useState<number[]>([]);
-  const [selectedFormats, setSelectedFormats] = useState<string[]>(["clash"]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<number | null>(null);
+  const [subscriptionStep, setSubscriptionStep] = useState(1);
+  const [strategyGroups, setStrategyGroups] = useState<{ name: string; nodeIds: number[] }[]>([]);
   const [editingSubscription, setEditingSubscription] = useState<any>(null);
   const [editingNodeSubscription, setEditingNodeSubscription] =
     useState<any>(null);
@@ -222,7 +223,9 @@ export default function ProxySubscriptionsPage() {
   const clearSubscriptionForm = () => {
     setSubscriptionName("");
     setSelectedNodeIds([]);
-    setSelectedFormats(["clash"]);
+    setSelectedTemplateId(null);
+    setSubscriptionStep(1);
+    setStrategyGroups([]);
     setAccessLimit(0);
     setExpiresAtText("");
     setRevoked(false);
@@ -231,9 +234,10 @@ export default function ProxySubscriptionsPage() {
   };
   const saveSubscription = trpc.proxySubscriptions.saveSubscription.useMutation(
     {
-      onSuccess: () => {
+      onSuccess: (result) => {
         utils.proxySubscriptions.subscriptions.invalidate();
         setSubscriptionOpen(false);
+        if (result.token) setGeneratedSubscription({ name: subscriptionName, token: result.token, filename: result.filename });
         clearSubscriptionForm();
         toast.success("订阅已保存");
       },
@@ -289,22 +293,13 @@ export default function ProxySubscriptionsPage() {
   const saveTemplate = trpc.proxySubscriptions.saveTemplate.useMutation({
     onSuccess: () => {
       utils.proxySubscriptions.templates.invalidate();
+      setTemplateDialog(null);
       toast.success("模板已保存");
     },
+    onError: (error) => toast.error(error.message),
   });
-  const activeTemplate = useMemo(
-    () =>
-      templates.find((item: any) => item.format === templateFormat)?.content ||
-      defaultTemplates[templateFormat],
-    [templates, templateFormat],
-  );
-  const openTemplate = (format: string) => {
-    setTemplateFormat(format);
-    setTemplateText(
-      templates.find((item: any) => item.format === format)?.content ||
-        defaultTemplates[format],
-    );
-  };
+  const deleteTemplate = trpc.proxySubscriptions.deleteTemplate.useMutation({ onSuccess: (_result, input) => { void utils.proxySubscriptions.templates.invalidate(); setSelectedTemplateIds((current) => current.filter((id) => id !== input.id)); toast.success("模板已删除"); }, onError: (error) => toast.error(error.message) });
+  const bulkDeleteTemplates = trpc.proxySubscriptions.bulkDeleteTemplates.useMutation({ onSuccess: () => { void utils.proxySubscriptions.templates.invalidate(); setSelectedTemplateIds([]); toast.success("已删除所选模板"); }, onError: (error) => toast.error(error.message) });
   const copy = async (value: string) => {
     await navigator.clipboard.writeText(value);
     toast.success("已复制");
@@ -315,19 +310,13 @@ export default function ProxySubscriptionsPage() {
         ? current.filter((value) => value !== id)
         : [...current, id],
     );
-  const toggleFormat = (format: string) =>
-    setSelectedFormats((current) =>
-      current.includes(format)
-        ? current.filter((value) => value !== format)
-        : [...current, format],
-    );
   const openConfigSubscription = (sub?: any) => {
     setEditingSubscription(sub || null);
     setSubscriptionName(sub?.name || "");
     setSelectedNodeIds(sub?.nodeIds || []);
-    setSelectedFormats(
-      sub?.formats?.filter((format: string) => format !== "raw") || ["clash"],
-    );
+    setSelectedTemplateId(sub?.templateId || null);
+    setStrategyGroups(sub?.strategyGroups || []);
+    setSubscriptionStep(sub?.templateId ? 4 : 1);
     setAccessLimit(Number(sub?.accessLimit || 0));
     setExpiresAtText(
       sub?.expiresAt ? new Date(sub.expiresAt).toISOString().slice(0, 16) : "",
@@ -482,13 +471,13 @@ export default function ProxySubscriptionsPage() {
             </Card>
           </TabsContent>
           <TabsContent value="subscriptions">
-            <div className="grid gap-4 xl:grid-cols-2">
-              <Card>
+            <div>
+              <Card className="hidden">
                 <CardHeader className="flex-row items-center justify-between space-y-0">
                   <div>
                     <CardTitle>配置订阅</CardTitle>
                     <CardDescription>
-                      生成 Clash、Egern 或 Loon 的完整配置。
+                      每个订阅绑定一个已创建模板，生成独立配置链接。
                     </CardDescription>
                   </div>
                   <Button onClick={() => openConfigSubscription()}>
@@ -508,20 +497,12 @@ export default function ProxySubscriptionsPage() {
                             )}
                           </div>
                           <div className="mt-1 text-sm text-muted-foreground">
-                            {sub.nodeIds.length} 个节点 ·{" "}
-                            {sub.formats
-                              .map((f: string) => formatLabels[f])
-                              .join(" / ")}{" "}
-                            · 访问 {sub.accessCount}
+                            {sub.nodeIds.length} 个节点 · {sub.template?.filename || "旧版模板"} · 访问 {sub.accessCount}
                             {sub.accessLimit ? `/${sub.accessLimit}` : ""}
                           </div>
                         </div>
                         <div className="flex flex-wrap gap-1">
-                          {sub.formats.map((format: string) => {
-                            const url = `${window.location.origin}/api/proxy-subscription/${sub.token}?format=${format}`;
-                            const importUrl = format === "clash" ? `clash://install-config?url=${encodeURIComponent(url)}` : format === "loon" ? `loon://import?sub=${encodeURIComponent(url)}` : "";
-                            return <span key={format} className="flex gap-1"><Button size="sm" variant="outline" onClick={() => copy(url)}><Copy className="mr-1 h-3.5 w-3.5" />{formatLabels[format]}</Button><Button size="icon" variant="outline" title="预览配置" onClick={() => setPreviewSubscription({ name: `${sub.name} · ${formatLabels[format]}`, url })}><FileCode2 className="h-3.5 w-3.5" /></Button><Button size="icon" variant="outline" title="下载配置" onClick={() => download(url, `${sub.name}-${format}`, format === "loon" ? "conf" : "yaml")}><Upload className="h-3.5 w-3.5" /></Button>{importUrl && <Button size="icon" variant="outline" title={`导入 ${formatLabels[format]}`} onClick={() => { window.location.href = importUrl; }}><Link2 className="h-3.5 w-3.5" /></Button>}</span>;
-                          })}
+                          {(() => { const url = `${window.location.origin}/api/proxy-subscription/${sub.token}`; const isLoon = /loon/i.test(sub.template?.filename || ""); const isEgern = /egern/i.test(sub.template?.filename || ""); const importUrl = isEgern ? `egern://install-config?url=${encodeURIComponent(url)}` : isLoon ? `loon://import?sub=${encodeURIComponent(url)}` : ""; return <><Button size="sm" variant="outline" onClick={() => copy(url)}><Copy className="mr-1 h-3.5 w-3.5" />复制链接</Button><Button size="icon" variant="outline" title="预览配置" onClick={() => setPreviewSubscription({ name: sub.name, url })}><FileCode2 className="h-3.5 w-3.5" /></Button><Button size="icon" variant="outline" title="下载配置" onClick={() => download(url, sub.name, isLoon ? "conf" : "yaml")}><Upload className="h-3.5 w-3.5" /></Button>{importUrl && <Button size="icon" variant="outline" title="导入 App" onClick={() => { window.location.href = importUrl; }}><Link2 className="h-3.5 w-3.5" /></Button>}</>; })()}
                           <Button
                             size="icon"
                             variant="ghost"
@@ -537,7 +518,7 @@ export default function ProxySubscriptionsPage() {
                             onClick={() =>
                               setQrSubscription({
                                 name: sub.name,
-                                url: `${window.location.origin}/api/proxy-subscription/${sub.token}?format=${sub.formats[0] || "clash"}`,
+                                url: `${window.location.origin}/api/proxy-subscription/${sub.token}`,
                               })
                             }
                           >
@@ -743,52 +724,22 @@ export default function ProxySubscriptionsPage() {
               </Card>
             </div>
           </TabsContent>
+          <TabsContent value="nodeSubscriptions">
+            <Card>
+              <CardHeader className="flex-row items-center justify-between space-y-0"><div><CardTitle>节点订阅</CardTitle><CardDescription>独立输出 Base64 节点链接，不与模板配置订阅混用。</CardDescription></div><Button onClick={() => openNodeSubscription()}><Plus className="mr-2 h-4 w-4" />新建订阅</Button></CardHeader>
+              <CardContent className="space-y-3">{nodeSubscriptions.map((sub: any) => <div key={sub.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-4"><div><div className="font-medium">{sub.name}</div><div className="mt-1 text-sm text-muted-foreground">{sub.nodeIds.length} 个节点 · 访问 {sub.accessCount}{sub.accessLimit ? `/${sub.accessLimit}` : ""}</div></div><div className="flex gap-1"><Button size="sm" variant="outline" onClick={() => copy(`${window.location.origin}/api/proxy-node-subscription/${sub.token}`)}><Copy className="mr-1 h-3.5 w-3.5" />复制链接</Button><Button size="icon" variant="ghost" title="编辑" onClick={() => openNodeSubscription(sub)}><Pencil className="h-4 w-4" /></Button><Button size="icon" variant="ghost" title="二维码" onClick={() => setQrSubscription({ name: sub.name, url: `${window.location.origin}/api/proxy-node-subscription/${sub.token}` })}><QrCode className="h-4 w-4" /></Button><Button size="icon" variant="ghost" onClick={() => deleteNodeSubscription.mutate({ id: sub.id })}><Trash2 className="h-4 w-4 text-destructive" /></Button></div></div>)}{!nodeSubscriptions.length && <div className="py-12 text-center text-sm text-muted-foreground">尚未创建节点订阅。</div>}</CardContent>
+            </Card>
+          </TabsContent>
           <TabsContent value="templates">
-            <div className="grid gap-4 md:grid-cols-3">
-              {["clash", "egern", "loon"].map((format) => (
-                <Card
-                  key={format}
-                  className={templateFormat === format ? "border-primary" : ""}
-                >
-                  <CardHeader>
-                    <CardTitle>{formatLabels[format]} 模板</CardTitle>
-                    <CardDescription>
-                      使用 <code>{"{{PROXY_NODES}}"}</code> 插入节点。
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <Button
-                      variant="outline"
-                      className="w-full"
-                      onClick={() => openTemplate(format)}
-                    >
-                      编辑模板
-                    </Button>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-            <Card className="mt-4">
-              <CardHeader>
-                <CardTitle>{formatLabels[templateFormat]} 模板编辑器</CardTitle>
+            <Card onDragOver={(event) => event.preventDefault()} onDrop={async (event) => { event.preventDefault(); const file = event.dataTransfer.files?.[0]; if (!file) return; if (!/\.(ya?ml|conf)$/i.test(file.name)) { toast.error("仅支持 .yaml、.yml 或 .conf 模板文件"); return; } setTemplateDialog({ filename: file.name, content: await file.text() }); }}>
+              <CardHeader className="gap-4 space-y-0 lg:flex-row lg:items-center lg:justify-between">
+                <div><CardTitle>模板列表</CardTitle><CardDescription>维护 Clash、Surge、Egern 等订阅输出模板。</CardDescription></div>
+                <div className="flex flex-wrap gap-2"><input ref={templateFileInput} className="hidden" type="file" accept=".yaml,.yml,.conf,text/yaml,text/plain" onChange={async (event) => { const file = event.target.files?.[0]; if (!file) return; setTemplateDialog({ filename: file.name, content: await file.text() }); event.target.value = ""; }} /><Button variant="outline" onClick={() => templateFileInput.current?.click()}>导入本地文件</Button><Button onClick={() => setTemplateDialog({ filename: "template.yaml", content: "proxies:\n  {{PROXY_NODES}}\n" })}><Plus className="mr-2 h-4 w-4" />添加模板</Button></div>
               </CardHeader>
-              <CardContent className="space-y-3">
-                <Textarea
-                  className="min-h-[360px] font-mono text-xs"
-                  value={templateText || activeTemplate}
-                  onChange={(e) => setTemplateText(e.target.value)}
-                />
-                <Button
-                  onClick={() =>
-                    saveTemplate.mutate({
-                      format: templateFormat as any,
-                      content: templateText || activeTemplate,
-                    })
-                  }
-                >
-                  <Check className="mr-2 h-4 w-4" />
-                  保存模板
-                </Button>
+              <CardContent>
+                <div className="mb-3 text-sm text-muted-foreground">共 {templates.length} 个模板 <span className="float-right">可拖拽 .yaml / .yml / .conf 文件到此页面后导入</span></div>
+                <Table><TableHeader><TableRow><TableHead className="w-10"><input aria-label="选择全部模板" type="checkbox" checked={templates.length > 0 && templates.every((item: any) => selectedTemplateIds.includes(item.id))} onChange={(event) => setSelectedTemplateIds(event.target.checked ? templates.map((item: any) => item.id) : [])} /></TableHead><TableHead>模板文件名</TableHead><TableHead>创建时间</TableHead><TableHead className="text-right">操作</TableHead></TableRow></TableHeader><TableBody>{templates.map((item: any) => <TableRow key={item.id}><TableCell><input aria-label={`选择 ${item.filename}`} type="checkbox" checked={selectedTemplateIds.includes(item.id)} onChange={() => setSelectedTemplateIds((current) => current.includes(item.id) ? current.filter((id) => id !== item.id) : [...current, item.id])} /></TableCell><TableCell className="font-medium">{item.filename}</TableCell><TableCell className="text-sm text-muted-foreground">{item.createdAt ? new Date(Number(item.createdAt) * 1000).toLocaleString() : "—"}</TableCell><TableCell className="text-right"><div className="flex justify-end gap-1"><Button size="sm" variant="ghost" onClick={() => { const blob = new Blob([item.content], { type: "text/plain;charset=utf-8" }); const url = URL.createObjectURL(blob); const anchor = document.createElement("a"); anchor.href = url; anchor.download = item.filename; anchor.click(); URL.revokeObjectURL(url); }}>导出</Button><Button size="sm" variant="ghost" onClick={() => setTemplateDialog({ id: item.id, filename: item.filename, content: item.content })}>编辑</Button><Button size="sm" variant="ghost" className="text-destructive" onClick={() => deleteTemplate.mutate({ id: item.id })}>删除</Button></div></TableCell></TableRow>)}{!templates.length && <TableRow><TableCell colSpan={4} className="h-28 text-center text-muted-foreground">尚未添加模板。可新建模板或导入本地文件。</TableCell></TableRow>}</TableBody></Table>
+                {selectedTemplateIds.length > 0 && <div className="mt-4 flex gap-2"><Button variant="outline" size="sm" onClick={() => setSelectedTemplateIds(templates.map((item: any) => item.id))}>全选</Button><Button variant="outline" size="sm" onClick={() => setSelectedTemplateIds([])}>取消选择</Button><Button variant="destructive" size="sm" onClick={() => bulkDeleteTemplates.mutate({ ids: selectedTemplateIds })}>批量删除</Button></div>}
               </CardContent>
             </Card>
           </TabsContent>
@@ -809,6 +760,16 @@ export default function ProxySubscriptionsPage() {
             {deleteImpact.length > 0 && <div className="rounded-md border bg-muted/30 p-3 text-sm"><p className="font-medium">受影响的订阅</p><ul className="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">{deleteImpact.map((item: any) => <li key={`${item.kind}-${item.id}`}>{item.kind}：{item.name}</li>)}</ul></div>}
             <DialogFooter><Button variant="outline" onClick={() => setDeleteNodeIds(null)}>取消</Button><Button variant="destructive" onClick={() => { const ids = deleteNodeIds || []; setDeleteNodeIds(null); if (ids.length === 1) deleteNode.mutate({ id: ids[0] }); else if (ids.length) bulkNodes.mutate({ ids, action: "delete" }); }}>确认删除</Button></DialogFooter>
           </DialogContent>
+        </Dialog>
+        <Dialog open={!!templateDialog} onOpenChange={(open) => !open && setTemplateDialog(null)}>
+          <DialogContent className="max-h-[92vh] max-w-[min(96vw,1400px)] overflow-y-auto">
+            <DialogHeader><DialogTitle>{templateDialog?.id ? "编辑模板" : "添加模板"}</DialogTitle><DialogDescription>编辑 YAML / Conf 配置，右侧会实时同步预览。</DialogDescription></DialogHeader>
+            {templateDialog && <div className="space-y-4"><Label>文件名<Input className="mt-2" value={templateDialog.filename} onChange={(event) => setTemplateDialog({ ...templateDialog, filename: event.target.value })} placeholder="clash.yaml" /></Label><div className="grid gap-4 lg:grid-cols-2"><div className="overflow-hidden rounded-md border"><div className="border-b bg-muted/30 px-3 py-2 text-sm font-medium">模板编辑</div><Textarea className="min-h-[55vh] resize-y rounded-none border-0 font-mono text-xs focus-visible:ring-0" value={templateDialog.content} onChange={(event) => setTemplateDialog({ ...templateDialog, content: event.target.value })} /></div><div className="overflow-hidden rounded-md border"><div className="border-b bg-muted/30 px-3 py-2 text-sm font-medium">实时预览</div><pre className="min-h-[55vh] whitespace-pre-wrap break-words p-3 font-mono text-xs leading-6 text-muted-foreground">{templateDialog.content}</pre></div></div></div>}
+            <DialogFooter><Button variant="outline" onClick={() => setTemplateDialog(null)}>取消</Button><Button disabled={!templateDialog?.filename.trim() || !templateDialog.content.trim() || saveTemplate.isPending} onClick={() => templateDialog && saveTemplate.mutate(templateDialog)}><Check className="mr-2 h-4 w-4" />保存模板</Button></DialogFooter>
+          </DialogContent>
+        </Dialog>
+        <Dialog open={!!generatedSubscription} onOpenChange={(open) => !open && setGeneratedSubscription(null)}>
+          <DialogContent><DialogHeader><DialogTitle>订阅已生成</DialogTitle><DialogDescription>{generatedSubscription?.filename} 模板已生成专属订阅链接。</DialogDescription></DialogHeader>{generatedSubscription && (() => { const url = `${window.location.origin}/api/proxy-subscription/${generatedSubscription.token}`; const isEgern = /egern/i.test(generatedSubscription.filename); const isLoon = /loon/i.test(generatedSubscription.filename); const appUrl = isEgern ? `egern://install-config?url=${encodeURIComponent(url)}` : isLoon ? `loon://import?sub=${encodeURIComponent(url)}` : ""; return <div className="space-y-3"><Label>订阅链接<Input className="mt-2 font-mono text-xs" readOnly value={url} /></Label><div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => copy(url)}><Copy className="mr-2 h-4 w-4" />复制链接</Button>{appUrl && <Button onClick={() => { window.location.href = appUrl; }}>导入 {isEgern ? "Egern" : "Loon"}</Button>}<Button variant="outline" onClick={() => setQrSubscription({ name: generatedSubscription.name, url })}><QrCode className="mr-2 h-4 w-4" />二维码</Button></div>{!appUrl && <p className="text-xs text-muted-foreground">该模板未配置 App 唤起方式，可复制链接或扫描二维码导入。</p>}</div>; })()}<DialogFooter><Button onClick={() => setGeneratedSubscription(null)}>完成</Button></DialogFooter></DialogContent>
         </Dialog>
         <Dialog
           open={!!nodeDialog}
@@ -929,11 +890,11 @@ export default function ProxySubscriptionsPage() {
                 {editingSubscription ? "编辑订阅" : "新建订阅"}
               </DialogTitle>
               <DialogDescription>
-                节点勾选顺序即输出顺序；可设置到期、访问上限和撤销状态。
+                第 {subscriptionStep} / 4 步：选择模板、节点、策略组并生成订阅链接。
               </DialogDescription>
             </DialogHeader>
             <div className="grid gap-3">
-              <Label>
+              {subscriptionStep === 4 && <><Label>
                 名称
                 <Input
                   value={subscriptionName}
@@ -968,29 +929,9 @@ export default function ProxySubscriptionsPage() {
                   onChange={(e) => setRevoked(e.target.checked)}
                 />
                 保存后撤销此订阅
-              </label>
-              <div>
-                <Label>输出格式</Label>
-                <div className="mt-2 flex gap-2">
-                  {Object.keys(formatLabels)
-                    .filter((format) => format !== "raw")
-                    .map((format) => (
-                      <Button
-                        key={format}
-                        size="sm"
-                        variant={
-                          selectedFormats.includes(format)
-                            ? "default"
-                            : "outline"
-                        }
-                        onClick={() => toggleFormat(format)}
-                      >
-                        {formatLabels[format]}
-                      </Button>
-                    ))}
-                </div>
-              </div>
-              <div>
+              </label></>}
+              {subscriptionStep === 1 && <div><Label>选择模板（一次只能选择一个）</Label><div className="mt-2 space-y-2">{templates.map((template: any) => <button type="button" key={template.id} className={`flex w-full items-center justify-between rounded-md border p-3 text-left ${selectedTemplateId === template.id ? "border-primary bg-primary/5" : "hover:bg-muted"}`} onClick={() => setSelectedTemplateId(template.id)}><span className="font-medium">{template.filename}</span><span className="text-xs text-muted-foreground">{template.content.length} 字符</span></button>)}{!templates.length && <p className="text-sm text-muted-foreground">请先在模板管理中创建或导入模板。</p>}</div></div>}
+              {subscriptionStep === 2 && <div>
                 <Label>节点</Label>
                 <div className="mt-2 max-h-48 space-y-1 overflow-auto rounded-md border p-2">
                   {nodes
@@ -1021,29 +962,12 @@ export default function ProxySubscriptionsPage() {
                       </button>
                     ))}
                 </div>
-              </div>
+              </div>}
+              {subscriptionStep === 3 && <div><Label>策略组节点分配</Label><p className="mt-1 text-xs text-muted-foreground">已识别模板中的策略组；不需要分配的组可留空。模板中可用 <code>{"{{PROXY_GROUP:策略组名}}"}</code> 插入所选节点名称。</p><div className="mt-3 space-y-3">{detectedStrategyGroups.map((group: any) => { const selected = strategyGroups.find((item) => item.name === group.name)?.nodeIds || []; return <div key={group.name} className="rounded-md border p-3"><div className="font-medium">{group.name}</div><div className="mt-2 flex flex-wrap gap-2">{selectedNodeIds.map((id) => { const node: any = nodes.find((item: any) => item.id === id); if (!node) return null; return <Button key={id} type="button" size="sm" variant={selected.includes(id) ? "default" : "outline"} onClick={() => setStrategyGroups((current) => { const rest = current.filter((item) => item.name !== group.name); const next = selected.includes(id) ? selected.filter((value) => value !== id) : [...selected, id]; return next.length ? [...rest, { name: group.name, nodeIds: next }] : rest; })}>{node.name}</Button>; })}</div></div>; })}{!detectedStrategyGroups.length && <div className="rounded-md border border-dashed p-5 text-sm text-muted-foreground">未在模板中识别到策略组，可跳过此步骤。</div>}</div></div>}
             </div>
             <DialogFooter>
-              <Button
-                disabled={
-                  !subscriptionName ||
-                  !selectedNodeIds.length ||
-                  !selectedFormats.length
-                }
-                onClick={() =>
-                  saveSubscription.mutate({
-                    id: editingSubscription?.id,
-                    name: subscriptionName,
-                    nodeIds: selectedNodeIds,
-                    formats: selectedFormats as any,
-                    expiresAt: expiresAtText ? new Date(expiresAtText) : null,
-                    accessLimit,
-                    revoked,
-                  })
-                }
-              >
-                {editingSubscription ? "保存修改" : "创建订阅"}
-              </Button>
+              {subscriptionStep > 1 && <Button variant="outline" onClick={() => setSubscriptionStep((step) => step - 1)}>上一步</Button>}
+              {subscriptionStep < 4 ? <Button disabled={(subscriptionStep === 1 && !selectedTemplateId) || (subscriptionStep === 2 && !selectedNodeIds.length)} onClick={() => setSubscriptionStep((step) => step + 1)}>下一步</Button> : <Button disabled={!subscriptionName || !selectedNodeIds.length || !selectedTemplateId} onClick={() => saveSubscription.mutate({ id: editingSubscription?.id, name: subscriptionName, nodeIds: selectedNodeIds, templateId: selectedTemplateId!, strategyGroups, expiresAt: expiresAtText ? new Date(expiresAtText) : null, accessLimit, revoked })}>{editingSubscription ? "保存修改" : "生成订阅"}</Button>}
             </DialogFooter>
           </DialogContent>
         </Dialog>

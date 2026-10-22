@@ -7,7 +7,7 @@ const formats = ["clash", "egern", "loon", "raw"] as const;
 const protocols = ["ss", "ssr", "vmess", "vless"] as const;
 const positiveIds = z.array(z.number().int().positive()).max(10_000).default([]);
 const nodeInput = z.object({ id: z.number().int().positive().optional(), name: z.string().trim().min(1).max(160), protocol: z.enum(protocols), link: z.string().trim().min(3).max(12000), groupName: z.string().trim().max(80).optional().nullable(), enabled: z.boolean().default(true), groupIds: positiveIds.optional(), configSubscriptionIds: positiveIds.optional(), nodeSubscriptionIds: positiveIds.optional() });
-const subscriptionInput = z.object({ id: z.number().int().positive().optional(), name: z.string().trim().min(1).max(160), nodeIds: z.array(z.number().int().positive()).default([]), formats: z.array(z.enum(formats)).min(1), expiresAt: z.date().nullable().optional(), accessLimit: z.number().int().min(0).max(10_000_000).default(0), revoked: z.boolean().default(false) });
+const subscriptionInput = z.object({ id: z.number().int().positive().optional(), name: z.string().trim().min(1).max(160), nodeIds: z.array(z.number().int().positive()).default([]), templateId: z.number().int().positive(), strategyGroups: z.array(z.object({ name: z.string().trim().min(1).max(160), nodeIds: z.array(z.number().int().positive()).max(10_000).default([]) })).default([]), expiresAt: z.date().nullable().optional(), accessLimit: z.number().int().min(0).max(10_000_000).default(0), revoked: z.boolean().default(false) });
 const nodeSubscriptionInput = z.object({ id: z.number().int().positive().optional(), name: z.string().trim().min(1).max(160), nodeIds: z.array(z.number().int().positive()).min(1), expiresAt: z.date().nullable().optional(), accessLimit: z.number().int().min(0).max(10_000_000).default(0), revoked: z.boolean().default(false) });
 
 function now() { return Math.floor(Date.now() / 1000); }
@@ -79,8 +79,13 @@ function nodeFingerprint(link: string) {
   } catch { return link.trim().toLowerCase(); }
 }
 function rowNode(row: any) { return { ...row, enabled: !!row.enabled, port: Number(row.port || 0) || null }; }
-function rowSubscription(row: any) { return { ...row, nodeIds: JSON.parse(row.nodeIdsJson || "[]"), formats: JSON.parse(row.formatsJson || "[]"), revoked: !!row.revoked, expiresAt: row.expiresAt ? new Date(Number(row.expiresAt) * 1000) : null }; }
+function rowSubscription(row: any) { return { ...row, nodeIds: JSON.parse(row.nodeIdsJson || "[]"), formats: JSON.parse(row.formatsJson || "[]"), strategyGroups: JSON.parse(row.strategyGroupsJson || "[]"), templateId: row.templateId ? Number(row.templateId) : null, revoked: !!row.revoked, expiresAt: row.expiresAt ? new Date(Number(row.expiresAt) * 1000) : null }; }
 function ids(value: unknown) { return Array.from(new Set((Array.isArray(value) ? value : []).map(Number).filter((id) => Number.isInteger(id) && id > 0))); }
+function legacyTemplateFilename(format: string) { return format === "loon" ? "loon.conf" : `${format || "template"}.yaml`; }
+async function syncLegacyTemplates() {
+  const rows = await queryRaw<any>("SELECT id, format, filename, createdAt, updatedAt FROM proxy_templates");
+  for (const row of rows) if (!String(row.filename || "").trim()) await executeRaw("UPDATE proxy_templates SET filename=?, createdAt=? WHERE id=?", [legacyTemplateFilename(String(row.format || "")), Number(row.createdAt || row.updatedAt || now()), row.id]);
+}
 
 async function syncLegacyGroups() {
   const rows = await queryRaw<any>("SELECT DISTINCT groupName FROM proxy_nodes WHERE groupName IS NOT NULL AND groupName<>''");
@@ -248,12 +253,16 @@ export const proxySubscriptionsRouter = router({
     const selected = ids(input.ids); const rows = selected.length ? await queryRaw<any>(`SELECT link FROM proxy_nodes WHERE id IN (${selected.map(() => "?").join(",")}) ORDER BY sortOrder ASC, id ASC`, selected) : await queryRaw<any>("SELECT link FROM proxy_nodes ORDER BY sortOrder ASC, id ASC");
     const text = rows.map((row) => row.link).join("\n") + (rows.length ? "\n" : ""); return { content: input.encoding === "base64" ? Buffer.from(text).toString("base64") : text, count: rows.length };
   }),
-  subscriptions: adminProcedure.query(async () => (await queryRaw<any>("SELECT * FROM proxy_subscriptions ORDER BY updatedAt DESC, id DESC")).map(rowSubscription)),
+  subscriptions: adminProcedure.query(async () => { await syncLegacyTemplates(); const rows = (await queryRaw<any>("SELECT * FROM proxy_subscriptions ORDER BY updatedAt DESC, id DESC")).map(rowSubscription); const templates = await queryRaw<any>("SELECT id, filename FROM proxy_templates"); return rows.map((row) => ({ ...row, template: templates.find((template) => Number(template.id) === row.templateId) || null })); }),
+  templateStrategyGroups: adminProcedure.input(z.object({ templateId: z.number().int().positive() })).query(async ({ input }) => { const row = (await queryRaw<any>("SELECT content FROM proxy_templates WHERE id=? LIMIT 1", [input.templateId]))[0]; const content = String(row?.content || ""); const names = new Set<string>(); const section = content.match(/(?:proxy-groups|proxy_groups|Proxy Group)\s*[:\n]([\s\S]*)/i)?.[1] || content; for (const match of section.matchAll(/^\s*(?:-\s*)?name\s*:\s*["']?([^"'\n#]+)/gim)) names.add(match[1].trim()); for (const match of content.matchAll(/^\s*([^=\n#]+?)\s*=\s*(?:select|url-test|fallback|load-balance)/gim)) names.add(match[1].trim()); return [...names].filter(Boolean).map((name) => ({ name })); }),
   saveSubscription: adminProcedure.input(subscriptionInput).mutation(async ({ input }) => {
-    const values = [input.name, JSON.stringify(input.nodeIds), JSON.stringify(input.formats), input.expiresAt ? Math.floor(input.expiresAt.getTime() / 1000) : null, input.accessLimit, input.revoked, now()];
-    if (input.id) await executeRaw("UPDATE proxy_subscriptions SET name=?, nodeIdsJson=?, formatsJson=?, expiresAt=?, accessLimit=?, revoked=?, updatedAt=? WHERE id=?", [...values, input.id]);
-    else await executeRaw("INSERT INTO proxy_subscriptions (name, token, nodeIdsJson, formatsJson, expiresAt, accessLimit, revoked, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", [input.name, token(), ...values.slice(1), now()]);
-    return { success: true };
+    const template = (await queryRaw<any>("SELECT id, filename FROM proxy_templates WHERE id=? LIMIT 1", [input.templateId]))[0]; if (!template) throw new Error("所选模板不存在");
+    const formatsForTemplate = /loon/i.test(String(template.filename)) ? ["loon"] : /egern/i.test(String(template.filename)) ? ["egern"] : ["clash"];
+    const values = [input.name, JSON.stringify(input.nodeIds), JSON.stringify(formatsForTemplate), input.templateId, JSON.stringify(input.strategyGroups), input.expiresAt ? Math.floor(input.expiresAt.getTime() / 1000) : null, input.accessLimit, input.revoked, now()];
+    if (input.id) await executeRaw("UPDATE proxy_subscriptions SET name=?, nodeIdsJson=?, formatsJson=?, templateId=?, strategyGroupsJson=?, expiresAt=?, accessLimit=?, revoked=?, updatedAt=? WHERE id=?", [...values, input.id]);
+    else await executeRaw("INSERT INTO proxy_subscriptions (name, token, nodeIdsJson, formatsJson, templateId, strategyGroupsJson, expiresAt, accessLimit, revoked, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [input.name, token(), ...values.slice(1), now()]);
+    const saved = (await queryRaw<any>(input.id ? "SELECT token FROM proxy_subscriptions WHERE id=? LIMIT 1" : "SELECT token FROM proxy_subscriptions WHERE name=? ORDER BY id DESC LIMIT 1", [input.id || input.name]))[0];
+    return { success: true, token: String(saved?.token || ""), filename: String(template.filename) };
   }),
   rotateToken: adminProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ input }) => { await executeRaw("UPDATE proxy_subscriptions SET token=?, updatedAt=? WHERE id=?", [token(), now(), input.id]); return { success: true }; }),
   resetAccessCount: adminProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ input }) => { await executeRaw("UPDATE proxy_subscriptions SET accessCount=0, updatedAt=? WHERE id=?", [now(), input.id]); return { success: true }; }),
@@ -270,12 +279,15 @@ export const proxySubscriptionsRouter = router({
   resetNodeSubscriptionAccessCount: adminProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ input }) => { await executeRaw("UPDATE proxy_node_subscriptions SET accessCount=0, updatedAt=? WHERE id=?", [now(), input.id]); return { success: true }; }),
   setNodeSubscriptionRevoked: adminProcedure.input(z.object({ id: z.number().int().positive(), revoked: z.boolean() })).mutation(async ({ input }) => { await executeRaw("UPDATE proxy_node_subscriptions SET revoked=?, updatedAt=? WHERE id=?", [input.revoked, now(), input.id]); return { success: true }; }),
   deleteNodeSubscription: adminProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ input }) => { await executeRaw("DELETE FROM proxy_node_subscriptions WHERE id=?", [input.id]); return { success: true }; }),
-  templates: adminProcedure.query(async () => (await queryRaw<any>("SELECT * FROM proxy_templates ORDER BY format")).map((row) => ({ ...row }))),
-  saveTemplate: adminProcedure.input(z.object({ format: z.enum(formats), content: z.string().min(1).max(300_000).refine((value) => value.includes("{{PROXY_NODES}}"), "模板必须包含 {{PROXY_NODES}} 占位符") })).mutation(async ({ input }) => {
-    await executeRaw("DELETE FROM proxy_templates WHERE format=?", [input.format]);
-    await executeRaw("INSERT INTO proxy_templates (format, content, updatedAt) VALUES (?, ?, ?)", [input.format, input.content, now()]);
+  templates: adminProcedure.query(async () => { await syncLegacyTemplates(); return (await queryRaw<any>("SELECT * FROM proxy_templates ORDER BY createdAt DESC, id DESC")).map((row) => ({ ...row })); }),
+  saveTemplate: adminProcedure.input(z.object({ id: z.number().int().positive().optional(), filename: z.string().trim().min(1).max(160).regex(/\.(?:ya?ml|conf)$/i, "模板文件名必须以 .yaml、.yml 或 .conf 结尾"), content: z.string().min(1).max(300_000) })).mutation(async ({ input }) => {
+    await syncLegacyTemplates();
+    if (input.id) await executeRaw("UPDATE proxy_templates SET filename=?, content=?, updatedAt=? WHERE id=?", [input.filename, input.content, now(), input.id]);
+    else await executeRaw("INSERT INTO proxy_templates (format, filename, content, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)", [`t${crypto.randomBytes(7).toString("hex")}`, input.filename, input.content, now(), now()]);
     return { success: true };
   }),
+  deleteTemplate: adminProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ input }) => { await executeRaw("DELETE FROM proxy_templates WHERE id=?", [input.id]); return { success: true }; }),
+  bulkDeleteTemplates: adminProcedure.input(z.object({ ids: positiveIds.min(1) })).mutation(async ({ input }) => { for (const id of ids(input.ids)) await executeRaw("DELETE FROM proxy_templates WHERE id=?", [id]); return { success: true }; }),
   accessLogs: adminProcedure.input(z.object({ subscriptionId: z.number().int().positive(), subscriptionKind: z.enum(["config", "nodes"]).default("config") })).query(async ({ input }) => {
     return queryRaw<any>("SELECT * FROM proxy_subscription_logs WHERE subscriptionId=? AND subscriptionKind=? ORDER BY id DESC LIMIT 200", [input.subscriptionId, input.subscriptionKind]);
   }),
