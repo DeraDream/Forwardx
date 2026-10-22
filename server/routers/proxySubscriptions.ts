@@ -287,7 +287,7 @@ export const proxySubscriptionsRouter = router({
     return { success: true };
   }),
   deleteTemplate: adminProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ input }) => { await executeRaw("DELETE FROM proxy_templates WHERE id=?", [input.id]); return { success: true }; }),
-  bulkDeleteTemplates: adminProcedure.input(z.object({ ids: positiveIds.min(1) })).mutation(async ({ input }) => { for (const id of ids(input.ids)) await executeRaw("DELETE FROM proxy_templates WHERE id=?", [id]); return { success: true }; }),
+  bulkDeleteTemplates: adminProcedure.input(z.object({ ids: z.array(z.number().int().positive()).min(1).max(10_000) })).mutation(async ({ input }) => { for (const id of ids(input.ids)) await executeRaw("DELETE FROM proxy_templates WHERE id=?", [id]); return { success: true }; }),
   accessLogs: adminProcedure.input(z.object({ subscriptionId: z.number().int().positive(), subscriptionKind: z.enum(["config", "nodes"]).default("config") })).query(async ({ input }) => {
     return queryRaw<any>("SELECT * FROM proxy_subscription_logs WHERE subscriptionId=? AND subscriptionKind=? ORDER BY id DESC LIMIT 200", [input.subscriptionId, input.subscriptionKind]);
   }),

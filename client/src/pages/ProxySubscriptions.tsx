@@ -135,7 +135,6 @@ export default function ProxySubscriptionsPage() {
   const { data: nodeSubscriptions = [] } =
     trpc.proxySubscriptions.nodeSubscriptions.useQuery();
   const { data: templates = [] } = trpc.proxySubscriptions.templates.useQuery();
-  const { data: detectedStrategyGroups = [] } = trpc.proxySubscriptions.templateStrategyGroups.useQuery({ templateId: selectedTemplateId || 1 }, { enabled: !!selectedTemplateId });
   const [nodeDialog, setNodeDialog] = useState<NodeForm | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [importText, setImportText] = useState("");
@@ -157,6 +156,7 @@ export default function ProxySubscriptionsPage() {
   const [selectedTemplateId, setSelectedTemplateId] = useState<number | null>(null);
   const [subscriptionStep, setSubscriptionStep] = useState(1);
   const [strategyGroups, setStrategyGroups] = useState<{ name: string; nodeIds: number[] }[]>([]);
+  const { data: detectedStrategyGroups = [] } = trpc.proxySubscriptions.templateStrategyGroups.useQuery({ templateId: selectedTemplateId || 1 }, { enabled: !!selectedTemplateId });
   const [editingSubscription, setEditingSubscription] = useState<any>(null);
   const [editingNodeSubscription, setEditingNodeSubscription] =
     useState<any>(null);

@@ -26,7 +26,7 @@ test("template subscription links nodes, a selected template and strategy-group 
   await executeRaw("INSERT INTO proxy_node_subscriptions (name, token, nodeIdsJson, accessLimit, revoked, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)", ["节点订阅", "nodes-token", JSON.stringify([nodes[1].id]), 0, false, timestamp, timestamp]);
 
   const rendered = await renderProxySubscription("template-token", "loon");
-  assert.ok(rendered?.includes('name: "HK-A"'), rendered);
+  assert.ok(rendered?.includes('name: "HK-A"'), rendered || undefined);
   assert.ok(rendered?.includes('name: "JP-B"'));
   assert.match(rendered || "", /proxies: \[HK-A\]/);
 
