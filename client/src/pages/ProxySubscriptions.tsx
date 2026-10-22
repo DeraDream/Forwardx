@@ -47,7 +47,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { useLocation } from "wouter";
+import { useLocation, useSearch } from "wouter";
 
 const formatLabels: Record<string, string> = {
   clash: "Clash",
@@ -78,7 +78,11 @@ const emptyNode: NodeForm = {
 
 export default function ProxySubscriptionsPage() {
   const [, setLocation] = useLocation();
-  const tab = new URLSearchParams(window.location.search).get("tab") || "nodes";
+  // `useLocation` only subscribes to pathname changes. The tabs change only
+  // the query string, so use Wouter's search subscription to re-render after
+  // every tab navigation.
+  const search = useSearch();
+  const tab = new URLSearchParams(search).get("tab") || "nodes";
   const setTab = (value: string) =>
     setLocation(`/proxy-subscriptions?tab=${value}`);
   const utils = trpc.useUtils();
