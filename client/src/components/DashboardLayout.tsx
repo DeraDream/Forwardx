@@ -104,6 +104,7 @@ const mainMenuItems: SidebarNavItem[] = [
   { icon: ArrowRightLeft, label: "转发规则", path: "/rules" },
   { icon: Network, label: "网络拓扑", path: "/network-topology" },
   { icon: Link2, label: "全链路", path: "/full-chains" },
+  { icon: Send, label: "代理订阅", path: "/proxy-subscriptions" },
 ];
 const profileMenuItem: SidebarNavItem = { icon: UserRound, label: "个人资料", path: "/profile", menuKey: "profile" };
 const lookingGlassMenuItem: SidebarNavItem = { icon: Globe2, label: "网络测试", path: "/looking-glass", menuKey: "lookingGlass" };

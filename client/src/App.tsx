@@ -29,6 +29,7 @@ import PaymentsPage from "@/pages/Payments";
 import PlansPage from "@/pages/Plans";
 import PluginsPage from "@/pages/Plugins";
 import ProfilePage from "@/pages/Profile";
+import ProxySubscriptionsPage from "@/pages/ProxySubscriptions";
 import RulesPage from "@/pages/Rules";
 import SettingsPage from "@/pages/Settings";
 import StorePage from "@/pages/Store";
@@ -111,6 +112,7 @@ function Router() {
       <Route path="/billing">{() => <AdminRoute component={BillingPage} />}</Route>
       <Route path="/traffic-billing">{() => <AdminRoute component={TrafficBillingPage} />}</Route>
       <Route path="/plans">{() => <AdminRoute component={PlansPage} />}</Route>
+      <Route path="/proxy-subscriptions">{() => <AdminRoute component={ProxySubscriptionsPage} />}</Route>
       <Route path="/plugins/sidebar/:pluginId">
         {(params) => <PluginsRoute sidebarPluginId={params.pluginId} />}
       </Route>

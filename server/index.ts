@@ -20,6 +20,7 @@ import { initializePanelClock } from "./panelClock";
 import { ENV } from "./env";
 import { resolveTrustProxySetting } from "./trustProxy";
 import { authCapRouter } from "./authCaptcha";
+import { renderProxyNodeSubscription, renderProxySubscription } from "./proxySubscriptionPublic";
 
 installPanelLogger();
 
@@ -135,6 +136,28 @@ async function startServer() {
   app.use(authCapRouter);
   app.use(agentRouter);
   app.use(migrationRouter);
+  app.get("/api/proxy-subscription/:token", async (req, res) => {
+    const format = String(req.query.format || "clash").toLowerCase();
+    if (!["clash", "egern", "loon", "raw"].includes(format)) return res.status(400).send("unsupported format");
+    try {
+      const content = await renderProxySubscription(String(req.params.token || ""), format, { ip: req.ip, userAgent: req.get("user-agent") || "" });
+      if (content == null) return res.status(404).send("subscription unavailable");
+      res.type(format === "clash" || format === "egern" ? "text/yaml" : "text/plain").send(content);
+    } catch (error) {
+      console.error("[ProxySubscription] public render failed", error);
+      res.status(500).send("subscription render failed");
+    }
+  });
+  app.get("/api/proxy-node-subscription/:token", async (req, res) => {
+    try {
+      const content = await renderProxyNodeSubscription(String(req.params.token || ""), { ip: req.ip, userAgent: req.get("user-agent") || "" });
+      if (content == null) return res.status(404).send("subscription unavailable");
+      res.type("text/plain").send(content);
+    } catch (error) {
+      console.error("[ProxySubscription] node subscription render failed", error);
+      res.status(500).send("subscription render failed");
+    }
+  });
   app.use(
     "/api/trpc",
     createExpressMiddleware({
