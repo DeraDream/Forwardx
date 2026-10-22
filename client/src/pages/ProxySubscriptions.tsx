@@ -18,7 +18,8 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { SlidingTabsList, type SlidingTabItem } from "@/components/ui/sliding-tabs";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Table,
@@ -32,7 +33,10 @@ import { trpc } from "@/lib/trpc";
 import QRCode from "qrcode";
 import {
   Check,
+  ChevronLeft,
+  ChevronRight,
   Copy,
+  Download,
   FileCode2,
   Link2,
   ListPlus,
@@ -41,9 +45,13 @@ import {
   QrCode,
   RefreshCw,
   RotateCcw,
+  Search,
   Server,
   Trash2,
   Upload,
+  ArrowUpDown,
+  ArrowDown,
+  ArrowUp,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -67,6 +75,9 @@ type NodeForm = {
   link: string;
   groupName: string;
   enabled: boolean;
+  groupIds?: number[];
+  configSubscriptionIds?: number[];
+  nodeSubscriptionIds?: number[];
 };
 const emptyNode: NodeForm = {
   name: "",
@@ -75,6 +86,12 @@ const emptyNode: NodeForm = {
   groupName: "",
   enabled: true,
 };
+type ProxySubscriptionTab = "nodes" | "subscriptions" | "templates";
+const proxySubscriptionTabItems: readonly SlidingTabItem<ProxySubscriptionTab>[] = [
+  { value: "nodes", label: "节点库", icon: Server },
+  { value: "subscriptions", label: "订阅管理", icon: Link2 },
+  { value: "templates", label: "模板管理", icon: FileCode2 },
+];
 
 export default function ProxySubscriptionsPage() {
   const [, setLocation] = useLocation();
@@ -86,7 +103,37 @@ export default function ProxySubscriptionsPage() {
   const setTab = (value: string) =>
     setLocation(`/proxy-subscriptions?tab=${value}`);
   const utils = trpc.useUtils();
+  const refreshNodeData = () => {
+    void utils.proxySubscriptions.nodes.invalidate();
+    void utils.proxySubscriptions.nodePage.invalidate();
+    void utils.proxySubscriptions.nodeGroups.invalidate();
+    void utils.proxySubscriptions.subscriptions.invalidate();
+    void utils.proxySubscriptions.nodeSubscriptions.invalidate();
+  };
   const { data: nodes = [] } = trpc.proxySubscriptions.nodes.useQuery();
+  const [nodePage, setNodePage] = useState(1);
+  const [nodePageSize, setNodePageSize] = useState(20);
+  const [nodeSearch, setNodeSearch] = useState("");
+  const [nodeGroupFilter, setNodeGroupFilter] = useState<number | null>(null);
+  const [nodeProtocolFilter, setNodeProtocolFilter] = useState<string>("");
+  const [nodeEnabledFilter, setNodeEnabledFilter] = useState<"" | "enabled" | "disabled">("");
+  const [nodeSort, setNodeSort] = useState<"sortOrder" | "name" | "createdAt">("sortOrder");
+  const [nodeDirection, setNodeDirection] = useState<"asc" | "desc">("asc");
+  const [selectedNodePageIds, setSelectedNodePageIds] = useState<number[]>([]);
+  const [nodeExportEncoding, setNodeExportEncoding] = useState<"plain" | "base64">("plain");
+  const { data: nodeGroups = [] } = trpc.proxySubscriptions.nodeGroups.useQuery();
+  const { data: nodeIps = [] } = trpc.proxySubscriptions.nodeIps.useQuery();
+  const nodePageQuery = trpc.proxySubscriptions.nodePage.useQuery({
+    page: nodePage,
+    pageSize: nodePageSize,
+    groupId: nodeGroupFilter || undefined,
+    search: nodeSearch,
+    protocol: nodeProtocolFilter as any || undefined,
+    enabled: nodeEnabledFilter === "" ? undefined : nodeEnabledFilter === "enabled",
+    sort: nodeSort,
+    direction: nodeDirection,
+  });
+  const pagedNodes = nodePageQuery.data?.items || [];
   const { data: subscriptions = [] } =
     trpc.proxySubscriptions.subscriptions.useQuery();
   const { data: nodeSubscriptions = [] } =
@@ -95,6 +142,13 @@ export default function ProxySubscriptionsPage() {
   const [nodeDialog, setNodeDialog] = useState<NodeForm | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [importText, setImportText] = useState("");
+  const [importName, setImportName] = useState("");
+  const [importGroupIds, setImportGroupIds] = useState<number[]>([]);
+  const [importConfigSubscriptionIds, setImportConfigSubscriptionIds] = useState<number[]>([]);
+  const [importNodeSubscriptionIds, setImportNodeSubscriptionIds] = useState<number[]>([]);
+  const [importReplaceIpId, setImportReplaceIpId] = useState<number | null>(null);
+  const [importDuplicateStrategy, setImportDuplicateStrategy] = useState<"skip" | "replace" | "allow">("skip");
+  const [importNewGroupName, setImportNewGroupName] = useState("");
   const [templateFormat, setTemplateFormat] = useState("clash");
   const [templateText, setTemplateText] = useState("");
   const [subscriptionOpen, setSubscriptionOpen] = useState(false);
@@ -123,6 +177,11 @@ export default function ProxySubscriptionsPage() {
     kind: "config" | "nodes";
     name: string;
   } | null>(null);
+  const [ipLibraryOpen, setIpLibraryOpen] = useState(false);
+  const [ipForm, setIpForm] = useState<{ id?: number; address: string; alias: string }>({ address: "", alias: "" });
+  const [groupLibraryOpen, setGroupLibraryOpen] = useState(false);
+  const [groupForm, setGroupForm] = useState<{ id?: number; name: string }>({ name: "" });
+  const [deleteNodeIds, setDeleteNodeIds] = useState<number[] | null>(null);
   const { data: accessLogs = [] } = trpc.proxySubscriptions.accessLogs.useQuery(
     {
       subscriptionId: logTarget?.id || 1,
@@ -132,7 +191,7 @@ export default function ProxySubscriptionsPage() {
   );
   const saveNode = trpc.proxySubscriptions.saveNode.useMutation({
     onSuccess: () => {
-      utils.proxySubscriptions.nodes.invalidate();
+      refreshNodeData();
       setNodeDialog(null);
       toast.success("节点已保存");
     },
@@ -140,18 +199,26 @@ export default function ProxySubscriptionsPage() {
   });
   const importNodes = trpc.proxySubscriptions.importNodes.useMutation({
     onSuccess: (r) => {
-      utils.proxySubscriptions.nodes.invalidate();
+      refreshNodeData();
       setImportOpen(false);
       setImportText("");
+      setImportNewGroupName("");
       toast.success(
         `已导入 ${r.imported} 个节点${r.skipped ? `，跳过 ${r.skipped} 条` : ""}`,
       );
     },
     onError: (e) => toast.error(e.message),
   });
-  const deleteNode = trpc.proxySubscriptions.deleteNode.useMutation({
-    onSuccess: () => utils.proxySubscriptions.nodes.invalidate(),
-  });
+  const deleteNode = trpc.proxySubscriptions.deleteNode.useMutation({ onSuccess: refreshNodeData });
+  const bulkNodes = trpc.proxySubscriptions.bulkNodes.useMutation({ onSuccess: () => { refreshNodeData(); setSelectedNodePageIds([]); } });
+  const moveNode = trpc.proxySubscriptions.moveNode.useMutation({ onSuccess: refreshNodeData, onError: (error) => toast.error(error.message) });
+  const saveNodeIp = trpc.proxySubscriptions.saveNodeIp.useMutation({ onSuccess: () => { void utils.proxySubscriptions.nodeIps.invalidate(); setIpForm({ address: "", alias: "" }); } });
+  const deleteNodeIp = trpc.proxySubscriptions.deleteNodeIp.useMutation({ onSuccess: () => void utils.proxySubscriptions.nodeIps.invalidate() });
+  const saveNodeGroup = trpc.proxySubscriptions.saveNodeGroup.useMutation({ onSuccess: () => { refreshNodeData(); setGroupForm({ name: "" }); } });
+  const deleteNodeGroup = trpc.proxySubscriptions.deleteNodeGroup.useMutation({ onSuccess: refreshNodeData });
+  const exportNodes = trpc.proxySubscriptions.exportNodes.useQuery({ ids: selectedNodePageIds, encoding: nodeExportEncoding }, { enabled: false });
+  const { data: importInspection = [] } = trpc.proxySubscriptions.inspectImportNodes.useQuery({ links: importText, replaceAddress: nodeIps.find((item: any) => item.id === importReplaceIpId)?.address }, { enabled: importOpen && !!importText.trim() });
+  const { data: deleteImpact = [] } = trpc.proxySubscriptions.nodeImpact.useQuery({ ids: deleteNodeIds || [] }, { enabled: !!deleteNodeIds?.length });
   const clearSubscriptionForm = () => {
     setSubscriptionName("");
     setSelectedNodeIds([]);
@@ -309,6 +376,18 @@ export default function ProxySubscriptionsPage() {
     anchor.click();
     anchor.remove();
   };
+  const downloadNodeExport = async () => {
+    const result = await exportNodes.refetch();
+    if (!result.data) return;
+    const blob = new Blob([result.data.content], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob); const anchor = document.createElement("a");
+    anchor.href = url; anchor.download = `proxy-nodes-${new Date().toISOString().slice(0, 10)}.${nodeExportEncoding === "base64" ? "base64.txt" : "txt"}`;
+    document.body.appendChild(anchor); anchor.click(); anchor.remove(); URL.revokeObjectURL(url);
+    toast.success(`已导出 ${result.data.count} 个节点`);
+  };
+  const copySelectedNodes = async () => {
+    const result = await exportNodes.refetch(); if (result.data) { await copy(result.data.content); toast.success(`已复制 ${result.data.count} 个节点`); }
+  };
   return (
     <DashboardLayout>
       <main className="space-y-5 p-4 md:p-6">
@@ -318,103 +397,78 @@ export default function ProxySubscriptionsPage() {
             管理代理节点、公开订阅链接和客户端模板。
           </p>
         </div>
-        <Tabs value={tab} onValueChange={setTab}>
-          <TabsList>
-            <TabsTrigger value="nodes">
-              <Server className="mr-2 h-4 w-4" />
-              节点库
-            </TabsTrigger>
-            <TabsTrigger value="subscriptions">
-              <Link2 className="mr-2 h-4 w-4" />
-              订阅管理
-            </TabsTrigger>
-            <TabsTrigger value="templates">
-              <FileCode2 className="mr-2 h-4 w-4" />
-              模板管理
-            </TabsTrigger>
-          </TabsList>
+        <Tabs value={tab} onValueChange={setTab} className="space-y-4">
+          <SlidingTabsList
+            items={proxySubscriptionTabItems}
+            activeValue={tab as ProxySubscriptionTab}
+            ariaLabel="代理订阅"
+            minItemWidthRem={7.5}
+          />
           <TabsContent value="nodes">
-            <Card>
-              <CardHeader className="flex-row items-center justify-between space-y-0">
+            <Card className="overflow-hidden">
+              <CardHeader className="gap-4 space-y-0 lg:flex-row lg:items-center lg:justify-between">
                 <div>
-                  <CardTitle>节点库</CardTitle>
+                  <CardTitle>节点列表</CardTitle>
                   <CardDescription>
-                    支持 SS、SSR、VLESS 与 VMess 链接。
+                    管理代理节点和分组，支持 SS、SSR、VLESS 与 VMess 链接。
                   </CardDescription>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="outline" onClick={() => setGroupLibraryOpen(true)}>分组管理</Button>
+                  <Button variant="outline" onClick={() => setIpLibraryOpen(true)}>IP 库</Button>
                   <Button variant="outline" onClick={() => setImportOpen(true)}>
                     <Upload className="mr-2 h-4 w-4" />
-                    批量导入
+                    添加节点
                   </Button>
-                  <Button onClick={() => setNodeDialog(emptyNode)}>
-                    <Plus className="mr-2 h-4 w-4" />
-                    新建节点
+                  <select aria-label="导出格式" className="h-10 rounded-md border bg-background px-2 text-sm" value={nodeExportEncoding} onChange={(event) => setNodeExportEncoding(event.target.value as "plain" | "base64")}><option value="plain">纯链接</option><option value="base64">Base64</option></select>
+                  <Button variant="outline" onClick={downloadNodeExport}>
+                    <Download className="mr-2 h-4 w-4" />导出{selectedNodePageIds.length ? "所选" : "全部"}
                   </Button>
                 </div>
               </CardHeader>
-              <CardContent>
+              <CardContent className="space-y-4">
+                <div className="flex gap-1 overflow-x-auto border-b">
+                  <Button variant={nodeGroupFilter === null ? "secondary" : "ghost"} size="sm" className="rounded-b-none" onClick={() => { setNodeGroupFilter(null); setNodePage(1); }}>全部 {nodePageQuery.data?.total ?? nodes.length}</Button>
+                  {nodeGroups.map((group: any) => <Button key={group.id} variant={nodeGroupFilter === group.id ? "secondary" : "ghost"} size="sm" className="rounded-b-none" onClick={() => { setNodeGroupFilter(group.id); setNodePage(1); }}>{group.name} {group.nodeCount}</Button>)}
+                </div>
+                <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto_auto_auto]">
+                  <div className="relative"><Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input className="pl-8" value={nodeSearch} onChange={(event) => { setNodeSearch(event.target.value); setNodePage(1); }} placeholder="搜索名称、链接、服务器或分组" /></div>
+                  <select className="h-10 rounded-md border bg-background px-3 text-sm" value={nodeProtocolFilter} onChange={(event) => { setNodeProtocolFilter(event.target.value); setNodePage(1); }}><option value="">所有协议</option>{["ss", "ssr", "vmess", "vless"].map((protocol) => <option key={protocol} value={protocol}>{protocol.toUpperCase()}</option>)}</select>
+                  <select className="h-10 rounded-md border bg-background px-3 text-sm" value={nodeEnabledFilter} onChange={(event) => { setNodeEnabledFilter(event.target.value as any); setNodePage(1); }}><option value="">全部状态</option><option value="enabled">启用</option><option value="disabled">停用</option></select>
+                  <select className="h-10 rounded-md border bg-background px-3 text-sm" value={nodeSort} onChange={(event) => { setNodeSort(event.target.value as any); setNodePage(1); }}><option value="sortOrder">自定义排序</option><option value="name">节点名称</option><option value="createdAt">创建时间</option></select>
+                  <Button variant="outline" onClick={() => { setNodeDirection((value) => value === "asc" ? "desc" : "asc"); }}><ArrowUpDown className="mr-2 h-4 w-4" />排序</Button>
+                </div>
+                {selectedNodePageIds.length > 0 && <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 p-2 text-sm"><span>已选择 {selectedNodePageIds.length} 个节点</span><Button size="sm" variant="outline" onClick={copySelectedNodes}>复制所选</Button><Button size="sm" variant="outline" onClick={() => bulkNodes.mutate({ ids: selectedNodePageIds, action: "enable" })}>启用</Button><Button size="sm" variant="outline" onClick={() => bulkNodes.mutate({ ids: selectedNodePageIds, action: "disable" })}>停用</Button><Button size="sm" variant="destructive" onClick={() => setDeleteNodeIds(selectedNodePageIds)}>删除所选</Button><Button size="sm" variant="ghost" onClick={() => setSelectedNodePageIds([])}>取消选择</Button></div>}
                 <Table>
                   <TableHeader>
                     <TableRow>
+                      <TableHead className="w-10"><input aria-label="选择当前页节点" type="checkbox" checked={pagedNodes.length > 0 && pagedNodes.every((node: any) => selectedNodePageIds.includes(node.id))} onChange={(event) => setSelectedNodePageIds(event.target.checked ? Array.from(new Set([...selectedNodePageIds, ...pagedNodes.map((node: any) => node.id)])) : selectedNodePageIds.filter((id) => !pagedNodes.some((node: any) => node.id === id)))} /></TableHead>
+                      <TableHead>#</TableHead>
                       <TableHead>名称</TableHead>
-                      <TableHead>协议</TableHead>
-                      <TableHead>服务器</TableHead>
+                      <TableHead>节点链接</TableHead>
+                      <TableHead>创建时间</TableHead>
                       <TableHead>分组</TableHead>
-                      <TableHead>状态</TableHead>
                       <TableHead className="text-right">操作</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {nodes.map((node: any) => (
+                    {pagedNodes.map((node: any, index: number) => (
                       <TableRow key={node.id}>
-                        <TableCell className="font-medium">
-                          {node.name}
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="secondary">
-                            {String(node.protocol).toUpperCase()}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          {node.server || "—"}
-                          {node.port ? `:${node.port}` : ""}
-                        </TableCell>
-                        <TableCell>{node.groupName || "未分组"}</TableCell>
-                        <TableCell>
-                          {node.enabled ? (
-                            <Badge>启用</Badge>
-                          ) : (
-                            <Badge variant="secondary">停用</Badge>
-                          )}
-                        </TableCell>
+                        <TableCell><input aria-label={`选择 ${node.name}`} type="checkbox" checked={selectedNodePageIds.includes(node.id)} onChange={() => setSelectedNodePageIds((current) => current.includes(node.id) ? current.filter((id) => id !== node.id) : [...current, node.id])} /></TableCell>
+                        <TableCell>{(nodePage - 1) * nodePageSize + index + 1}</TableCell>
+                        <TableCell className="min-w-36 font-medium">{node.name} {!node.enabled && <Badge variant="secondary" className="ml-1">已禁用</Badge>}<div className="mt-1 text-xs text-muted-foreground">{String(node.protocol).toUpperCase()} · {node.server || "—"}{node.port ? `:${node.port}` : ""}</div></TableCell>
+                        <TableCell className="max-w-80 font-mono text-xs text-muted-foreground"><button className="block max-w-full truncate text-left hover:text-foreground" title={node.link} onClick={() => copy(node.link)}>{node.link}</button></TableCell>
+                        <TableCell className="whitespace-nowrap text-xs">{node.createdAt ? new Date(Number(node.createdAt) * 1000).toLocaleString() : "—"}</TableCell>
+                        <TableCell>{node.groups?.length ? node.groups.map((group: any) => <Badge key={group.id} variant="secondary" className="mr-1">{group.name}</Badge>) : "未分组"}</TableCell>
                         <TableCell className="text-right">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() =>
-                              setNodeDialog({
-                                ...node,
-                                groupName: node.groupName || "",
-                              })
-                            }
-                          >
-                            编辑
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => deleteNode.mutate({ id: node.id })}
-                          >
-                            <Trash2 className="h-4 w-4 text-destructive" />
-                          </Button>
+                          <div className="flex justify-end gap-1"><Button variant="ghost" size="sm" onClick={() => setNodeDialog({ ...node, groupName: node.groupName || "" })}>编辑</Button><Button variant="ghost" size="sm" onClick={() => copy(node.link)}>复制</Button>{nodeSort === "sortOrder" && <><Button variant="ghost" size="icon" title="上移" disabled={index === 0} onClick={() => moveNode.mutate({ id: node.id, direction: "up" })}><ArrowUp className="h-4 w-4" /></Button><Button variant="ghost" size="icon" title="下移" disabled={index === pagedNodes.length - 1} onClick={() => moveNode.mutate({ id: node.id, direction: "down" })}><ArrowDown className="h-4 w-4" /></Button></>}<Button variant="ghost" size="sm" onClick={() => bulkNodes.mutate({ ids: [node.id], action: node.enabled ? "disable" : "enable" })}>{node.enabled ? "停用" : "恢复"}</Button><Button variant="ghost" size="icon" onClick={() => setDeleteNodeIds([node.id])}><Trash2 className="h-4 w-4 text-destructive" /></Button></div>
                         </TableCell>
                       </TableRow>
                     ))}
-                    {!nodes.length && (
+                    {!pagedNodes.length && (
                       <TableRow>
                         <TableCell
-                          colSpan={6}
+                          colSpan={7}
                           className="h-28 text-center text-muted-foreground"
                         >
                           尚无节点，粘贴订阅链接开始导入。
@@ -423,6 +477,7 @@ export default function ProxySubscriptionsPage() {
                     )}
                   </TableBody>
                 </Table>
+                <div className="flex flex-wrap items-center justify-end gap-2 text-sm text-muted-foreground"><span>共 {nodePageQuery.data?.total || 0} 个节点</span><select className="h-8 rounded-md border bg-background px-2" value={nodePageSize} onChange={(event) => { setNodePageSize(Number(event.target.value)); setNodePage(1); }}><option value="20">20/页</option><option value="50">50/页</option><option value="100">100/页</option></select><Button variant="outline" size="icon" disabled={nodePage <= 1} onClick={() => setNodePage((value) => value - 1)}><ChevronLeft className="h-4 w-4" /></Button><span>{nodePage}</span><Button variant="outline" size="icon" disabled={nodePage * nodePageSize >= (nodePageQuery.data?.total || 0)} onClick={() => setNodePage((value) => value + 1)}><ChevronRight className="h-4 w-4" /></Button></div>
               </CardContent>
             </Card>
           </TabsContent>
@@ -738,6 +793,23 @@ export default function ProxySubscriptionsPage() {
             </Card>
           </TabsContent>
         </Tabs>
+        <Dialog open={groupLibraryOpen} onOpenChange={setGroupLibraryOpen}>
+          <DialogContent className="max-w-xl"><DialogHeader><DialogTitle>节点分组</DialogTitle><DialogDescription>节点可同时属于多个分组；删除分组不会删除节点。</DialogDescription></DialogHeader><div className="flex gap-2"><Input value={groupForm.name} onChange={(event) => setGroupForm({ ...groupForm, name: event.target.value })} placeholder="分组名称" /><Button disabled={!groupForm.name.trim()} onClick={() => saveNodeGroup.mutate(groupForm)}>保存</Button></div><div className="divide-y rounded-md border">{nodeGroups.map((group: any) => <div key={group.id} className="flex items-center justify-between p-3"><span>{group.name} <span className="text-sm text-muted-foreground">{group.nodeCount} 个节点</span></span><div><Button variant="ghost" size="sm" onClick={() => setGroupForm(group)}>编辑</Button><Button variant="ghost" size="sm" onClick={() => deleteNodeGroup.mutate({ id: group.id })}>删除</Button></div></div>)}{!nodeGroups.length && <div className="p-6 text-center text-sm text-muted-foreground">尚未创建分组</div>}</div></DialogContent>
+        </Dialog>
+        <Dialog open={ipLibraryOpen} onOpenChange={setIpLibraryOpen}>
+          <DialogContent className="max-w-3xl">
+            <DialogHeader><DialogTitle>IP 库</DialogTitle><DialogDescription>维护导入节点时可替换的入口 IP；编辑或删除不会影响已保存节点。</DialogDescription></DialogHeader>
+            <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]"><Input value={ipForm.address} onChange={(event) => setIpForm({ ...ipForm, address: event.target.value })} placeholder="例如 198.51.100.24 或 2001:db8::18" /><Input value={ipForm.alias} onChange={(event) => setIpForm({ ...ipForm, alias: event.target.value })} placeholder="例如：香港入口 A" /><Button disabled={!ipForm.address || !ipForm.alias} onClick={() => saveNodeIp.mutate(ipForm)}>加入 IP 库</Button></div>
+            <Table><TableHeader><TableRow><TableHead>别名</TableHead><TableHead>IP 地址</TableHead><TableHead className="text-right">操作</TableHead></TableRow></TableHeader><TableBody>{nodeIps.map((item: any) => <TableRow key={item.id}><TableCell>{item.alias}</TableCell><TableCell className="font-mono">{item.address}</TableCell><TableCell className="text-right"><Button variant="ghost" size="sm" onClick={() => setIpForm(item)}>编辑</Button><Button variant="ghost" size="sm" onClick={() => deleteNodeIp.mutate({ id: item.id })}>删除</Button></TableCell></TableRow>)}{!nodeIps.length && <TableRow><TableCell colSpan={3} className="h-20 text-center text-muted-foreground">尚未添加入口 IP</TableCell></TableRow>}</TableBody></Table>
+          </DialogContent>
+        </Dialog>
+        <Dialog open={!!deleteNodeIds} onOpenChange={(open) => !open && setDeleteNodeIds(null)}>
+          <DialogContent>
+            <DialogHeader><DialogTitle>删除节点</DialogTitle><DialogDescription>将删除 {deleteNodeIds?.length || 0} 个节点，并从关联订阅中移除它们。</DialogDescription></DialogHeader>
+            {deleteImpact.length > 0 && <div className="rounded-md border bg-muted/30 p-3 text-sm"><p className="font-medium">受影响的订阅</p><ul className="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">{deleteImpact.map((item: any) => <li key={`${item.kind}-${item.id}`}>{item.kind}：{item.name}</li>)}</ul></div>}
+            <DialogFooter><Button variant="outline" onClick={() => setDeleteNodeIds(null)}>取消</Button><Button variant="destructive" onClick={() => { const ids = deleteNodeIds || []; setDeleteNodeIds(null); if (ids.length === 1) deleteNode.mutate({ id: ids[0] }); else if (ids.length) bulkNodes.mutate({ ids, action: "delete" }); }}>确认删除</Button></DialogFooter>
+          </DialogContent>
+        </Dialog>
         <Dialog
           open={!!nodeDialog}
           onOpenChange={(open) => !open && setNodeDialog(null)}
@@ -800,6 +872,10 @@ export default function ProxySubscriptionsPage() {
                     }
                   />
                 </Label>
+                <div><Label>所属分组（可多选）</Label><div className="mt-2 flex flex-wrap gap-2">{nodeGroups.map((group: any) => <Button key={group.id} type="button" size="sm" variant={(nodeDialog.groupIds || []).includes(group.id) ? "default" : "outline"} onClick={() => setNodeDialog({ ...nodeDialog, groupIds: (nodeDialog.groupIds || []).includes(group.id) ? (nodeDialog.groupIds || []).filter((id) => id !== group.id) : [...(nodeDialog.groupIds || []), group.id] })}>{group.name}</Button>)}</div></div>
+                <div><Label>关联配置订阅（可多选）</Label><div className="mt-2 flex flex-wrap gap-2">{subscriptions.map((sub: any) => <Button key={sub.id} type="button" size="sm" variant={(nodeDialog.configSubscriptionIds || []).includes(sub.id) ? "default" : "outline"} onClick={() => setNodeDialog({ ...nodeDialog, configSubscriptionIds: (nodeDialog.configSubscriptionIds || []).includes(sub.id) ? (nodeDialog.configSubscriptionIds || []).filter((id) => id !== sub.id) : [...(nodeDialog.configSubscriptionIds || []), sub.id] })}>{sub.name}</Button>)}</div></div>
+                <div><Label>关联节点订阅（可多选）</Label><div className="mt-2 flex flex-wrap gap-2">{nodeSubscriptions.map((sub: any) => <Button key={sub.id} type="button" size="sm" variant={(nodeDialog.nodeSubscriptionIds || []).includes(sub.id) ? "default" : "outline"} onClick={() => setNodeDialog({ ...nodeDialog, nodeSubscriptionIds: (nodeDialog.nodeSubscriptionIds || []).includes(sub.id) ? (nodeDialog.nodeSubscriptionIds || []).filter((id) => id !== sub.id) : [...(nodeDialog.nodeSubscriptionIds || []), sub.id] })}>{sub.name}</Button>)}</div></div>
+                <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={nodeDialog.enabled} onChange={(event) => setNodeDialog({ ...nodeDialog, enabled: event.target.checked })} />启用节点</label>
               </div>
             )}
             <DialogFooter>
@@ -810,22 +886,32 @@ export default function ProxySubscriptionsPage() {
           </DialogContent>
         </Dialog>
         <Dialog open={importOpen} onOpenChange={setImportOpen}>
-          <DialogContent>
+          <DialogContent className="max-h-[92vh] max-w-2xl overflow-y-auto">
             <DialogHeader>
-              <DialogTitle>批量导入节点</DialogTitle>
+              <DialogTitle>添加节点</DialogTitle>
               <DialogDescription>
-                每行一个 SS、SSR、VLESS 或 VMess 链接。
+                粘贴一个或多个节点链接；每行一个。名称会优先读取链接末尾备注。
               </DialogDescription>
             </DialogHeader>
             <Textarea
               className="min-h-56 font-mono text-xs"
               value={importText}
               onChange={(e) => setImportText(e.target.value)}
+              placeholder="ss://...\nvless://..."
             />
+            {!!importInspection.length && <div className="max-h-40 overflow-y-auto rounded-md border text-xs">{importInspection.map((item: any) => <div key={item.line} className="flex items-center justify-between gap-3 border-b px-3 py-2 last:border-b-0"><span className="truncate">第 {item.line} 行 · {item.name || item.server || "未知节点"}</span><Badge variant={item.valid ? (item.duplicate ? "secondary" : "default") : "destructive"}>{item.valid ? (item.duplicate ? "重复" : item.protocol.toUpperCase()) : item.reason}</Badge></div>)}</div>}
+            <div><Label>节点名称（可选，仅单条链接生效）</Label><Input className="mt-2" value={importName} onChange={(event) => setImportName(event.target.value)} placeholder="留空时自动读取链接末尾备注" /><p className="mt-1 text-xs text-muted-foreground">批量添加时，每条链接将使用自己的备注作为名称。</p></div>
+            <div><Label>所属分组（可多选）</Label><div className="mt-2 flex flex-wrap gap-2">{nodeGroups.map((group: any) => <Button key={group.id} type="button" size="sm" variant={importGroupIds.includes(group.id) ? "default" : "outline"} onClick={() => setImportGroupIds((current) => current.includes(group.id) ? current.filter((id) => id !== group.id) : [...current, group.id])}>{group.name}</Button>)}</div></div>
+            <div><Label>创建新分组（可选）</Label><Input className="mt-2" value={importNewGroupName} onChange={(event) => setImportNewGroupName(event.target.value)} placeholder="例如：香港 · 新节点会同时加入该分组" /></div>
+            <div><Label>关联配置订阅（可多选）</Label><div className="mt-2 flex flex-wrap gap-2">{subscriptions.map((sub: any) => <Button key={sub.id} type="button" size="sm" variant={importConfigSubscriptionIds.includes(sub.id) ? "default" : "outline"} onClick={() => setImportConfigSubscriptionIds((current) => current.includes(sub.id) ? current.filter((id) => id !== sub.id) : [...current, sub.id])}>{sub.name}</Button>)}</div></div>
+            <div><Label>关联节点订阅（可多选）</Label><div className="mt-2 flex flex-wrap gap-2">{nodeSubscriptions.map((sub: any) => <Button key={sub.id} type="button" size="sm" variant={importNodeSubscriptionIds.includes(sub.id) ? "default" : "outline"} onClick={() => setImportNodeSubscriptionIds((current) => current.includes(sub.id) ? current.filter((id) => id !== sub.id) : [...current, sub.id])}>{sub.name}</Button>)}</div></div>
+            <div><Label>替换入口 IP（仅 SS / VLESS）</Label><select className="mt-2 h-10 w-full rounded-md border bg-background px-3 text-sm" value={importReplaceIpId || ""} onChange={(event) => setImportReplaceIpId(event.target.value ? Number(event.target.value) : null)}><option value="">保持链接原服务器</option>{nodeIps.map((item: any) => <option key={item.id} value={item.id}>{item.alias} · {item.address}</option>)}</select><p className="mt-1 text-xs text-muted-foreground">仅影响本次导入，不会修改已保存节点；SSR / VMess 将保持原始服务器。</p></div>
+            <div><Label>发现重复链接时</Label><select className="mt-2 h-10 w-full rounded-md border bg-background px-3 text-sm" value={importDuplicateStrategy} onChange={(event) => setImportDuplicateStrategy(event.target.value as any)}><option value="skip">跳过重复项</option><option value="replace">更新已有节点</option><option value="allow">仍然创建</option></select></div>
             <DialogFooter>
-              <Button onClick={() => importNodes.mutate({ links: importText })}>
+              <Button variant="outline" onClick={() => setImportOpen(false)}>取消</Button>
+              <Button disabled={!importText.trim() || importNodes.isPending} onClick={() => importNodes.mutate({ links: importText, name: importName || undefined, groupIds: importGroupIds, newGroupName: importNewGroupName.trim() || undefined, configSubscriptionIds: importConfigSubscriptionIds, nodeSubscriptionIds: importNodeSubscriptionIds, replaceAddress: nodeIps.find((item: any) => item.id === importReplaceIpId)?.address, duplicateStrategy: importDuplicateStrategy })}>
                 <ListPlus className="mr-2 h-4 w-4" />
-                导入
+                添加节点
               </Button>
             </DialogFooter>
           </DialogContent>
