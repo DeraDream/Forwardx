@@ -87,9 +87,16 @@ export function installSublinkProxy(app: Express) {
 }
 
 export function startSublinkService(serverDir: string) {
-  const binary = path.resolve(serverDir, "../sublinkx/sublink");
-  if (!existsSync(binary)) {
-    console.warn(`[SublinkX] binary not found at ${binary}; proxy subscription pages are unavailable`);
+  // Release bundles keep runtime assets below dist/, while Docker copies the
+  // binary beside dist/. Support both layouts so the service starts after
+  // either installation method.
+  const binaries = [
+    path.resolve(serverDir, "sublinkx/sublink"),
+    path.resolve(serverDir, "../sublinkx/sublink"),
+  ];
+  const binary = binaries.find(existsSync);
+  if (!binary) {
+    console.warn(`[SublinkX] binary not found (${binaries.join(", ")}); proxy subscription pages are unavailable`);
     return;
   }
   const dataDir = process.env.FORWARDX_SUBLINK_DATA_DIR || "/data/sublinkx";

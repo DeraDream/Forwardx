@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.4.1] - 2026-10-23
+
+### Fixed
+
+- Start the bundled SublinkX service from both local-release and Docker runtime paths.
+- Panel / APK Release 升级至 `2.4.1`；Agent 保持 `2.2.231`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.4.0] - 2026-10-23
 
 ### 集成代理订阅管理
