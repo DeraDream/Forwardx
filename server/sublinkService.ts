@@ -22,7 +22,16 @@ function issueSublinkToken() {
 }
 
 async function requireForwardXAdmin(req: Request, res: Response) {
+  // SublinkX's iframe sends its own JWT in Authorization. ForwardX's context
+  // resolver normally prefers a bearer token over the session cookie, so it
+  // would try to verify the SublinkX JWT with ForwardX's cookie secret and
+  // reject an otherwise valid panel session. Authenticate this proxy boundary
+  // exclusively with the ForwardX browser cookie; the SublinkX token is added
+  // only after this check when forwarding upstream.
+  const authorization = req.headers.authorization;
+  delete req.headers.authorization;
   const context = await createContext({ req, res } as any);
+  if (authorization !== undefined) req.headers.authorization = authorization;
   if (!context.user) {
     res.status(401).json({ message: "ForwardX 登录已失效" });
     return false;
