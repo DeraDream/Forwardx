@@ -1339,7 +1339,7 @@ function DashboardLayoutContent({
     <>
       {isAdmin && location !== "/proxy-subscriptions" && (
         <iframe
-          src="/proxy-subscription?__forwardx_embed=1#/subs/index"
+          src={`/proxy-subscription?__forwardx_embed=1&forwardx_theme=${resolvedTheme}#/subs/index`}
           title="代理订阅预加载"
           aria-hidden="true"
           tabIndex={-1}

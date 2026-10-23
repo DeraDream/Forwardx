@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.4.4] - 2026-10-23
+
+### Improved
+
+- Synchronize embedded SublinkX light and dark modes with the resolved ForwardX theme, including live theme changes.
+- Panel / APK Release 升级至 `2.4.4`；Agent 保持 `2.2.231`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.4.3] - 2026-10-23
 
 ### Fixed

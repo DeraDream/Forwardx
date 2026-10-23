@@ -3,6 +3,7 @@ import DashboardLayout from "@/components/DashboardLayout";
 import { Tabs } from "@/components/ui/tabs";
 import { SlidingTabsList, type SlidingTabItem } from "@/components/ui/sliding-tabs";
 import DataSectionLoading from "@/components/DataSectionLoading";
+import { useTheme } from "@/contexts/ThemeContext";
 import { FileCode2, Link2, Network, Server } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -17,6 +18,7 @@ const sections: Array<SlidingTabItem<ProxySubscriptionSection> & { hash: string 
 
 /** SublinkX keeps its data UI intact; ForwardX supplies the native page shell. */
 export default function ProxySubscriptionsPage() {
+  const { resolvedTheme } = useTheme();
   const [activeSection, setActiveSection] = useState<ProxySubscriptionSection>("subscriptions");
   const [modalOpen, setModalOpen] = useState(false);
   const [loadingSection, setLoadingSection] = useState(true);
@@ -29,6 +31,18 @@ export default function ProxySubscriptionsPage() {
   };
 
   useEffect(() => () => window.clearTimeout(loadingTimerRef.current), []);
+
+  const syncEmbeddedTheme = () => {
+    iframeRef.current?.contentWindow?.postMessage({
+      source: "forwardx",
+      type: "theme",
+      theme: resolvedTheme,
+    }, window.location.origin);
+  };
+
+  useEffect(() => {
+    syncEmbeddedTheme();
+  }, [resolvedTheme]);
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
@@ -71,7 +85,7 @@ export default function ProxySubscriptionsPage() {
         <div className={cn("relative min-h-0 flex-1", modalOpen && "fixed inset-0 z-[100] bg-background")}>
           <iframe
             ref={iframeRef}
-            src="/proxy-subscription?__forwardx_embed=1#/subs/index"
+            src={`/proxy-subscription?__forwardx_embed=1&forwardx_theme=${resolvedTheme}#/subs/index`}
             title="代理订阅"
             className={cn(
               "h-full min-h-[36rem] w-full border-0 bg-background transition-opacity duration-200",
@@ -81,7 +95,10 @@ export default function ProxySubscriptionsPage() {
             sandbox="allow-downloads allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-presentation allow-same-origin allow-scripts allow-storage-access-by-user-activation"
             allow="clipboard-read; clipboard-write; fullscreen"
             referrerPolicy="no-referrer"
-            onLoad={() => finishSectionLoading(220)}
+            onLoad={() => {
+              syncEmbeddedTheme();
+              finishSectionLoading(220);
+            }}
           />
           {loadingSection && !modalOpen && (
             <div className="absolute inset-0 z-10 bg-background px-3 py-4 sm:px-6 sm:py-6">

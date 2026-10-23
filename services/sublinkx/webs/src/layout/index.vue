@@ -12,15 +12,22 @@
 
 <script setup lang="ts">
 import { onMounted, onUnmounted } from "vue";
-import { useAppStore } from "@/store";
+import { useAppStore, useSettingsStore } from "@/store";
 import { DeviceEnum } from "@/enums/DeviceEnum";
+import { ThemeEnum } from "@/enums/ThemeEnum";
 import MobileTabBar from "./components/MobileTabBar/index.vue";
 
 const appStore = useAppStore();
+const settingsStore = useSettingsStore();
 const width = useWindowSize().width;
 const MOBILE_WIDTH = 992;
 const embedded = new URLSearchParams(window.location.search).has("__forwardx_embed");
 let overlayObserver: MutationObserver | undefined;
+
+function syncForwardXTheme(value: unknown) {
+  if (!embedded || (value !== ThemeEnum.DARK && value !== ThemeEnum.LIGHT)) return;
+  settingsStore.changeTheme(value);
+}
 
 const classObj = computed(() => ({
   embedded,
@@ -32,6 +39,7 @@ const classObj = computed(() => ({
 onMounted(() => {
   if (!embedded) return;
   document.documentElement.classList.add("sublink-embedded");
+  syncForwardXTheme(new URLSearchParams(window.location.search).get("forwardx_theme"));
 
   // Element Plus teleports dialogs to body. Tell the ForwardX parent whenever
   // one is present so it can elevate this iframe above its own chrome.
@@ -65,11 +73,21 @@ onMounted(() => {
     attributeFilter: ["class", "style"],
   });
   reportModalState();
+
+  window.addEventListener("message", onForwardXMessage);
 });
+
+function onForwardXMessage(event: MessageEvent) {
+  if (event.origin !== window.location.origin || event.source !== window.parent) return;
+  if (event.data?.source === "forwardx" && event.data?.type === "theme") {
+    syncForwardXTheme(event.data.theme);
+  }
+}
 
 onUnmounted(() => {
   if (!embedded) return;
   overlayObserver?.disconnect();
+  window.removeEventListener("message", onForwardXMessage);
   document.documentElement.classList.remove("sublink-embedded");
 });
 

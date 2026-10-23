@@ -1,0 +1,1 @@
+import{s as t}from"./index.Bwbj6WgW.js";function e(){return t({url:"/api/v1/system/update/check",method:"get",skipErrorMessage:!0})}function s(){return t({url:"/api/v1/system/update/status",method:"get",timeout:1e4,skipErrorMessage:!0})}function r(){return t({url:"/api/v1/system/update/start",method:"post"})}export{e as c,s as g,r as s};
