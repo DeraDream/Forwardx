@@ -20,7 +20,9 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 COPY . .
 RUN bash scripts/build-agent-release.sh
-RUN cd services/sublinkx && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /app/dist/sublinkx/sublink .
+RUN cd services/sublinkx \
+  && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o /app/dist/sublinkx/sublink-linux-amd64 . \
+  && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o /app/dist/sublinkx/sublink-linux-arm64 .
 
 # ---------- 2. Production dependencies ----------
 FROM node:22-alpine AS prod-deps

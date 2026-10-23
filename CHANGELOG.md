@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.4.2] - 2026-10-23
+
+### Fixed
+
+- Bundle Linux AMD64 and ARM64 SublinkX binaries and select the matching runtime binary automatically.
+- Panel / APK Release 升级至 `2.4.2`；Agent 保持 `2.2.231`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.4.1] - 2026-10-23
 
 ### Fixed

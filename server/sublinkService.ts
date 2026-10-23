@@ -87,10 +87,13 @@ export function installSublinkProxy(app: Express) {
 }
 
 export function startSublinkService(serverDir: string) {
-  // Release bundles keep runtime assets below dist/, while Docker copies the
-  // binary beside dist/. Support both layouts so the service starts after
-  // either installation method.
+  const architecture = process.arch === "arm64" ? "arm64" : "amd64";
+  // Release bundles carry both Linux architectures below dist/. Docker copies
+  // the same assets beside dist/. The legacy filename is retained as a final
+  // fallback for existing development installations.
   const binaries = [
+    path.resolve(serverDir, `sublinkx/sublink-linux-${architecture}`),
+    path.resolve(serverDir, `../sublinkx/sublink-linux-${architecture}`),
     path.resolve(serverDir, "sublinkx/sublink"),
     path.resolve(serverDir, "../sublinkx/sublink"),
   ];

@@ -87,7 +87,8 @@ jobs:
         shell: bash
         run: |
           cd services/sublinkx
-          CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o ../../dist/sublinkx/sublink .
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o ../../dist/sublinkx/sublink-linux-amd64 .
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o ../../dist/sublinkx/sublink-linux-arm64 .
 
       - name: Package panel runtime bundle
         shell: bash
