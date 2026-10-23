@@ -83,6 +83,12 @@ jobs:
       - name: Build bundled Agent assets
         run: bash scripts/build-agent-release.sh
 
+      - name: Build bundled SublinkX assets
+        shell: bash
+        run: |
+          cd services/sublinkx
+          CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o ../../dist/sublinkx/sublink .
+
       - name: Package panel runtime bundle
         shell: bash
         env:
@@ -100,7 +106,8 @@ jobs:
             pnpm-workspace.yaml \
             scripts/install-panel-local.sh \
             scripts/install-panel-docker.sh \
-            scripts/migrate-agent-legacy.sh
+            scripts/migrate-agent-legacy.sh \
+            services/sublinkx/LICENSE
           cp ".release/${BUNDLE}" "dist/panel/${BUNDLE}"
           ls -lh "dist/panel/${BUNDLE}"
 

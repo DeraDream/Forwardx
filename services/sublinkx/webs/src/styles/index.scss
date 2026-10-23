@@ -1,5 +1,24 @@
 @use "./reset";
 
+// These values are consumed by the embedded layout. They must be global: when
+// declared from a scoped Vue component, the sidebar cannot inherit them and its
+// text can become invisible against the white background.
+:root {
+  --menu-background: #fff;
+  --menu-text: #475569;
+  --menu-active-text: #1d4ed8;
+  --menu-hover: #f1f5f9;
+  --sidebar-logo-background: #fff;
+}
+
+html.dark {
+  --menu-background: #10131b;
+  --menu-text: #cbd5e1;
+  --menu-active-text: #7dd3fc;
+  --menu-hover: #1a202b;
+  --sidebar-logo-background: #10131b;
+}
+
 .app-container {
   padding: 24px;
 }
@@ -1074,6 +1093,129 @@ html.dark .el-button.is-link:not(.is-disabled) {
 
 html.dark .el-button--danger.is-link:not(.is-disabled) {
   --el-button-text-color: #fca5a5;
+}
+
+// ForwardX owns the page shell when SublinkX is embedded. Keep the mature
+// subscription UI and behavior, but make its content surfaces use the same
+// spacing, table, button and dialog language as the surrounding panel.
+html.sublink-embedded {
+  background: #f8fafc;
+
+  body,
+  #app,
+  .app-shell,
+  .app-main {
+    min-height: 100%;
+    background: #f8fafc;
+  }
+
+  .page-workspace {
+    width: 100%;
+    max-width: none;
+    padding: 24px 32px 32px;
+  }
+
+  .page-heading {
+    margin-bottom: 20px;
+  }
+
+  .page-heading h1 {
+    font-size: 20px;
+    font-weight: 650;
+  }
+
+  .work-surface {
+    padding: 20px;
+    background: var(--el-bg-color);
+    border: 1px solid var(--el-border-color-lighter);
+    border-radius: 10px;
+    box-shadow: 0 1px 2px rgb(15 23 42 / 4%);
+  }
+
+  .table-toolbar {
+    min-height: 36px;
+    margin-bottom: 14px;
+  }
+
+  .el-button {
+    min-height: 34px;
+    padding: 8px 14px;
+    border-radius: 7px;
+    font-weight: 500;
+  }
+
+  .el-button--small {
+    min-height: 30px;
+    padding: 6px 10px;
+  }
+
+  .el-button.is-link {
+    min-height: 28px;
+    padding: 2px 5px;
+    border-radius: 5px;
+  }
+
+  .el-table {
+    overflow: hidden;
+    border: 1px solid var(--el-border-color-lighter);
+    border-radius: 8px;
+  }
+
+  .el-table th.el-table__cell {
+    height: 46px;
+    color: var(--el-text-color-secondary);
+    background: var(--el-fill-color-lighter);
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .el-table td.el-table__cell {
+    height: 54px;
+  }
+
+  .table-footer {
+    padding-top: 16px;
+    margin-top: 16px;
+  }
+
+  .el-dialog {
+    border-radius: 12px;
+    box-shadow: 0 24px 64px rgb(15 23 42 / 20%);
+  }
+
+  .el-dialog__header {
+    padding: 20px 24px 16px;
+  }
+
+  .el-dialog__body {
+    padding: 20px 24px;
+  }
+
+  .el-dialog__footer {
+    padding: 14px 24px;
+  }
+}
+
+html.dark.sublink-embedded {
+  background: #090b10;
+
+  body,
+  #app,
+  .app-shell,
+  .app-main {
+    background: #090b10;
+  }
+
+  .work-surface {
+    border-color: #252c38;
+    box-shadow: 0 1px 2px rgb(0 0 0 / 20%);
+  }
+}
+
+@media (max-width: 768px) {
+  html.sublink-embedded .page-workspace {
+    padding: 14px 12px 24px;
+  }
 }
 
 html.dark .sidebar-container .el-menu-item.is-active,

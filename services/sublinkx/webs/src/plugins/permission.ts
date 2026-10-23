@@ -3,18 +3,45 @@ import { useUserStore, usePermissionStore } from "@/store";
 import NProgress from "@/utils/nprogress";
 import { RouteRecordRaw } from "vue-router";
 
+// Starting the bar on every in-app navigation made cached page switches feel
+// slower than they are. Keep feedback for real work (initial permissions,
+// lazy chunks, or a slow request), but do not flash it for an instant switch.
+let progressTimer: ReturnType<typeof setTimeout> | undefined;
+const PROGRESS_DELAY_MS = 160;
+const isForwardXEmbed = new URLSearchParams(window.location.search).has("__forwardx_embed");
+
+function scheduleProgress() {
+  // ForwardX already owns the outer navigation. On the first embedded load,
+  // SublinkX registers its dynamic routes asynchronously and its own bar would
+  // flash beneath the ForwardX shell despite there being no user action.
+  if (isForwardXEmbed) return;
+  if (progressTimer) clearTimeout(progressTimer);
+  progressTimer = setTimeout(() => {
+    progressTimer = undefined;
+    NProgress.start();
+  }, PROGRESS_DELAY_MS);
+}
+
+function finishProgress() {
+  if (progressTimer) {
+    clearTimeout(progressTimer);
+    progressTimer = undefined;
+  }
+  if (!isForwardXEmbed) NProgress.done();
+}
+
 export function setupPermission() {
   // 白名单路由
   const whiteList = ["/login"];
 
   router.beforeEach(async (to, from, next) => {
-    NProgress.start();
+    scheduleProgress();
     const hasToken = localStorage.getItem("accessToken");
     if (hasToken) {
       if (to.path === "/login") {
         // 如果已登录，跳转首页
         next({ path: "/" });
-        NProgress.done();
+        finishProgress();
       } else {
         const userStore = useUserStore();
         const hasRoles =
@@ -39,7 +66,7 @@ export function setupPermission() {
             // 移除 token 并跳转登录页
             await userStore.resetToken();
             next(`/login?redirect=${to.path}`);
-            NProgress.done();
+            finishProgress();
           }
         }
       }
@@ -49,12 +76,12 @@ export function setupPermission() {
         next();
       } else {
         next(`/login?redirect=${to.path}`);
-        NProgress.done();
+        finishProgress();
       }
     }
   });
 
   router.afterEach(() => {
-    NProgress.done();
+    finishProgress();
   });
 }

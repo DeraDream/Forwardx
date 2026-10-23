@@ -177,32 +177,6 @@ func GetMenus(c *gin.Context) {
 				},
 			},
 		},
-		{
-			Path:      "/settings",
-			Component: "Layout",
-			Redirect:  "/settings/telegram",
-			Name:      "settings",
-			Meta: Meta{
-				Title:  "settingsmenu",
-				Icon:   "setting",
-				Hidden: false,
-				Roles:  []string{"ADMIN"},
-			},
-			Children: []Child{
-				{
-					Path:      "telegram",
-					Component: "settings/telegram",
-					Name:      "TelegramBot",
-					Meta: Meta{
-						Title:     "settingsmenu",
-						Icon:      "setting",
-						Hidden:    false,
-						Roles:     []string{"ADMIN"},
-						KeepAlive: true,
-					},
-				},
-			},
-		},
 	}
 	c.JSON(200, gin.H{
 		"code": "00000",

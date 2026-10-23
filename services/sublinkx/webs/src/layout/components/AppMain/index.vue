@@ -1,7 +1,13 @@
 <template>
   <main class="app-main">
     <router-view v-slot="{ Component, route }">
-      <component :is="Component" :key="route.path" />
+      <!-- The existing route metadata marks the management pages as cacheable.
+           Keep their UI instance after the first visit so menu switches do not
+           recreate a table and refetch its initial data every time. -->
+      <KeepAlive>
+        <component v-if="route.meta.keepAlive" :is="Component" :key="route.path" />
+      </KeepAlive>
+      <component v-if="!route.meta.keepAlive" :is="Component" :key="route.path" />
     </router-view>
   </main>
 </template>

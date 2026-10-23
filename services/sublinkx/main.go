@@ -81,7 +81,11 @@ func main() {
 	// 初始化配置
 	models.ConfigInit()
 	config := models.ReadConfig() // 读取配置文件
-	middlewares.SetSecret(config.JwtSecret)
+	jwtSecret := os.Getenv("FORWARDX_SUBLINK_JWT_SECRET")
+	if jwtSecret == "" {
+		jwtSecret = config.JwtSecret
+	}
+	middlewares.SetSecret(jwtSecret)
 	var port = config.Port // 读取端口号
 	// 初始化数据库
 	models.InitSqlite()
@@ -166,5 +170,9 @@ func Run(port int) {
 	routers.Version(r, version)
 	routers.SystemUpdate(r, version)
 	// 启动服务
-	r.Run(fmt.Sprintf("0.0.0.0:%d", port))
+	host := os.Getenv("FORWARDX_SUBLINK_HOST")
+	if host == "" {
+		host = "0.0.0.0"
+	}
+	r.Run(fmt.Sprintf("%s:%d", host, port))
 }

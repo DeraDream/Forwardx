@@ -1,16 +1,17 @@
 <template>
   <div class="app-shell" :class="classObj">
-    <Sidebar v-if="!classObj.mobile" class="sidebar-container" />
+    <Sidebar v-if="!embedded && !classObj.mobile" class="sidebar-container" />
 
     <div class="main-container">
-      <NavBar class="fixed-header" />
+      <NavBar v-if="!embedded" class="fixed-header" />
       <AppMain />
     </div>
-    <MobileTabBar v-if="classObj.mobile" />
+    <MobileTabBar v-if="!embedded && classObj.mobile" />
   </div>
 </template>
 
 <script setup lang="ts">
+import { onMounted, onUnmounted } from "vue";
 import { useAppStore } from "@/store";
 import { DeviceEnum } from "@/enums/DeviceEnum";
 import MobileTabBar from "./components/MobileTabBar/index.vue";
@@ -18,12 +19,59 @@ import MobileTabBar from "./components/MobileTabBar/index.vue";
 const appStore = useAppStore();
 const width = useWindowSize().width;
 const MOBILE_WIDTH = 992;
+const embedded = new URLSearchParams(window.location.search).has("__forwardx_embed");
+let overlayObserver: MutationObserver | undefined;
 
 const classObj = computed(() => ({
+  embedded,
   hideSidebar: !appStore.sidebar.opened,
   openSidebar: appStore.sidebar.opened,
   mobile: appStore.device === DeviceEnum.MOBILE,
 }));
+
+onMounted(() => {
+  if (!embedded) return;
+  document.documentElement.classList.add("sublink-embedded");
+
+  // Element Plus teleports dialogs to body. Tell the ForwardX parent whenever
+  // one is present so it can elevate this iframe above its own chrome.
+  let hasUserInteracted = false;
+  const reportModalState = () => {
+    const hasVisibleModal = Array.from(
+      document.querySelectorAll<HTMLElement>(".el-overlay"),
+    ).some((overlay) => {
+      // Selects, tooltips and other floating widgets also use overlay nodes.
+      // Only real dialogs and confirmation boxes should cover ForwardX.
+      const modal = overlay.querySelector<HTMLElement>(".el-dialog, .el-message-box");
+      return !!modal && getComputedStyle(overlay).display !== "none" && getComputedStyle(modal).display !== "none";
+    });
+    window.parent.postMessage({
+      source: "sublinkx",
+      type: "modal",
+      // Several pages mount hidden dialog shells during initial render. They
+      // are not user-visible dialogs and must never hide ForwardX's tab bar.
+      open: hasUserInteracted && hasVisibleModal,
+    }, window.location.origin);
+  };
+  document.addEventListener("pointerdown", () => {
+    hasUserInteracted = true;
+    reportModalState();
+  }, { capture: true, once: true });
+  overlayObserver = new MutationObserver(reportModalState);
+  overlayObserver.observe(document.body, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["class", "style"],
+  });
+  reportModalState();
+});
+
+onUnmounted(() => {
+  if (!embedded) return;
+  overlayObserver?.disconnect();
+  document.documentElement.classList.remove("sublink-embedded");
+});
 
 watchEffect(() => {
   if (width.value < MOBILE_WIDTH) {
@@ -64,6 +112,19 @@ watchEffect(() => {
   min-height: 100vh;
   margin-left: $sidebar-width;
   transition: margin-left 0.2s ease;
+}
+
+.embedded {
+  .main-container {
+    width: 100%;
+    min-height: 100%;
+    margin-left: 0;
+  }
+
+  :deep(.app-main) {
+    min-height: 100%;
+    padding-top: 0;
+  }
 }
 
 .fixed-header {

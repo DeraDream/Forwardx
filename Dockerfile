@@ -20,6 +20,7 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 COPY . .
 RUN bash scripts/build-agent-release.sh
+RUN cd services/sublinkx && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /app/dist/sublinkx/sublink .
 
 # ---------- 2. Production dependencies ----------
 FROM node:22-alpine AS prod-deps
@@ -50,7 +51,9 @@ VOLUME ["/data"]
 COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY --from=agent-assets /app/dist/agent ./dist/agent
+COPY --from=agent-assets /app/dist/sublinkx ./sublinkx
 COPY --from=builder /app/THIRD_PARTY_NOTICES.md ./THIRD_PARTY_NOTICES.md
+COPY --from=agent-assets /app/services/sublinkx/LICENSE ./SUBLINKX_LICENSE
 COPY --from=builder /app/client/dist ./client/dist
 COPY --from=builder /app/drizzle ./drizzle
 COPY --from=builder /app/package.json ./

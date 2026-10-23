@@ -20,6 +20,7 @@ import { initializePanelClock } from "./panelClock";
 import { ENV } from "./env";
 import { resolveTrustProxySetting } from "./trustProxy";
 import { authCapRouter } from "./authCaptcha";
+import { installSublinkProxy, startSublinkService, stopSublinkService } from "./sublinkService";
 
 installPanelLogger();
 
@@ -125,13 +126,17 @@ async function startServer() {
     : createHttpServer(app);
   installSecurityHeaders(app);
 
+  // The embedded SublinkX UI must see the original request body, so its
+  // proxy is installed before ForwardX's JSON and URL-encoded parsers.
+  app.use(cookieParser());
+  installMobileCors(app);
+  installSublinkProxy(app);
+
   // Payment webhooks need the original request body for signature verification.
   app.use(paymentCallbackRouter);
   // Plugin archives are accepted as base64 JSON and can expand beyond the 5 MB binary limit.
   app.use(express.json({ limit: "10mb" }));
   app.use(express.urlencoded({ limit: "1mb", extended: true }));
-  app.use(cookieParser());
-  installMobileCors(app);
   app.use(authCapRouter);
   app.use(agentRouter);
   app.use(migrationRouter);
@@ -167,6 +172,8 @@ async function startServer() {
         + ` startupMs=${Date.now() - startupStartedAt} database=${databaseStatus.ready ? "ready" : "not-ready"}`,
     );
   };
+  startSublinkService(serverDir);
+  server.on("close", stopSublinkService);
   if (listenHost) server.listen(port, listenHost, onListening);
   else server.listen(port, onListening);
 

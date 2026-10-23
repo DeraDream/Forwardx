@@ -28,6 +28,7 @@ import NetworkTopologyPage from "@/pages/NetworkTopology";
 import PaymentsPage from "@/pages/Payments";
 import PlansPage from "@/pages/Plans";
 import PluginsPage from "@/pages/Plugins";
+import ProxySubscriptionsPage from "@/pages/ProxySubscriptions";
 import ProfilePage from "@/pages/Profile";
 import RulesPage from "@/pages/Rules";
 import SettingsPage from "@/pages/Settings";
@@ -115,6 +116,7 @@ function Router() {
         {(params) => <PluginsRoute sidebarPluginId={params.pluginId} />}
       </Route>
       <Route path="/plugins">{() => <PluginsRoute />}</Route>
+      <Route path="/proxy-subscriptions">{() => <AdminRoute component={ProxySubscriptionsPage} />}</Route>
       <Route path="/store">{routeComponent(StorePage)}</Route>
       <Route path="/subscriptions">{routeComponent(SubscriptionsPage)}</Route>
       <Route path="/wallet">{routeComponent(WalletPage)}</Route>
