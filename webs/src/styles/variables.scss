@@ -1,0 +1,29 @@
+/** 全局SCSS变量 */
+
+:root {
+  --menu-background: #fff;
+  --menu-text: #475569;
+  --menu-active-text: #1d4ed8;
+  --menu-hover: #f1f5f9;
+  --sidebar-logo-background: #fff;
+}
+
+/** 暗黑主题 */
+html.dark {
+  --menu-background: #10131b;
+  --menu-text: #cbd5e1;
+  --menu-active-text: #7dd3fc;
+  --menu-hover: #1a202b;
+  --sidebar-logo-background: #10131b;
+}
+
+$menu-background: var(--menu-background); // 菜单背景色
+$menu-text: var(--menu-text); // 菜单文字颜色
+$menu-active-text: var(--menu-active-text); // 菜单激活文字颜色
+$menu-hover: var(--menu-hover); // 菜单悬停背景色
+$sidebar-logo-background: var(--sidebar-logo-background); // 侧边栏 Logo 背景色
+
+$sidebar-width: 224px; // 侧边栏宽度
+$sidebar-width-collapsed: 64px; // 侧边栏收缩宽度
+$navbar-height: 56px; // 导航栏高度
+$tags-view-height: 34px; // TagsView 高度

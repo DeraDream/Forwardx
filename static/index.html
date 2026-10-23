@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" href="/static/favicon.ico" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>sublinkX节点订阅管理系统</title>
+    <script type="module" crossorigin src="/static/js/index.BS3R9SsR.js"></script>
+    <link rel="modulepreload" crossorigin href="/static/js/vendor.C5_alTb0.js">
+    <link rel="modulepreload" crossorigin href="/static/js/vue-vendor.C_7E4o5w.js">
+    <link rel="modulepreload" crossorigin href="/static/js/element-plus.BOHwhYYM.js">
+    <link rel="stylesheet" crossorigin href="/static/css/vendor.DlemIDQn.css">
+    <link rel="stylesheet" crossorigin href="/static/css/element-plus.0Ynat7Vb.css">
+    <link rel="stylesheet" crossorigin href="/static/css/index.AIKu_6pN.css">
+  </head>
+
+  <body>
+    <div id="app">
+      <div class="loader"></div>
+    </div>
+  </body>
+
+  <style>
+    html,
+    body,
+    #app {
+      width: 100%;
+      height: 100%;
+    }
+
+    .loader {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      width: 40px;
+      aspect-ratio: 0.577;
+      overflow: hidden;
+      clip-path: polygon(0 0, 100% 100%, 0 100%, 100% 0);
+      animation: l19 2s infinite linear;
+      transform: translate(-50%, -50%);
+    }
+
+    .loader::before {
+      position: absolute;
+      inset: -150%;
+      content: "";
+      background: repeating-conic-gradient(
+        from 30deg,
+        #ffabab 0 60deg,
+        #abe4ff 0 120deg,
+        #ff7373 0 180deg
+      );
+      animation: inherit;
+      animation-direction: reverse;
+    }
+
+    @keyframes l19 {
+      100% {
+        transform: translate(-50%, -50%) rotate(360deg);
+      }
+    }
+  </style>
+</html>
