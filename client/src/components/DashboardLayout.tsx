@@ -58,6 +58,7 @@ import {
   ExternalLink,
   Image,
   Globe2,
+  BookOpen,
   BellOff,
   Puzzle,
   type LucideIcon,
@@ -104,6 +105,7 @@ const mainMenuItems: SidebarNavItem[] = [
   { icon: ArrowRightLeft, label: "转发规则", path: "/rules" },
   { icon: Network, label: "网络拓扑", path: "/network-topology" },
   { icon: Link2, label: "全链路", path: "/full-chains" },
+  { icon: BookOpen, label: "订阅", path: "/subscription-center" },
   { icon: Send, label: "代理订阅", path: "/proxy-subscriptions" },
 ];
 const profileMenuItem: SidebarNavItem = { icon: UserRound, label: "个人资料", path: "/profile", menuKey: "profile" };
