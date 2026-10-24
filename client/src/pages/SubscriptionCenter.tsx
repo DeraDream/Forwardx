@@ -452,7 +452,7 @@ export default function SubscriptionCenterPage() {
     </DropdownMenu>
   );
 
-  const isSubscriptionWizardOpen = editorMode === "subscription";
+  const isSubscriptionWizardOpen = ["subscription"].includes(editorMode ?? "");
 
   return (
     <DashboardLayout>
