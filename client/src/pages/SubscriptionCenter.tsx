@@ -452,6 +452,8 @@ export default function SubscriptionCenterPage() {
     </DropdownMenu>
   );
 
+  const isSubscriptionWizardOpen = editorMode === "subscription";
+
   return (
     <DashboardLayout>
       <div className="space-y-6">
@@ -605,7 +607,7 @@ export default function SubscriptionCenterPage() {
           </section>
         )}
         <input ref={templateFileInputRef} className="hidden" type="file" accept=".yaml,.yml,.conf,.list,text/yaml,text/plain" onChange={(event) => { void importTemplateFile(event.target.files?.[0]); event.currentTarget.value = ""; }} />
-        {editorMode === "subscription" ? <SubscriptionWizard
+        {isSubscriptionWizardOpen ? <SubscriptionWizard
           open
           step={subscriptionStep} setStep={setSubscriptionStep}
           name={editorName} setName={setEditorName}
