@@ -1099,14 +1099,67 @@ html.dark .el-button--danger.is-link:not(.is-disabled) {
 // subscription UI and behavior, but make its content surfaces use the same
 // spacing, table, button and dialog language as the surrounding panel.
 html.sublink-embedded {
-  background: #f8fafc;
+  --el-color-primary: var(--forwardx-primary, #409eff);
+  --el-color-primary-light-3: color-mix(in srgb, var(--forwardx-primary, #409eff) 70%, white);
+  --el-color-primary-light-5: color-mix(in srgb, var(--forwardx-primary, #409eff) 50%, white);
+  --el-color-primary-light-7: color-mix(in srgb, var(--forwardx-primary, #409eff) 30%, white);
+  --el-color-primary-light-9: color-mix(in srgb, var(--forwardx-primary, #409eff) 12%, white);
+  --el-color-primary-dark-2: color-mix(in srgb, var(--forwardx-primary, #409eff) 82%, black);
+  --el-bg-color-page: transparent;
+  --el-bg-color: color-mix(in srgb, var(--forwardx-card, var(--forwardx-background, #fff)) 82%, transparent);
+  --el-bg-color-overlay: color-mix(in srgb, var(--forwardx-card, var(--forwardx-background, #fff)) 96%, transparent);
+  --el-fill-color-blank: var(--el-bg-color);
+  --el-fill-color-light: color-mix(in srgb, var(--forwardx-muted, var(--forwardx-background, #f8fafc)) 74%, transparent);
+  --el-fill-color-lighter: color-mix(in srgb, var(--forwardx-muted, var(--forwardx-background, #f8fafc)) 58%, transparent);
+  --el-border-color: color-mix(in srgb, var(--forwardx-border, #cbd5e1) 78%, transparent);
+  --el-border-color-light: color-mix(in srgb, var(--forwardx-border, #cbd5e1) 62%, transparent);
+  --el-border-color-lighter: color-mix(in srgb, var(--forwardx-border, #cbd5e1) 48%, transparent);
+  --el-text-color-primary: var(--forwardx-foreground, #0f172a);
+  --el-text-color-regular: color-mix(in srgb, var(--forwardx-foreground, #334155) 82%, transparent);
+  --el-text-color-secondary: var(--forwardx-muted-foreground, #64748b);
+  background: transparent;
 
   body,
   #app,
   .app-shell,
   .app-main {
     min-height: 100%;
-    background: #f8fafc;
+    background: transparent;
+  }
+
+  body {
+    position: relative;
+  }
+
+  body::before {
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    display: block;
+    pointer-events: none;
+    content: "";
+    background: var(--forwardx-background-image, none) center / cover no-repeat;
+    filter: blur(var(--forwardx-background-blur, 0));
+    transform: scale(calc(1 + var(--forwardx-background-blur, 0) / 320));
+    opacity: var(--forwardx-background-opacity, 0);
+  }
+
+  #app {
+    position: relative;
+    z-index: 1;
+  }
+
+  .sublink-forwardx-background-video {
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    pointer-events: none;
+    filter: blur(var(--forwardx-background-blur, 0));
+    transform: scale(calc(1 + var(--forwardx-background-blur, 0) / 320));
+    opacity: var(--forwardx-background-opacity, 0);
   }
 
   .page-workspace {
@@ -1129,7 +1182,9 @@ html.sublink-embedded {
     background: var(--el-bg-color);
     border: 1px solid var(--el-border-color-lighter);
     border-radius: 10px;
-    box-shadow: 0 1px 2px rgb(15 23 42 / 4%);
+    box-shadow: 0 1px 2px rgb(15 23 42 / 12%);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
   }
 
   .table-toolbar {

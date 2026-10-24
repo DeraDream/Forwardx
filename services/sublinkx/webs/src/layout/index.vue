@@ -23,10 +23,50 @@ const width = useWindowSize().width;
 const MOBILE_WIDTH = 992;
 const embedded = new URLSearchParams(window.location.search).has("__forwardx_embed");
 let overlayObserver: MutationObserver | undefined;
+let forwardedBackgroundVideo: HTMLVideoElement | undefined;
 
 function syncForwardXTheme(value: unknown) {
   if (!embedded || (value !== ThemeEnum.DARK && value !== ThemeEnum.LIGHT)) return;
   settingsStore.changeTheme(value);
+}
+
+function syncForwardXAppearance(value: any) {
+  if (!embedded || !value || typeof value !== "object") return;
+  syncForwardXTheme(value.theme);
+
+  const root = document.documentElement;
+  const colors = value.colors && typeof value.colors === "object" ? value.colors : {};
+  for (const [name, color] of Object.entries(colors)) {
+    if (typeof color === "string" && color) root.style.setProperty(`--forwardx-${name}`, color);
+  }
+
+  const background = value.background && typeof value.background === "object" ? value.background : {};
+  const url = typeof background.url === "string" ? background.url : "";
+  const opacity = Math.min(1, Math.max(0, Number(background.opacity) || 0));
+  const blur = Math.min(32, Math.max(0, Number(background.blur) || 0));
+  const isVideo = background.source === "url" && background.urlType === "video" && !!url;
+  const hasImage = background.source !== "none" && !isVideo && !!url;
+
+  root.style.setProperty("--forwardx-background-opacity", String(opacity));
+  root.style.setProperty("--forwardx-background-blur", `${blur}px`);
+  root.style.setProperty("--forwardx-background-image", hasImage ? `url(${JSON.stringify(url)})` : "none");
+  root.toggleAttribute("data-forwardx-background", hasImage || isVideo);
+
+  if (isVideo) {
+    if (!forwardedBackgroundVideo) {
+      forwardedBackgroundVideo = document.createElement("video");
+      forwardedBackgroundVideo.className = "sublink-forwardx-background-video";
+      forwardedBackgroundVideo.autoplay = true;
+      forwardedBackgroundVideo.muted = true;
+      forwardedBackgroundVideo.loop = true;
+      forwardedBackgroundVideo.playsInline = true;
+      document.body.prepend(forwardedBackgroundVideo);
+    }
+    if (forwardedBackgroundVideo.src !== new URL(url, window.location.href).href) forwardedBackgroundVideo.src = url;
+  } else {
+    forwardedBackgroundVideo?.remove();
+    forwardedBackgroundVideo = undefined;
+  }
 }
 
 const classObj = computed(() => ({
@@ -79,7 +119,9 @@ onMounted(() => {
 
 function onForwardXMessage(event: MessageEvent) {
   if (event.origin !== window.location.origin || event.source !== window.parent) return;
-  if (event.data?.source === "forwardx" && event.data?.type === "theme") {
+  if (event.data?.source === "forwardx" && event.data?.type === "appearance") {
+    syncForwardXAppearance(event.data);
+  } else if (event.data?.source === "forwardx" && event.data?.type === "theme") {
     syncForwardXTheme(event.data.theme);
   }
 }
@@ -87,6 +129,8 @@ function onForwardXMessage(event: MessageEvent) {
 onUnmounted(() => {
   if (!embedded) return;
   overlayObserver?.disconnect();
+  forwardedBackgroundVideo?.remove();
+  forwardedBackgroundVideo = undefined;
   window.removeEventListener("message", onForwardXMessage);
   document.documentElement.classList.remove("sublink-embedded");
 });

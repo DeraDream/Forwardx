@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Tabs } from "@/components/ui/tabs";
 import { SlidingTabsList, type SlidingTabItem } from "@/components/ui/sliding-tabs";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import { useTheme } from "@/contexts/ThemeContext";
+import { trpc } from "@/lib/trpc";
 import { FileCode2, Link2, Network, Server } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -19,10 +20,17 @@ const sections: Array<SlidingTabItem<ProxySubscriptionSection> & { hash: string 
 /** SublinkX keeps its data UI intact; ForwardX supplies the native page shell. */
 export default function ProxySubscriptionsPage() {
   const { resolvedTheme } = useTheme();
+  const { data: publicInfo } = trpc.system.publicInfo.useQuery(undefined, {
+    refetchOnWindowFocus: false,
+    retry: false,
+    staleTime: 60_000,
+  });
   const [activeSection, setActiveSection] = useState<ProxySubscriptionSection>("subscriptions");
   const [modalOpen, setModalOpen] = useState(false);
+  const [modalViewport, setModalViewport] = useState<CSSProperties>();
   const [loadingSection, setLoadingSection] = useState(true);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const pageHeaderRef = useRef<HTMLDivElement>(null);
   const loadingTimerRef = useRef<number | undefined>(undefined);
 
   const finishSectionLoading = (delay = 180) => {
@@ -32,17 +40,65 @@ export default function ProxySubscriptionsPage() {
 
   useEffect(() => () => window.clearTimeout(loadingTimerRef.current), []);
 
-  const syncEmbeddedTheme = () => {
+  useLayoutEffect(() => {
+    if (!modalOpen) {
+      setModalViewport(undefined);
+      return;
+    }
+    const syncModalViewport = () => {
+      const rect = pageHeaderRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      // An iframe cannot let its Element Plus dialog escape its own viewport.
+      // Expand that viewport only beneath the native page header, preserving
+      // the ForwardX section tabs while the dialog is open.
+      setModalViewport({
+        top: Math.max(0, rect.bottom),
+        left: Math.max(0, rect.left),
+        right: Math.max(0, window.innerWidth - rect.right),
+        bottom: 0,
+      });
+    };
+    syncModalViewport();
+    window.addEventListener("resize", syncModalViewport);
+    window.addEventListener("scroll", syncModalViewport, true);
+    return () => {
+      window.removeEventListener("resize", syncModalViewport);
+      window.removeEventListener("scroll", syncModalViewport, true);
+    };
+  }, [modalOpen]);
+
+  const syncEmbeddedAppearance = () => {
+    const rootStyle = getComputedStyle(document.documentElement);
+    const background = publicInfo?.personalizationBackground;
     iframeRef.current?.contentWindow?.postMessage({
       source: "forwardx",
-      type: "theme",
+      type: "appearance",
       theme: resolvedTheme,
+      colors: Object.fromEntries([
+        "background",
+        "foreground",
+        "card",
+        "card-foreground",
+        "muted",
+        "muted-foreground",
+        "border",
+        "primary",
+        "primary-foreground",
+        "ring",
+      ].map((name) => [name, rootStyle.getPropertyValue(`--${name}`).trim()])),
+      background: {
+        source: background?.source || "none",
+        urlType: background?.urlType || "image",
+        url: background?.effectiveUrl || "",
+        opacity: background?.opacity ?? 0.22,
+        blur: background?.blur ?? 0,
+      },
     }, window.location.origin);
   };
 
   useEffect(() => {
-    syncEmbeddedTheme();
-  }, [resolvedTheme]);
+    syncEmbeddedAppearance();
+  }, [publicInfo, resolvedTheme]);
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
@@ -73,7 +129,7 @@ export default function ProxySubscriptionsPage() {
   return (
     <DashboardLayout>
       <div className="-m-3 flex min-h-[calc(100svh-3.5rem)] flex-col bg-background sm:-m-6">
-        <div className="space-y-4 border-b border-border/60 px-3 pb-4 pt-3 sm:px-6 sm:pt-5">
+        <div ref={pageHeaderRef} className="relative z-[101] space-y-4 border-b border-border/60 px-3 pb-4 pt-3 sm:px-6 sm:pt-5">
           <div>
             <h1 className="text-xl font-bold tracking-tight sm:text-2xl">代理订阅</h1>
             <p className="mt-1 text-xs text-muted-foreground sm:text-sm">管理订阅源、节点与订阅模板</p>
@@ -82,7 +138,10 @@ export default function ProxySubscriptionsPage() {
             <SlidingTabsList items={sections} activeValue={activeSection} ariaLabel="代理订阅" minItemWidthRem={7.5} />
           </Tabs>
         </div>
-        <div className={cn("relative min-h-0 flex-1", modalOpen && "fixed inset-0 z-[100] bg-background")}>
+        <div
+          className={cn("relative min-h-0 flex-1", modalOpen && "fixed z-[100] bg-background")}
+          style={modalOpen ? modalViewport : undefined}
+        >
           <iframe
             ref={iframeRef}
             src={`/proxy-subscription?__forwardx_embed=1&forwardx_theme=${resolvedTheme}#/subs/index`}
@@ -96,7 +155,7 @@ export default function ProxySubscriptionsPage() {
             allow="clipboard-read; clipboard-write; fullscreen"
             referrerPolicy="no-referrer"
             onLoad={() => {
-              syncEmbeddedTheme();
+              syncEmbeddedAppearance();
               finishSectionLoading(220);
             }}
           />

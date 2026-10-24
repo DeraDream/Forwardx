@@ -607,10 +607,19 @@ const resetWizardForm = () => {
   manualGroupNames.value = [];
 };
 
-const handleAddSub = () => {
+const handleAddSub = async () => {
   subMode.value = "add";
   resetWizardForm();
-  dialogVisible.value = true;
+  // This view is kept alive while switching between the embedded pages. A
+  // node may have been added after its initial mount, so always refresh the
+  // source list before starting a new subscription wizard.
+  try {
+    await getnodes();
+  } catch {
+    ElMessage.warning("节点列表刷新失败，将显示上次读取的数据");
+  } finally {
+    dialogVisible.value = true;
+  }
 };
 
 const handleEdit = (row: any) => {
