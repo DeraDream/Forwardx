@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.4.7] - 2026-10-24
+
+### Fixed
+
+- 修复订阅创建向导的 TypeScript 类型收窄与 React 子节点类型错误，恢复 GitHub Actions 面板与 Android 打包。
+- Panel / APK Release 升级至 `2.4.7`；Agent 保持 `2.2.231`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.4.6] - 2026-10-24
 
 ### Improved
