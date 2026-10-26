@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 type Section = { name: string; lines: string[] };
 type Group = {
@@ -159,23 +160,21 @@ export function LoonVisualEditor({ value, onChange, onError }: Props) {
                 )
               }
             />
-            <select
-              className="h-10 rounded-md border border-input bg-background px-3"
+            <Select
               value={group.type}
-              onChange={(event) =>
+              onValueChange={(type) =>
                 setGroups((items) =>
                   items.map((item, position) =>
                     position === index
-                      ? { ...item, type: event.target.value }
+                      ? { ...item, type }
                       : item,
                   ),
                 )
               }
             >
-              {types.map((type) => (
-                <option key={type}>{type}</option>
-              ))}
-            </select>
+              <SelectTrigger className="h-10 border-input bg-background"><SelectValue /></SelectTrigger>
+              <SelectContent>{types.map((type) => <SelectItem key={type} value={type}>{type}</SelectItem>)}</SelectContent>
+            </Select>
           </div>
           <Input
             value={group.policies.join(", ")}

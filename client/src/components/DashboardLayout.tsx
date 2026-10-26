@@ -104,9 +104,8 @@ const mainMenuItems: SidebarNavItem[] = [
   { icon: Route, label: "链路管理", path: "/tunnels" },
   { icon: ArrowRightLeft, label: "转发规则", path: "/rules" },
   { icon: Network, label: "网络拓扑", path: "/network-topology" },
-  { icon: Link2, label: "全链路", path: "/full-chains" },
-  { icon: BookOpen, label: "订阅", path: "/subscription-center" },
-  { icon: Send, label: "代理订阅", path: "/proxy-subscriptions" },
+  { icon: Link2, label: "全链路", path: "/full-chains", menuKey: "fullChains" },
+  { icon: BookOpen, label: "订阅", path: "/subscription-center", menuKey: "subscriptions" },
 ];
 const profileMenuItem: SidebarNavItem = { icon: UserRound, label: "个人资料", path: "/profile", menuKey: "profile" };
 const lookingGlassMenuItem: SidebarNavItem = { icon: Globe2, label: "网络测试", path: "/looking-glass", menuKey: "lookingGlass" };
@@ -1339,15 +1338,6 @@ function DashboardLayoutContent({
 
   return (
     <>
-      {isAdmin && location !== "/proxy-subscriptions" && (
-        <iframe
-          src={`/proxy-subscription?__forwardx_embed=1&forwardx_theme=${resolvedTheme}#/subs/index`}
-          title="代理订阅预加载"
-          aria-hidden="true"
-          tabIndex={-1}
-          className="pointer-events-none fixed -left-px -top-px h-px w-px opacity-0"
-        />
-      )}
       <Sidebar collapsible="icon" className="border-r border-sidebar-border/60 bg-sidebar/75 backdrop-blur-2xl">
         <SidebarHeader className="h-16 justify-center mobile-sidebar-header">
           <div className={cn("flex w-full items-center gap-3 transition-all", isDesktopCollapsed ? "justify-center px-0" : "px-2")}>

@@ -184,10 +184,6 @@ try {
       allowedHosts: true,
       proxy: {
         "/api": `http://127.0.0.1:${backendPort}`,
-        // Keep the hidden SublinkX warm-up iframe on the server side in
-        // development too. Without this route Vite serves the React shell,
-        // which then produces unrelated public-monitor 404 console errors.
-        "/proxy-subscription": `http://127.0.0.1:${backendPort}`,
         "/static": `http://127.0.0.1:${backendPort}`,
         "^/c/": `http://127.0.0.1:${backendPort}`,
         "^/n/": `http://127.0.0.1:${backendPort}`,

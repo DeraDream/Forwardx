@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ChevronDown,
   ChevronUp,
@@ -25,7 +25,13 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   parseDocument as parseYamlDocument,
   stringify as stringifyYaml,
@@ -110,10 +116,147 @@ const ruleTypes = [
 ];
 
 const editorFieldClass =
-  "border-border bg-background text-foreground placeholder:text-muted-foreground focus-visible:border-primary focus-visible:ring-primary/30";
+  "border border-border bg-background text-foreground shadow-sm placeholder:text-muted-foreground focus-visible:border-primary focus-visible:ring-primary/30";
+
+type CodeLanguage = "clash" | "egern" | "loon";
+
+function highlightLine(line: string, language: CodeLanguage): ReactNode[] {
+  if (!line) return [" "];
+  const parts = line.match(/(#[^\n]*|;[^\n]*|\[[^\]]+\]|"[^"\n]*"|'[^'\n]*'|\b(?:true|false|null|yes|no)\b|\b\d+(?:\.\d+)?\b|[{}\[\],]|\b(?:DIRECT|REJECT|MATCH|DOMAIN(?:-SUFFIX|-KEYWORD|-REGEX|-WILDCARD)?|GEOIP|GEOSITE|IP-CIDR6?|RULE-SET|PROCESS-NAME|NETWORK|url-test|fallback|load-balance|select|auto_test|smart|policy_groups|proxy-groups|rule-providers|rules|proxies)\b)/gi) || [line];
+  let cursor = 0;
+  const nodes: ReactNode[] = [];
+  const addPlain = (value: string) => value && nodes.push(value);
+  parts.forEach((token, index) => {
+    const position = line.indexOf(token, cursor);
+    addPlain(line.slice(cursor, position));
+    cursor = position + token.length;
+    const isComment = token.startsWith("#") || token.startsWith(";");
+    const isSection = token.startsWith("[") && token.endsWith("]");
+    const isQuoted = token.startsWith("'") || token.startsWith('"');
+    const isValue = /^(true|false|null|yes|no)$/i.test(token);
+    const isNumber = /^\d/.test(token);
+    const isPunctuation = /^[{}\[\],]$/.test(token);
+    const color = isComment
+      ? "text-emerald-600/80 dark:text-emerald-400/80"
+      : isSection
+        ? "text-violet-600 dark:text-violet-300"
+        : isQuoted
+          ? "text-amber-700 dark:text-amber-300"
+          : isValue
+            ? "text-fuchsia-600 dark:text-fuchsia-300"
+            : isNumber
+              ? "text-sky-600 dark:text-sky-300"
+              : isPunctuation
+                ? "text-muted-foreground"
+                : "text-cyan-700 dark:text-cyan-300";
+    nodes.push(<span key={`${token}-${index}`} className={color}>{token}</span>);
+  });
+  addPlain(line.slice(cursor));
+  const keyMatch = line.match(/^(\s*(?:-\s*)?)([\w-]+)(?=\s*:)/);
+  if (!keyMatch) return nodes;
+  // Rebuild YAML key prefixes so structural keys remain distinct from values.
+  const prefix = keyMatch[1];
+  const key = keyMatch[2];
+  const rest = line.slice(prefix.length + key.length);
+  return [prefix, <span key="yaml-key" className="text-blue-700 dark:text-blue-300">{key}</span>, ...highlightLine(rest, language)];
+}
+
+function CodeSurface({
+  value,
+  onChange,
+  language,
+  readOnly = false,
+}: {
+  value: string;
+  onChange?: (value: string) => void;
+  language: CodeLanguage;
+  readOnly?: boolean;
+}) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const overlayRef = useRef<HTMLPreElement>(null);
+  const lineRef = useRef<HTMLPreElement>(null);
+  const lines = value.replace(/\r/g, "").split("\n");
+  const syncScroll = () => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    const transform = `translate(${-textarea.scrollLeft}px, ${-textarea.scrollTop}px)`;
+    if (overlayRef.current) overlayRef.current.style.transform = transform;
+    if (lineRef.current) lineRef.current.style.transform = `translateY(${-textarea.scrollTop}px)`;
+  };
+  return (
+    <div className="relative min-h-0 flex-1 overflow-hidden bg-[linear-gradient(90deg,hsl(var(--muted)/.55)_0, hsl(var(--muted)/.55)_3.5rem,transparent_3.5rem)] font-mono text-[12px] leading-7">
+      <div className="absolute inset-0 overflow-hidden">
+        <pre ref={lineRef} aria-hidden className="pointer-events-none absolute left-0 top-0 w-14 select-none border-r border-border/70 py-4 pr-3 text-right text-[11px] leading-7 text-muted-foreground/70">
+          {lines.map((_, index) => <div key={index}>{index + 1}</div>)}
+        </pre>
+        <pre ref={overlayRef} aria-hidden className="pointer-events-none absolute left-14 top-0 min-w-max py-4 pl-4 pr-6 text-foreground">
+          {lines.map((line, index) => {
+            const indent = Math.floor((line.match(/^\s*/)?.[0].length || 0) / 2);
+            return <div key={index} className="relative h-7 whitespace-pre">
+              {Array.from({ length: indent }, (_, guide) => <i key={guide} className="absolute top-0 h-7 border-l border-dashed border-primary/25" style={{ left: `${guide * 14 + 8}px` }} />)}
+              {highlightLine(line, language)}
+            </div>;
+          })}
+        </pre>
+      </div>
+      {readOnly ? (
+        <div className="relative z-10 h-full overflow-auto pl-14" onScroll={(event) => {
+          const target = event.currentTarget;
+          if (overlayRef.current) overlayRef.current.style.transform = `translate(${-target.scrollLeft}px, ${-target.scrollTop}px)`;
+          if (lineRef.current) lineRef.current.style.transform = `translateY(${-target.scrollTop}px)`;
+        }} />
+      ) : (
+        <textarea
+          ref={textareaRef}
+          aria-label={`${language} 代码`}
+          className="relative z-10 block h-full w-full resize-none overflow-auto bg-transparent py-4 pl-[4.5rem] pr-6 font-mono text-[12px] leading-7 text-transparent caret-foreground outline-none selection:bg-primary/30"
+          value={value}
+          onChange={(event) => onChange?.(event.target.value)}
+          onScroll={syncScroll}
+          spellCheck={false}
+          wrap="off"
+        />
+      )}
+    </div>
+  );
+}
 
 function unquote(value: string) {
   return value.trim().replace(/^(?:"|')|(?:"|')$/g, "");
+}
+function ruleTagClass(type: string) {
+  if (type.includes("CIDR") || type.includes("ASN"))
+    return "border-indigo-500/30 bg-indigo-500/10 text-indigo-700 dark:text-indigo-300";
+  if (type === "GEOIP" || type === "GEOSITE")
+    return "border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300";
+  if (type.includes("KEYWORD") || type.includes("REGEX") || type.includes("PROCESS"))
+    return "border-violet-500/30 bg-violet-500/10 text-violet-700 dark:text-violet-300";
+  if (type === "MATCH")
+    return "border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-300";
+  return "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
+}
+
+function TemplateSelect({
+  value,
+  options,
+  onValueChange,
+  mono = false,
+}: {
+  value: string;
+  options: string[];
+  onValueChange: (value: string) => void;
+  mono?: boolean;
+}) {
+  return (
+    <Select value={value} onValueChange={onValueChange}>
+      <SelectTrigger className={`h-12 rounded-lg border-border bg-background px-3 text-sm text-foreground shadow-sm focus:ring-primary/30 ${mono ? "font-mono" : ""}`}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {options.map((option) => <SelectItem key={option} value={option} className={mono ? "font-mono text-xs" : ""}>{option}</SelectItem>)}
+      </SelectContent>
+    </Select>
+  );
 }
 function parseTemplate(value: string) {
   const document = parseYamlDocument(value, {
@@ -161,6 +304,7 @@ function parseTemplate(value: string) {
               : parts
                   .slice(2)
                   .find((part: string) => !["no-resolve", "src"].includes(part)) || "",
+          noResolve: parts.includes("no-resolve"),
           enabled: true,
         };
       });
@@ -258,6 +402,7 @@ function parseTemplate(value: string) {
         target:
           parts[0].toUpperCase() === "MATCH" ? parts[1] || "" : parts[2] || "",
         enabled: !disabled,
+        noResolve: parts.includes("no-resolve"),
       });
     }
   }
@@ -390,20 +535,28 @@ export function TemplateVisualEditorDialog({
   } | null>(null);
   const [memberPickerIndex, setMemberPickerIndex] = useState<number | null>(null);
   const [memberQuery, setMemberQuery] = useState("");
+  const [closeConfirmOpen, setCloseConfirmOpen] = useState(false);
+  const initialOutputRef = useRef(initialText);
   useEffect(() => {
     if (!open) return;
     const parsed = parseTemplate(initialText);
-    setFilename(initialFilename);
-    setSource(initialText);
-    setGroups(parsed.groups.map((group) =>
+    const nextGroups = parsed.groups.map((group) =>
       ["url-test", "fallback", "load-balance"].includes(group.type)
         ? { ...group, url: group.url || "http://www.gstatic.com/generate_204", interval: group.interval || "300" }
         : group,
-    ));
+    );
+    const isClash = !/\.conf$/i.test(initialFilename) && !/^\s*\[/m.test(initialText) && !/^\s*policy_groups\s*:/m.test(initialText);
+    initialOutputRef.current = isClash
+      ? buildYaml(initialText, nextGroups, parsed.rules)
+      : initialText;
+    setFilename(initialFilename);
+    setSource(initialText);
+    setGroups(nextGroups);
     setRules(parsed.rules);
     setExpanded([]);
     setExpandedRules([]);
     setMode("visual");
+    setCloseConfirmOpen(false);
   }, [open, initialFilename, initialText]);
   const yaml = useMemo(
     () => buildYaml(source, groups, rules),
@@ -433,13 +586,13 @@ export function TemplateVisualEditorDialog({
       : [];
   }, [source]);
   const hasUnsavedChanges =
-    mode === "code" ? source !== initialText : yaml !== initialText;
+    filename !== initialFilename ||
+    (mode === "code" ? source : yaml) !== initialOutputRef.current;
   const requestClose = () => {
-    if (
-      hasUnsavedChanges &&
-      !window.confirm("当前模板有未保存的更改，确定关闭吗？")
-    )
+    if (hasUnsavedChanges) {
+      setCloseConfirmOpen(true);
       return;
+    }
     onClose();
   };
   const update = (index: number, patch: Partial<Group>) =>
@@ -462,6 +615,8 @@ export function TemplateVisualEditorDialog({
       : /^\s*policy_groups\s*:/m.test(initialText)
         ? "egern"
         : "clash";
+  const codeLanguage = templateKind as CodeLanguage;
+  const codeFormatLabel = templateKind === "loon" ? "Loon INI" : templateKind === "egern" ? "Egern YAML" : "Clash YAML";
   const visualAvailable = templateKind === "clash";
   const currentOutput =
     templateKind === "clash" && mode === "visual" ? yaml : source;
@@ -535,7 +690,7 @@ export function TemplateVisualEditorDialog({
         onClick={() => setMode("code")}
       >
         <Code2 className="mr-1 inline h-3.5 w-3.5" />
-        YAML 代码
+        {templateKind === "loon" ? "INI 代码" : "YAML 代码"}
       </button>
     </div>
   );
@@ -623,14 +778,15 @@ export function TemplateVisualEditorDialog({
           if (!next) requestClose();
         }}
       >
-        <DialogContent className="h-[calc(100svh-50px)] max-h-[calc(100svh-50px)] w-[calc(100vw-1.5rem)] max-w-[1560px] gap-0 overflow-hidden border border-border bg-card p-0 text-card-foreground shadow-2xl [&>button]:hidden sm:w-[calc(100vw-3rem)] sm:p-0">
-          <DialogHeader className="border-b border-border bg-muted/30 px-6 py-4 pr-16">
+        <DialogContent className="flex h-[calc(100svh-50px)] max-h-[calc(100svh-50px)] w-[calc(100vw-1.5rem)] max-w-[1560px] flex-col gap-0 overflow-hidden border border-border bg-card p-0 text-card-foreground shadow-2xl [&>button]:hidden sm:w-[calc(100vw-3rem)] sm:p-0">
+          <DialogHeader className="relative shrink-0 border-b border-border bg-muted/30 px-6 py-4 pr-20">
             <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
               <div className="grid size-10 shrink-0 place-items-center rounded-lg border border-border bg-primary/10 text-primary"><Code2 className="size-5" /></div>
               <div className="min-w-0"><DialogTitle className="flex items-center gap-2 truncate text-lg font-bold text-foreground">{filename || "编辑模板"}<span className="rounded bg-primary/10 px-2 py-0.5 font-mono text-[10px] font-medium text-primary">{templateKind === "clash" ? "Mihomo Template" : templateKind.toUpperCase()}</span></DialogTitle><DialogDescription className="mt-0.5 text-xs text-muted-foreground">编辑代理分流与规则集模板配置</DialogDescription></div>
               <label className="ml-0 flex h-9 w-[280px] shrink-0 flex-nowrap items-center gap-2 rounded-md border border-border bg-background px-3 font-mono text-xs text-muted-foreground sm:ml-4"><span className="whitespace-nowrap">文件名</span><Input value={filename} onChange={(event) => setFilename(event.target.value)} placeholder="my-clash.yaml" className="h-7 min-w-0 border-0 bg-transparent p-0 font-mono text-sm text-foreground shadow-none focus-visible:ring-0" /></label>
-              <div className="ml-auto flex items-center gap-2"><Button disabled={saving || !filename.trim()} onClick={() => void save()} className="h-9 bg-primary px-4 text-primary-foreground shadow-sm hover:bg-primary/90"><Save className="mr-1.5 size-4" />{saving ? "保存中…" : "保存模板"}</Button><Button variant="ghost" size="icon" onClick={requestClose} className="size-9 text-muted-foreground hover:bg-muted hover:text-foreground"><X className="size-5" /></Button></div>
+              <div className="ml-auto flex items-center gap-2"><Button disabled={saving || !filename.trim()} onClick={() => void save()} className="h-9 bg-primary px-4 text-primary-foreground shadow-sm hover:bg-primary/90"><Save className="mr-1.5 size-4" />{saving ? "保存中…" : "保存模板"}</Button></div>
             </div>
+            <Button variant="ghost" size="icon" onClick={requestClose} className="absolute right-2 top-4 size-9 text-muted-foreground hover:bg-muted hover:text-foreground"><X className="size-5" /></Button>
           </DialogHeader>
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
             <div className="flex items-center justify-between border-b border-border bg-muted/15 px-6 py-2.5"><div className="flex gap-6">{editorTabs}</div><div className="hidden items-center gap-5 font-mono text-[11px] text-muted-foreground md:flex"><span className="inline-flex items-center gap-2 text-primary"><i className="size-2 rounded-full bg-primary" />语法校验通过</span><span>UTF-8</span></div></div>
@@ -638,21 +794,19 @@ export function TemplateVisualEditorDialog({
               <div className="grid min-h-0 flex-1 gap-4 overflow-hidden bg-muted/20 p-4 lg:grid-cols-[minmax(0,1.05fr)_minmax(420px,.95fr)]">
                 <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-background shadow-sm">
                   <header className="flex items-center justify-between border-b border-border bg-muted/30 px-4 py-3 text-sm font-semibold text-foreground">
-                    <span className="font-mono"><i className="mr-2 inline-block size-2 rounded-full bg-primary" />YAML 全量编辑器</span><span className="font-mono text-[11px] font-normal text-muted-foreground">实时编辑</span>
+                    <span className="font-mono"><i className="mr-2 inline-block size-2 rounded-full bg-primary" />{codeFormatLabel} 全量编辑器</span><span className="font-mono text-[11px] font-normal text-muted-foreground">语法高亮 · 实时编辑</span>
                   </header>
-                  <Textarea
-                    aria-label="YAML 代码"
-                    className="min-h-0 flex-1 resize-none rounded-none border-0 bg-background px-5 py-4 font-mono text-xs leading-7 text-foreground shadow-none placeholder:text-muted-foreground focus-visible:ring-0"
+                  <CodeSurface
                     value={source}
-                    onChange={(event) => setSource(event.target.value)}
-                    spellCheck={false}
+                    onChange={setSource}
+                    language={codeLanguage}
                   />
                 </section>
                 <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-background">
                   <header className="flex items-center justify-between border-b border-border bg-muted/30 px-4 py-3">
                     <div>
-                      <p className="text-sm font-semibold text-foreground">代理组配置预览 <span className="ml-1 rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] text-primary">YAML 实时同步</span></p>
-                      <p className="mt-0.5 text-xs text-muted-foreground">由左侧配置自动计算展开的 proxy-groups 数据拓扑</p>
+                      <p className="text-sm font-semibold text-foreground">配置代码预览 <span className="ml-1 rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] text-primary">{codeFormatLabel}</span></p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">{templateKind === "clash" ? "由左侧配置自动计算展开的 proxy-groups 数据拓扑" : "与左侧一致的只读语法预览"}</p>
                     </div>
                     <Button
                       aria-label="复制预览"
@@ -672,9 +826,7 @@ export function TemplateVisualEditorDialog({
                       )}
                     </Button>
                   </header>
-                  <pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words bg-muted/20 p-4 font-mono text-xs leading-6 text-foreground">
-                    {codePreview || "# 暂无代理组配置"}
-                  </pre>
+                  <CodeSurface value={templateKind === "clash" ? (codePreview || "# 暂无代理组配置") : source} language={codeLanguage} readOnly />
                 </section>
               </div>
             ) : (
@@ -892,159 +1044,59 @@ export function TemplateVisualEditorDialog({
                                   </div>
                                   <Button variant="outline" className="w-full border-dashed" onClick={() => { setMemberQuery(""); setMemberPickerIndex(index); }}><Plus className="mr-1 size-4" />添加成员</Button>
                                 </section>
-                                <div className="border-t border-border/60 pt-2">
-                                  <button
-                                    className="flex w-full items-center justify-between py-1 text-sm font-semibold"
-                                    onClick={() =>
-                                      toggle(
-                                        expandedRules,
-                                        index,
-                                        setExpandedRules,
-                                      )
-                                    }
-                                  >
-                                    流量规则（
-                                    {
-                                      rules.filter(
-                                        (rule) => rule.target === group.name,
-                                      ).length
-                                    }
-                                    ）
-                                    {expandedRules.includes(index) ? (
-                                      <ChevronUp className="h-4 w-4" />
-                                    ) : (
-                                      <ChevronDown className="h-4 w-4" />
-                                    )}
-                                  </button>
-                                  {expandedRules.includes(index) && (
-                                    <div className="mt-2 space-y-2">
-                                      <Button
-                                        size="sm"
-                                        variant="outline"
-                                        className="border-border bg-transparent text-foreground hover:bg-muted hover:text-foreground"
-                                        onClick={() =>
-                                          setRuleEditor({
-                                            index: null,
-                                            target: group.name,
-                                            type: "DOMAIN-SUFFIX",
-                                            value: "",
-                                            noResolve: false,
-                                          })
-                                        }
-                                      >
-                                        <Plus className="mr-1 h-3.5 w-3.5" />
-                                        添加规则
+                                <section className="border-t border-border/70 pt-3">
+                                  <div className="mb-3 flex items-center justify-between gap-2">
+                                    <button
+                                      className="flex items-center gap-2 text-left text-xs font-semibold text-foreground"
+                                      onClick={() => toggle(expandedRules, index, setExpandedRules)}
+                                    >
+                                      流量规则
+                                      <span className="rounded-full border border-primary/25 bg-primary/10 px-2 py-0.5 font-mono text-[10px] font-medium text-primary">
+                                        {rules.filter((rule) => rule.target === group.name).length} 条规则
+                                      </span>
+                                    </button>
+                                    <div className="flex items-center gap-1">
+                                      <Button size="sm" variant="outline" className="h-7 border-primary/40 bg-primary/10 px-2.5 text-xs text-primary hover:bg-primary/15 hover:text-primary" onClick={() => setRuleEditor({ index: null, target: group.name, type: "DOMAIN-SUFFIX", value: "", noResolve: false })}>
+                                        <Plus className="mr-1 size-3.5" />添加规则
                                       </Button>
-                                      {rules.map(
-                                        (rule, ruleIndex) =>
-                                          rule.target === group.name && (
-                                            <div
-                                              key={ruleIndex}
-                                              className="grid gap-2 rounded-md border border-border bg-muted/20 p-2 sm:grid-cols-[auto_auto_minmax(8.5rem,1fr)_minmax(12rem,1fr)_auto] sm:items-center"
-                                            >
-                                              <Switch
-                                                aria-label="启用规则"
-                                                checked={rule.enabled}
-                                                onCheckedChange={(enabled) =>
-                                                  setRules((items) =>
-                                                    items.map(
-                                                      (item, position) =>
-                                                        position === ruleIndex
-                                                          ? { ...item, enabled }
-                                                          : item,
-                                                    ),
-                                                  )
-                                                }
-                                              />
-                                              <Button
-                                                variant="ghost"
-                                                size="sm"
-                                                onClick={() =>
-                                                  setRuleEditor({
-                                                    index: ruleIndex,
-                                                    target: rule.target,
-                                                    type: rule.type,
-                                                    value: rule.value,
-                                                    noResolve: Boolean(
-                                                      rule.noResolve,
-                                                    ),
-                                                  })
-                                                }
-                                              >
-                                                编辑
-                                              </Button>
-                                              <select
-                                                className={`h-9 rounded border px-2 text-xs ${editorFieldClass}`}
-                                                value={rule.type}
-                                                onChange={(event) =>
-                                                  setRules((items) =>
-                                                    items.map(
-                                                      (item, position) =>
-                                                        position === ruleIndex
-                                                          ? {
-                                                              ...item,
-                                                              type: event.target
-                                                                .value,
-                                                            }
-                                                          : item,
-                                                    ),
-                                                  )
-                                                }
-                                              >
-                                                {ruleTypes.map((type) => (
-                                                  <option key={type}>
-                                                    {type}
-                                                  </option>
-                                                ))}
-                                              </select>
-                                              {rule.type === "MATCH" ? (
-                                                <span className="self-center text-xs text-muted-foreground">
-                                                  匹配其余全部流量
-                                                </span>
-                                              ) : (
-                                                <Input
-                                                  className={`h-9 ${editorFieldClass}`}
-                                                  value={rule.value}
-                                                  onChange={(event) =>
-                                                    setRules((items) =>
-                                                      items.map(
-                                                        (item, position) =>
-                                                          position === ruleIndex
-                                                            ? {
-                                                                ...item,
-                                                                value:
-                                                                  event.target
-                                                                    .value,
-                                                              }
-                                                            : item,
-                                                      ),
-                                                    )
-                                                  }
-                                                  placeholder="匹配内容"
-                                                />
-                                              )}
-                                              <Button
-                                                aria-label="删除规则"
-                                                variant="ghost"
-                                                size="icon"
-                                                className="h-9 w-9 text-destructive"
-                                                onClick={() =>
-                                                  setRules((items) =>
-                                                    items.filter(
-                                                      (_, position) =>
-                                                        position !== ruleIndex,
-                                                    ),
-                                                  )
-                                                }
-                                              >
-                                                <Trash2 className="h-4 w-4" />
-                                              </Button>
+                                      <Button variant="ghost" size="sm" className="h-7 px-1.5 text-xs text-muted-foreground hover:text-foreground" onClick={() => toggle(expandedRules, index, setExpandedRules)}>
+                                        {expandedRules.includes(index) ? <ChevronUp className="mr-1 size-3.5" /> : <ChevronDown className="mr-1 size-3.5" />}
+                                        {expandedRules.includes(index) ? "收起" : "展开"}
+                                      </Button>
+                                    </div>
+                                  </div>
+                                  {expandedRules.includes(index) && (
+                                    <div className="overflow-hidden rounded-lg border border-border bg-background">
+                                      <div className="grid grid-cols-12 gap-2 border-b border-border bg-muted/55 px-3 py-2 font-sans text-[11px] font-medium text-muted-foreground">
+                                        <div className="col-span-3">规则类型</div>
+                                        <div className="col-span-4">匹配目标值</div>
+                                        <div className="col-span-3">指向策略 / 节点</div>
+                                        <div className="col-span-2 pr-1 text-right">操作</div>
+                                      </div>
+                                      <div className="max-h-64 divide-y divide-border/70 overflow-y-auto font-mono text-xs">
+                                        {rules.filter((rule) => rule.target === group.name).map((rule) => {
+                                          const ruleIndex = rules.indexOf(rule);
+                                          const directTarget = ["DIRECT", "REJECT"].includes(rule.target);
+                                          return <div key={ruleIndex} className="grid grid-cols-12 items-center gap-2 px-3 py-2.5 transition-colors hover:bg-muted/45">
+                                            <div className="col-span-3 flex min-w-0 flex-wrap items-center gap-1.5">
+                                              <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${ruleTagClass(rule.type)}`}>{rule.type}</span>
+                                              {rule.noResolve && <span className="rounded border border-amber-500/30 bg-amber-500/10 px-1 py-0.5 font-sans text-[10px] text-amber-700 dark:text-amber-300">no-resolve</span>}
                                             </div>
-                                          ),
-                                      )}
+                                            <div className="col-span-4 truncate text-[11px] text-foreground" title={rule.value}>{rule.type === "MATCH" ? "匹配其余全部流量" : rule.value}</div>
+                                            <div className={`col-span-3 flex min-w-0 items-center gap-1 truncate font-sans text-[11px] ${directTarget ? "text-sky-700 dark:text-sky-300" : "text-primary"}`}>
+                                              <span>{directTarget ? "→" : "🚀"}</span><span className="truncate font-medium">{rule.target}</span>
+                                            </div>
+                                            <div className="col-span-2 flex items-center justify-end gap-1.5 font-sans">
+                                              <Switch aria-label="启用规则" checked={rule.enabled} onCheckedChange={(enabled) => setRules((items) => items.map((item, position) => position === ruleIndex ? { ...item, enabled } : item))} />
+                                              <Button variant="ghost" size="sm" className="h-7 px-1 text-[11px] text-muted-foreground hover:text-foreground" onClick={() => setRuleEditor({ index: ruleIndex, target: rule.target, type: rule.type, value: rule.value, noResolve: Boolean(rule.noResolve) })}>编辑</Button>
+                                              <Button variant="ghost" size="sm" className="h-7 px-1 text-[11px] text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => setRules((items) => items.filter((_, position) => position !== ruleIndex))}>删除</Button>
+                                            </div>
+                                          </div>;
+                                        })}
+                                      </div>
                                     </div>
                                   )}
-                                </div>
+                                </section>
                               </div>
                             )}
                           </article>
@@ -1099,7 +1151,7 @@ export function TemplateVisualEditorDialog({
               </div>
             )}
           </div>
-          <footer className="flex items-center justify-between gap-2 border-t border-border bg-muted/30 px-5 py-2.5 text-xs text-muted-foreground">
+          <footer className="flex shrink-0 items-center justify-between gap-2 border-t border-border bg-muted/30 px-5 py-2.5 text-xs text-muted-foreground">
             <span className="font-mono"><i className="mr-2 inline-block size-2 rounded-full bg-primary" />已同步至内存 · {templateKind === "clash" ? "Clash 内核格式无警告" : `${templateKind.toUpperCase()} 模板`}</span>
             <div className="flex gap-2">
             <Button variant="outline" className="border-border bg-transparent text-foreground hover:bg-muted hover:text-foreground" onClick={requestClose}>
@@ -1159,24 +1211,21 @@ export function TemplateVisualEditorDialog({
             <div className="grid gap-6 p-6">
               <div className="grid gap-4 md:grid-cols-2"><label className="grid gap-2 text-sm font-semibold text-foreground">
                 规则类型 <span className="ml-1 font-mono text-[10px] text-primary">必填</span>
-                <select
-                  className="h-12 rounded-lg border border-border bg-background px-3 font-mono text-sm text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/30"
+                <TemplateSelect
                   value={ruleEditor.type}
-                  onChange={(event) =>
+                  options={ruleTypes}
+                  mono
+                  onValueChange={(type) =>
                     setRuleEditor({
                       ...ruleEditor,
-                      type: event.target.value,
+                      type,
                       value: "",
                       noResolve: false,
                     })
                   }
-                >
-                  {ruleTypes.map((type) => (
-                    <option key={type}>{type}</option>
-                  ))}
-                </select>
+                />
               </label>
-              <label className="grid gap-2 text-sm font-semibold text-foreground">指向策略 / 目标代理组 <span className="font-mono text-[10px] text-primary">Policy</span><select value={ruleEditor.target} onChange={(event) => setRuleEditor({ ...ruleEditor, target: event.target.value })} className="h-12 rounded-lg border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/30">{ruleTargetOptions.map((target) => <option key={target}>{target}</option>)}</select></label></div>
+              <label className="grid gap-2 text-sm font-semibold text-foreground">指向策略 / 目标代理组 <span className="font-mono text-[10px] text-primary">Policy</span><TemplateSelect value={ruleEditor.target} options={ruleTargetOptions} onValueChange={(target) => setRuleEditor({ ...ruleEditor, target })} /></label></div>
               {ruleEditor.type !== "MATCH" && (
                 <label className="grid gap-2 text-sm font-semibold text-foreground">
                   规则目标值 <span className="font-mono text-[10px] text-muted-foreground">CIDR Mask / Target</span>
@@ -1224,6 +1273,23 @@ export function TemplateVisualEditorDialog({
               取消
             </Button>
             <Button className="bg-primary text-primary-foreground shadow-sm hover:bg-primary/90" onClick={saveRuleEditor}>应用规则</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={closeConfirmOpen} onOpenChange={setCloseConfirmOpen}>
+        <DialogContent className="max-w-[420px] gap-0 overflow-hidden border border-border bg-card p-0 text-card-foreground shadow-2xl sm:p-0 [&>button]:hidden">
+          <DialogHeader className="border-b border-border bg-muted/25 px-6 py-5">
+            <DialogTitle className="flex items-center gap-3 text-lg text-foreground">
+              <span className="grid size-9 place-items-center rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-300"><X className="size-5" /></span>
+              放弃未保存的修改？
+            </DialogTitle>
+            <DialogDescription className="mt-2 text-sm text-muted-foreground">
+              当前模板的更改尚未保存，关闭后将无法恢复。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2 bg-muted/15 px-6 py-4">
+            <Button variant="outline" className="border-border bg-background text-foreground hover:bg-muted" onClick={() => setCloseConfirmOpen(false)}>继续编辑</Button>
+            <Button variant="destructive" onClick={() => { setCloseConfirmOpen(false); onClose(); }}>放弃并关闭</Button>
           </div>
         </DialogContent>
       </Dialog>

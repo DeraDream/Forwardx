@@ -43,7 +43,7 @@ async function requireForwardXAdmin(req: Request, res: Response) {
   return true;
 }
 
-function proxyToSublink(req: Request, res: Response, targetPath: string, options: { requireAdmin: boolean; injectBootstrap?: boolean }) {
+function proxyToSublink(req: Request, res: Response, targetPath: string, options: { requireAdmin: boolean }) {
   void (async () => {
     if (options.requireAdmin && !(await requireForwardXAdmin(req, res))) return;
     const headers = { ...req.headers, host: `${SUBLINK_HOST}:${SUBLINK_PORT}` } as Record<string, string | string[] | undefined>;
@@ -62,20 +62,7 @@ function proxyToSublink(req: Request, res: Response, targetPath: string, options
       method: req.method,
       headers,
     }, (upstreamResponse) => {
-      const responseHeaders = { ...upstreamResponse.headers };
-      if (options.injectBootstrap) {
-        const chunks: Buffer[] = [];
-        upstreamResponse.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-        upstreamResponse.on("end", () => {
-          const bootstrap = `<script>localStorage.setItem("accessToken", ${JSON.stringify(`Bearer ${issueSublinkToken()}`)});</script>`;
-          const html = Buffer.concat(chunks).toString("utf8").replace("</head>", `${bootstrap}</head>`);
-          delete responseHeaders["content-length"];
-          res.writeHead(upstreamResponse.statusCode || 502, responseHeaders);
-          res.end(html);
-        });
-        return;
-      }
-      res.writeHead(upstreamResponse.statusCode || 502, responseHeaders);
+      res.writeHead(upstreamResponse.statusCode || 502, upstreamResponse.headers);
       upstreamResponse.pipe(res);
     });
     upstream.on("error", () => {
@@ -86,9 +73,8 @@ function proxyToSublink(req: Request, res: Response, targetPath: string, options
   })();
 }
 
-/** Mount the untouched SublinkX UI and APIs behind ForwardX session checks. */
+/** Mount SublinkX APIs and public subscription endpoints behind ForwardX checks. */
 export function installSublinkProxy(app: Express) {
-  app.get("/proxy-subscription", (req, res) => proxyToSublink(req, res, "/", { requireAdmin: true, injectBootstrap: true }));
   app.use("/api/v1", (req, res) => proxyToSublink(req, res, req.originalUrl, { requireAdmin: true }));
   app.use("/static", (req, res) => proxyToSublink(req, res, req.originalUrl, { requireAdmin: false }));
   app.use("/c", (req, res) => proxyToSublink(req, res, req.originalUrl, { requireAdmin: false }));

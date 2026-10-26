@@ -3,6 +3,7 @@ import { Plus, Trash2 } from "lucide-react";
 import { parseDocument, stringify } from "yaml";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 type Group = {
   name: string;
@@ -165,23 +166,21 @@ export function EgernVisualEditor({ value, onChange, onError }: Props) {
                     )
                   }
                 />
-                <select
-                  className="h-10 rounded-md border border-input bg-background px-3"
+                <Select
                   value={group.type}
-                  onChange={(event) =>
+                  onValueChange={(type) =>
                     setGroups((items) =>
                       items.map((item, position) =>
                         position === index
-                          ? { ...item, type: event.target.value }
+                          ? { ...item, type }
                           : item,
                       ),
                     )
                   }
                 >
-                  {types.map((type) => (
-                    <option key={type}>{type}</option>
-                  ))}
-                </select>
+                  <SelectTrigger className="h-10 border-input bg-background"><SelectValue /></SelectTrigger>
+                  <SelectContent>{types.map((type) => <SelectItem key={type} value={type}>{type}</SelectItem>)}</SelectContent>
+                </Select>
               </div>
               <Input
                 value={group.policies.join(", ")}
@@ -206,23 +205,21 @@ export function EgernVisualEditor({ value, onChange, onError }: Props) {
               </div>
               {groupRules(group.name).map(({ rule, index: ruleIndex }) => (
                 <div key={ruleIndex} className="flex gap-2">
-                  <select
-                    className="h-9 rounded border border-input bg-background px-2 text-xs"
+                  <Select
                     value={rule.type}
-                    onChange={(event) =>
+                    onValueChange={(type) =>
                       setRules((items) =>
                         items.map((item, position) =>
                           position === ruleIndex
-                            ? { ...item, type: event.target.value }
+                            ? { ...item, type }
                             : item,
                         ),
                       )
                     }
                   >
-                    {ruleTypes.map((type) => (
-                      <option key={type}>{type}</option>
-                    ))}
-                  </select>
+                    <SelectTrigger className="h-9 min-w-32 border-input bg-background text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent>{ruleTypes.map((type) => <SelectItem key={type} value={type} className="text-xs">{type}</SelectItem>)}</SelectContent>
+                  </Select>
                   {rule.type !== "default" && (
                     <Input
                       className="h-9"

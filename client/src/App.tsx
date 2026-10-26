@@ -116,7 +116,6 @@ function Router() {
         {(params) => <PluginsRoute sidebarPluginId={params.pluginId} />}
       </Route>
       <Route path="/plugins">{() => <PluginsRoute />}</Route>
-      <Route path="/proxy-subscriptions">{() => <AdminRoute component={SubscriptionCenterPage} />}</Route>
       <Route path="/subscription-center">{() => <AdminRoute component={SubscriptionCenterPage} />}</Route>
       <Route path="/store">{routeComponent(StorePage)}</Route>
       <Route path="/subscriptions">{routeComponent(SubscriptionsPage)}</Route>
