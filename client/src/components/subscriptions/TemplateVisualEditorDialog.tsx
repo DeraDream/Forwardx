@@ -150,8 +150,8 @@ function parseTemplate(value: string) {
     const rules = (Array.isArray(parsed.rules) ? parsed.rules : [])
       .map(String)
       .filter(Boolean)
-      .map((text) => {
-        const parts = text.split(",").map((part) => part.trim());
+      .map((text: string) => {
+        const parts = text.split(",").map((part: string) => part.trim());
         return {
           type: parts[0]?.toUpperCase() || "DOMAIN-SUFFIX",
           value: parts[0]?.toUpperCase() === "MATCH" ? "" : parts[1] || "",
@@ -160,7 +160,7 @@ function parseTemplate(value: string) {
               ? parts[1] || ""
               : parts
                   .slice(2)
-                  .find((part) => !["no-resolve", "src"].includes(part)) || "",
+                  .find((part: string) => !["no-resolve", "src"].includes(part)) || "",
           enabled: true,
         };
       });
