@@ -9,6 +9,8 @@ on:
       - "v*.*.*"
     paths:
       - "package.json"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/release-panel.yml"
 
 permissions:
   contents: write
