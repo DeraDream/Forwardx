@@ -413,6 +413,23 @@ func GroupNodeGet(c *gin.Context) {
 	})
 }
 
+// GroupNodeAdd creates an empty reusable node group. Keeping this separate
+// from GroupNodeSet lets the panel create a group before there is a node to
+// attach to it.
+func GroupNodeAdd(c *gin.Context) {
+	name := strings.TrimSpace(c.PostForm("name"))
+	if name == "" {
+		c.JSON(400, gin.H{"msg": "分组名不能为空"})
+		return
+	}
+	group := models.GroupNode{Name: name}
+	if err := group.Add(); err != nil {
+		c.JSON(400, gin.H{"msg": "创建分组失败: " + err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"code": "00000", "data": name, "msg": "分组已创建"})
+}
+
 // 设置关联分组
 func GroupNodeSet(c *gin.Context) {
 	// var n models.Node

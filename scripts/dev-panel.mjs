@@ -178,8 +178,19 @@ try {
       port: clientPort,
       strictPort: false,
       open: false,
+      // A temporary public tunnel (for example, Cloudflare Quick Tunnel) uses
+      // a generated Host header. This development-only server is already
+      // backed by seeded local data, so allow that host through for reviews.
+      allowedHosts: true,
       proxy: {
         "/api": `http://127.0.0.1:${backendPort}`,
+        // Keep the hidden SublinkX warm-up iframe on the server side in
+        // development too. Without this route Vite serves the React shell,
+        // which then produces unrelated public-monitor 404 console errors.
+        "/proxy-subscription": `http://127.0.0.1:${backendPort}`,
+        "/static": `http://127.0.0.1:${backendPort}`,
+        "^/c/": `http://127.0.0.1:${backendPort}`,
+        "^/n/": `http://127.0.0.1:${backendPort}`,
       },
     },
     define: {

@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.4.8] - 2026-10-26
+
+### Improved
+
+- 重构原生订阅模板编辑器：支持主题自适应的可视化编辑、策略组成员选择与排序、规则编辑、Clash / Loon / Egern 模板处理及 YAML 实时预览。
+- 停止 GitHub Actions 的 Android APK 打包；面板发布仅构建面板、Agent 与 SublinkX Linux 运行时。
+- Panel Release 升级至 `2.4.8`；Agent 保持 `2.2.231`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.4.7] - 2026-10-24
 
 ### Fixed

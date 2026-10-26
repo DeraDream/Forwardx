@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,11 @@ import { Tabs } from "@/components/ui/tabs";
 import { SlidingTabsList, type SlidingTabItem } from "@/components/ui/sliding-tabs";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { SubscriptionWizard } from "@/components/subscriptions/SubscriptionWizard";
+import { NodeSubscriptionDialog } from "@/components/subscriptions/NodeSubscriptionDialog";
+import { NodeAddDialog } from "@/components/subscriptions/NodeAddDialog";
+import { IpLibraryDialog } from "@/components/subscriptions/IpLibraryDialog";
+import { TemplateImportDialog } from "@/components/subscriptions/TemplateImportDialog";
+import { TemplateVisualEditorDialog } from "@/components/subscriptions/TemplateVisualEditorDialog";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { Clock3, Copy, Ellipsis, FileCode2, FileText, Library, LayoutGrid, Link2, List, Loader2, Network, Pencil, Plus, Power, RefreshCw, Search, Server, Trash2, UsersRound } from "lucide-react";
@@ -148,6 +153,7 @@ export default function SubscriptionCenterPage() {
   const [subscriptions, setSubscriptions] = useState<SubscriptionRecord[]>([]);
   const [nodeSubscriptions, setNodeSubscriptions] = useState<NodeSubscriptionRecord[]>([]);
   const [nodes, setNodes] = useState<NodeRecord[]>([]);
+  const [nodeGroups, setNodeGroups] = useState<string[]>([]);
   const [templates, setTemplates] = useState<TemplateRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -161,6 +167,7 @@ export default function SubscriptionCenterPage() {
   const [isSavingIp, setIsSavingIp] = useState(false);
   const [editorMode, setEditorMode] = useState<EditorMode>(null);
   const [editorName, setEditorName] = useState("");
+  const [editorOriginalName, setEditorOriginalName] = useState("");
   const [editorLink, setEditorLink] = useState("");
   const [editorNodeIds, setEditorNodeIds] = useState<number[]>([]);
   const [editorExpireAt, setEditorExpireAt] = useState("");
@@ -176,15 +183,19 @@ export default function SubscriptionCenterPage() {
   const [subscriptionTemplate, setSubscriptionTemplate] = useState("");
   const [subscriptionUdp, setSubscriptionUdp] = useState(true);
   const [subscriptionCert, setSubscriptionCert] = useState(true);
+  const [subscriptionDedupe, setSubscriptionDedupe] = useState(true);
+  const [subscriptionDoh, setSubscriptionDoh] = useState(false);
   const [policyGroupName, setPolicyGroupName] = useState("");
   const [policyGroups, setPolicyGroups] = useState<Record<string, { mode: "all" | "include" | "none"; nodes: number[] }>>({});
   const [editorGroups, setEditorGroups] = useState<string[]>([]);
   const [editorNewGroup, setEditorNewGroup] = useState("");
+  const [createGroupOpen, setCreateGroupOpen] = useState(false);
+  const [createGroupName, setCreateGroupName] = useState("");
+  const [isCreatingGroup, setIsCreatingGroup] = useState(false);
   const [editorSubscriptionIds, setEditorSubscriptionIds] = useState<number[]>([]);
   const [replaceIpEnabled, setReplaceIpEnabled] = useState(false);
   const [replaceIpId, setReplaceIpId] = useState("");
   const [isSavingEditor, setIsSavingEditor] = useState(false);
-  const templateFileInputRef = useRef<HTMLInputElement>(null);
   const confirm = useConfirmDialog();
   const activeItem = sections.find((item) => item.value === activeSection)!;
   const ActiveIcon = activeItem.icon || Link2;
@@ -204,15 +215,17 @@ export default function SubscriptionCenterPage() {
     setIsLoading(true);
     setLoadError(null);
     try {
-      const [subscriptionData, nodeSubscriptionData, nodeData, templateData] = await Promise.all([
+      const [subscriptionData, nodeSubscriptionData, nodeData, templateData, groupData] = await Promise.all([
         sublinkRequest<SubscriptionRecord[]>("/api/v1/subcription/get"),
         sublinkRequest<NodeSubscriptionRecord[]>("/api/v1/node-subscription/get"),
         sublinkRequest<NodeListResponse>("/api/v1/nodes/get?all=1"),
         sublinkRequest<TemplateApiRecord[]>("/api/v1/template/get"),
+        sublinkRequest<string[]>("/api/v1/nodes/group/get"),
       ]);
       setSubscriptions(Array.isArray(subscriptionData) ? subscriptionData : []);
       setNodeSubscriptions(Array.isArray(nodeSubscriptionData) ? nodeSubscriptionData : []);
       setNodes(Array.isArray(nodeData) ? nodeData : (nodeData?.items || []));
+      setNodeGroups(Array.isArray(groupData) ? groupData : []);
       setTemplates(Array.isArray(templateData) ? templateData.map((item) => ({
         File: item.File || item.file || "未命名模板",
         Text: item.Text ?? item.text ?? "",
@@ -376,15 +389,39 @@ export default function SubscriptionCenterPage() {
   };
 
   const openEditor = (mode: Exclude<EditorMode, null>, template?: TemplateRecord) => {
-    setEditorMode(mode);
+    setEditorMode(mode); setEditorOriginalName("");
     setEditorName(""); setEditorLink(""); setEditorNodeIds([]); setEditorExpireAt(""); setEditorAccessLimit(""); setEditorOutputType("clash");
     setTemplateFilename(template?.File || ""); setTemplateOriginalFilename(template?.File || ""); setTemplateText(template?.Text || "");
-    setSubscriptionStep(0); setSubscriptionTemplate(""); setSubscriptionUdp(true); setSubscriptionCert(true); setPolicyGroupName(""); setPolicyGroups({});
+    setSubscriptionStep(0); setSubscriptionTemplate(""); setSubscriptionUdp(true); setSubscriptionCert(true); setSubscriptionDedupe(true); setSubscriptionDoh(false); setPolicyGroupName(""); setPolicyGroups({});
     setEditorGroups([]); setEditorNewGroup(""); setEditorSubscriptionIds([]); setReplaceIpEnabled(false); setReplaceIpId("");
     if (mode === "node") void loadIpLibrary();
   };
 
   const toggleEditorNode = (id: number) => setEditorNodeIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+
+  const createNodeGroup = async () => {
+    const name = createGroupName.trim();
+    if (!name) return;
+    setIsCreatingGroup(true);
+    try {
+      const body = new FormData(); body.set("name", name);
+      await sublinkRequest("/api/v1/nodes/group/add", { method: "POST", body });
+      await loadSubscriptions();
+      setEditorGroups((current) => current.includes(name) ? current : [...current, name]);
+      setCreateGroupName(""); setCreateGroupOpen(false);
+      toast.success("分组已创建");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "创建分组失败");
+    } finally { setIsCreatingGroup(false); }
+  };
+
+  const editSubscription = (subscription: SubscriptionRecord) => {
+    let config: Record<string, any> = {};
+    try { config = JSON.parse(subscription.Config || "{}"); } catch { /* keep defaults */ }
+    setEditorMode("subscription"); setEditorOriginalName(subscription.Name); setEditorName(subscription.Name);
+    setEditorNodeIds((subscription.Nodes || []).map((node) => node.ID)); setEditorExpireAt(subscription.ExpireAt ? new Date(subscription.ExpireAt).toISOString().slice(0, 16) : ""); setEditorAccessLimit(subscription.AccessLimit ? String(subscription.AccessLimit) : "");
+    setEditorOutputType(typeof config.output_type === "string" ? config.output_type : "clash"); setSubscriptionTemplate(typeof config.clash === "string" ? config.clash : ""); setSubscriptionUdp(config.udp === true || config.udp === "true"); setSubscriptionCert(config.cert === true || config.cert === "true"); setPolicyGroups(Object.fromEntries(Object.entries(config.group_nodes || {}).map(([name, rule]: [string, any]) => [name, { mode: rule.mode || "all", nodes: (rule.nodes || []).map((nodeName: string) => nodes.find((node) => node.Name === nodeName)?.ID).filter(Boolean) }]))); setSubscriptionStep(0);
+  };
 
   const saveEditor = async () => {
     if (!editorMode) return;
@@ -399,8 +436,10 @@ export default function SubscriptionCenterPage() {
       } else if (editorMode === "subscription" || editorMode === "node-subscription") {
         if (!editorName.trim() || !editorNodeIds.length) throw new Error("请填写名称并至少选择一个节点");
         const body = new FormData(); body.set("name", editorName.trim()); body.set("nodes", editorNodeIds.join(",")); body.set("expire_at", editorExpireAt); body.set("access_limit", editorAccessLimit);
-        if (editorMode === "subscription") body.set("config", JSON.stringify({ output_type: editorOutputType, clash: editorOutputType === "clash" ? subscriptionTemplate : "", surge: editorOutputType === "surge" ? subscriptionTemplate : "", egern: editorOutputType === "egern" ? subscriptionTemplate : "", loon: editorOutputType === "loon" ? subscriptionTemplate : "", udp: subscriptionUdp, cert: subscriptionCert, group_nodes: Object.fromEntries(Object.entries(policyGroups).map(([name, rule]) => [name, { mode: rule.mode, nodes: rule.mode === "include" ? rule.nodes.map((id) => nodes.find((node) => node.ID === id)?.Name).filter(Boolean) : [] }])) }));
-        await sublinkRequest(`/api/v1/${editorMode === "subscription" ? "subcription" : "node-subscription"}/add`, { method: "POST", body });
+        if (editorMode === "subscription") body.set("config", JSON.stringify({ output_type: editorOutputType, clash: editorOutputType === "clash" ? subscriptionTemplate : "", surge: editorOutputType === "surge" ? subscriptionTemplate : "", egern: editorOutputType === "egern" ? subscriptionTemplate : "", loon: editorOutputType === "loon" ? subscriptionTemplate : "", udp: subscriptionUdp, cert: subscriptionCert, dedupe_nodes: subscriptionDedupe, doh_dns: subscriptionDoh, group_nodes: Object.fromEntries(Object.entries(policyGroups).map(([name, rule]) => [name, { mode: rule.mode, nodes: rule.mode === "include" ? rule.nodes.map((id) => nodes.find((node) => node.ID === id)?.Name).filter(Boolean) : [] }])) }));
+        const isEditing = Boolean(editorOriginalName);
+        if (isEditing) body.set("oldname", editorOriginalName);
+        await sublinkRequest(`/api/v1/${editorMode === "subscription" ? "subcription" : "node-subscription"}/${isEditing ? "update" : "add"}`, { method: "POST", body });
       } else {
         if (!templateFilename.trim() || !templateText.trim()) throw new Error("请填写模板文件名和模板内容");
         const body = new FormData(); body.set("filename", templateFilename.trim()); body.set("text", templateText);
@@ -414,12 +453,50 @@ export default function SubscriptionCenterPage() {
     } finally { setIsSavingEditor(false); }
   };
 
-  const importTemplateFile = async (file?: File) => {
-    if (!file) return;
+  const saveImportedTemplate = async (filename: string, text: string) => {
+    setIsSavingEditor(true);
     try {
-      openEditor("template-import");
-      setTemplateFilename(file.name); setTemplateText(await file.text());
-    } catch { toast.error("模板文件读取失败"); }
+      const body = new FormData(); body.set("filename", filename); body.set("text", text);
+      await sublinkRequest("/api/v1/template/add", { method: "POST", body });
+      toast.success("模板已导入");
+      setEditorMode(null);
+      await loadSubscriptions();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "模板导入失败");
+      throw error;
+    } finally { setIsSavingEditor(false); }
+  };
+
+  const saveVisualTemplate = async (filename: string, text: string) => {
+    if (!filename.trim() || !text.trim()) {
+      toast.error("请填写模板文件名和模板内容");
+      return;
+    }
+    setIsSavingEditor(true);
+    try {
+      const body = new FormData();
+      body.set("filename", filename.trim());
+      body.set("text", text);
+      if (editorMode === "template-edit") {
+        body.set("oldname", templateOriginalFilename);
+        await sublinkRequest("/api/v1/template/update", { method: "POST", body });
+      } else {
+        await sublinkRequest("/api/v1/template/add", { method: "POST", body });
+      }
+      toast.success(editorMode === "template-edit" ? "模板已保存" : "模板已创建");
+      setEditorMode(null);
+      await loadSubscriptions();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "保存失败");
+      throw error;
+    } finally {
+      setIsSavingEditor(false);
+    }
+  };
+
+  const fetchImportedTemplate = async (url: string) => {
+    const body = new FormData(); body.set("url", url);
+    return sublinkRequest<{ text: string; status: number }>("/api/v1/template/fetch", { method: "POST", body });
   };
 
   const replaceTemplateText = () => {
@@ -438,7 +515,7 @@ export default function SubscriptionCenterPage() {
         <DropdownMenuItem onSelect={() => setLogSubscription(subscription)}>
           <Clock3 className="h-4 w-4" />访问记录
         </DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => toast.info("新版编辑向导将在下一步接入") }>
+        <DropdownMenuItem onSelect={() => editSubscription(subscription)}>
           <Pencil className="h-4 w-4" />编辑
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={() => void handleResetToken(subscription)}>
@@ -452,7 +529,15 @@ export default function SubscriptionCenterPage() {
     </DropdownMenu>
   );
 
-  const isSubscriptionWizardOpen = ["subscription"].includes(editorMode ?? "");
+  const isSubscriptionWizardOpen = Boolean(editorMode === "subscription");
+  const isNodeSubscriptionDialogOpen = Boolean(editorMode === "node-subscription");
+  const isNodeAddDialogOpen = Boolean(editorMode === "node");
+  const isTemplateImportDialogOpen = Boolean(editorMode === "template-import");
+  const isTemplateVisualEditorOpen = Boolean(editorMode === "template-add" || editorMode === "template-edit");
+  // Keep this fallback dialog independently typed: the three specialised
+  // dialogs above short-circuit it at runtime, while its legacy JSX remains
+  // available for all editor modes during a transition.
+  const fallbackEditorMode: EditorMode = editorMode;
 
   return (
     <DashboardLayout>
@@ -520,7 +605,7 @@ export default function SubscriptionCenterPage() {
                 <Input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="搜索订阅名称" className="h-9 pl-9" />
               </div>
             </CardHeader>
-            <CardContent className="p-0">
+            <CardContent className={cn("p-0", viewMode === "table" && "overflow-hidden rounded-lg border border-border/40 bg-card/60 backdrop-blur-md")}>
               {isLoading ? (
                 <div className="grid min-h-72 place-items-center text-sm text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" />正在读取订阅数据</div>
               ) : loadError ? (
@@ -561,10 +646,12 @@ export default function SubscriptionCenterPage() {
                   {!visibleSubscriptions.length && <p className="col-span-full py-16 text-center text-sm text-muted-foreground">暂无匹配的订阅</p>}
                 </div>
               ) : (
-                <div className="overflow-x-auto">
-                  <Table>
-                    <TableHeader><TableRow><TableHead>订阅名称</TableHead><TableHead>客户端</TableHead><TableHead>状态</TableHead><TableHead>访问量</TableHead><TableHead>创建时间</TableHead><TableHead className="text-right">操作</TableHead></TableRow></TableHeader>
-                    <TableBody>{visibleSubscriptions.map((subscription) => {
+                <Card className="overflow-hidden border-border/40 bg-card/60 backdrop-blur-md">
+                  <CardContent className="p-0">
+                    <div className="overflow-x-auto">
+                      <Table>
+                        <TableHeader><TableRow><TableHead>订阅名称</TableHead><TableHead>客户端</TableHead><TableHead>状态</TableHead><TableHead>访问量</TableHead><TableHead>创建时间</TableHead><TableHead className="text-right">操作</TableHead></TableRow></TableHeader>
+                        <TableBody>{visibleSubscriptions.map((subscription) => {
                       const status = statusOf(subscription);
                       const accessCount = Number(subscription.AccessCount || 0);
                       const accessLimit = Number(subscription.AccessLimit || 0);
@@ -576,10 +663,12 @@ export default function SubscriptionCenterPage() {
                         <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{formatDate(subscription.CreatedAt || subscription.CreateDate)}</TableCell>
                         <TableCell><div className="flex justify-end gap-1"><Button variant="ghost" size="sm" className="h-8" onClick={() => setLogSubscription(subscription)}>记录</Button><Button variant="ghost" size="sm" className="h-8" onClick={() => void copySubscriptionUrl(subscription)}><Copy className="h-3.5 w-3.5" /></Button>{renderMoreActions(subscription)}</div></TableCell>
                       </TableRow>;
-                    })}</TableBody>
-                  </Table>
-                  {!visibleSubscriptions.length && <p className="py-16 text-center text-sm text-muted-foreground">暂无匹配的订阅</p>}
-                </div>
+                        })}</TableBody>
+                      </Table>
+                      {!visibleSubscriptions.length && <p className="py-16 text-center text-sm text-muted-foreground">暂无匹配的订阅</p>}
+                    </div>
+                  </CardContent>
+                </Card>
               )}
             </CardContent>
           </section>
@@ -589,10 +678,10 @@ export default function SubscriptionCenterPage() {
               <div><CardTitle className="flex items-center gap-2 text-lg"><ActiveIcon className="h-5 w-5 text-primary" />{activeItem.label}</CardTitle><CardDescription className="mt-1.5">{sectionDescriptions[activeSection]}</CardDescription></div>
               <div className="flex shrink-0 gap-2">
                 {activeSection === "nodes" && <Button variant="outline" size="sm" className="gap-2" onClick={openIpLibrary}><Library className="h-4 w-4" />节点库</Button>}
-                {activeSection === "templates" && <Button variant="outline" size="sm" className="gap-2" onClick={() => templateFileInputRef.current?.click()}><FileText className="h-4 w-4" />导入模板</Button>}
+                {activeSection === "templates" && <Button variant="outline" size="sm" className="gap-2" onClick={() => openEditor("template-import")}><FileText className="h-4 w-4" />导入模板</Button>}
               </div>
             </CardHeader>
-            <CardContent className="p-0">
+            <CardContent className={cn("p-0", viewMode === "table" && "overflow-hidden rounded-lg border border-border/40 bg-card/60 backdrop-blur-md")}>
               {isLoading ? <div className="grid min-h-64 place-items-center text-sm text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" />正在读取数据</div> : loadError ? <div className="py-16 text-center text-sm text-muted-foreground">{loadError}</div> : activeSection === "node-subscriptions" ? (
                 viewMode === "card" ? <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{nodeSubscriptions.map((item) => {
                   const count = Number(item.AccessCount || 0); const limit = Number(item.AccessLimit || 0); const status = statusOf(item);
@@ -606,8 +695,7 @@ export default function SubscriptionCenterPage() {
             </CardContent>
           </section>
         )}
-        <input ref={templateFileInputRef} className="hidden" type="file" accept=".yaml,.yml,.conf,.list,text/yaml,text/plain" onChange={(event) => { void importTemplateFile(event.target.files?.[0]); event.currentTarget.value = ""; }} />
-        {isSubscriptionWizardOpen ? <SubscriptionWizard
+        {isTemplateImportDialogOpen ? <TemplateImportDialog open saving={isSavingEditor} onClose={() => setEditorMode(null)} onSave={saveImportedTemplate} onFetch={fetchImportedTemplate} /> : isTemplateVisualEditorOpen ? <TemplateVisualEditorDialog open saving={isSavingEditor} filename={templateFilename} text={templateText} onClose={() => setEditorMode(null)} onSave={saveVisualTemplate} /> : isSubscriptionWizardOpen ? <SubscriptionWizard
           open
           step={subscriptionStep} setStep={setSubscriptionStep}
           name={editorName} setName={setEditorName}
@@ -617,13 +705,28 @@ export default function SubscriptionCenterPage() {
           template={subscriptionTemplate} setTemplate={setSubscriptionTemplate}
           udp={subscriptionUdp} setUdp={setSubscriptionUdp}
           cert={subscriptionCert} setCert={setSubscriptionCert}
-          nodes={nodes} selectedNodeIds={editorNodeIds} toggleNode={toggleEditorNode}
+          dedupe={subscriptionDedupe} setDedupe={setSubscriptionDedupe}
+          doh={subscriptionDoh} setDoh={setSubscriptionDoh}
+          nodes={nodes} selectedNodeIds={editorNodeIds} setSelectedNodeIds={setEditorNodeIds} toggleNode={toggleEditorNode}
           templates={templates} policyGroups={policyGroups} setPolicyGroups={setPolicyGroups}
           policyGroupName={policyGroupName} setPolicyGroupName={setPolicyGroupName}
           saving={isSavingEditor} onSave={() => void saveEditor()} onClose={() => setEditorMode(null)}
+        /> : isNodeSubscriptionDialogOpen ? <NodeSubscriptionDialog
+          open
+          name={editorName} setName={setEditorName}
+          expireAt={editorExpireAt} setExpireAt={setEditorExpireAt}
+          accessLimit={editorAccessLimit} setAccessLimit={setEditorAccessLimit}
+          nodes={nodes} selectedNodeIds={editorNodeIds} toggleNode={toggleEditorNode}
+          saving={isSavingEditor} onSave={() => void saveEditor()} onClose={() => setEditorMode(null)}
+        /> : isNodeAddDialogOpen ? <NodeAddDialog
+          open name={editorName} setName={setEditorName} link={editorLink} setLink={setEditorLink}
+          replace={replaceIpEnabled} setReplace={setReplaceIpEnabled} replaceId={replaceIpId} setReplaceId={setReplaceIpId}
+          ips={ipEntries} openIpLibrary={openIpLibrary} groups={nodeGroups} newGroup={editorNewGroup} setNewGroup={setEditorNewGroup} openCreateGroup={() => setCreateGroupOpen(true)}
+          selectedGroups={editorGroups} setSelectedGroups={setEditorGroups} subscriptions={subscriptions} selectedSubscriptions={editorSubscriptionIds} setSelectedSubscriptions={setEditorSubscriptionIds}
+          saving={isSavingEditor} onSave={() => void saveEditor()} onClose={() => setEditorMode(null)}
         /> : <Dialog open={!!editorMode} onOpenChange={(open) => { if (!open) setEditorMode(null); }}>
-          <DialogContent className={cn("max-w-2xl", (editorMode === "template-add" || editorMode === "template-edit" || editorMode === "template-import") && "max-w-[calc(100vw-4rem)]") }>
-            <DialogHeader><DialogTitle>{editorMode === "subscription" ? "新建订阅" : editorMode === "node-subscription" ? "新建节点订阅" : editorMode === "node" ? "新建节点" : editorMode === "template-edit" ? "编辑模板" : editorMode === "template-import" ? "导入模板预览" : "新建模板"}</DialogTitle><DialogDescription>{editorMode === "template-import" ? "文件尚未写入服务器；确认内容后保存即可导入。" : "字段会直接写入现有代理订阅服务。"}</DialogDescription></DialogHeader>
+          <DialogContent className={cn("max-w-2xl", (fallbackEditorMode === "template-add" || fallbackEditorMode === "template-edit" || fallbackEditorMode === "template-import") && "max-w-[calc(100vw-4rem)]") }>
+            <DialogHeader><DialogTitle>{fallbackEditorMode === "subscription" ? "新建订阅" : fallbackEditorMode === "node-subscription" ? "新建节点订阅" : fallbackEditorMode === "node" ? "新建节点" : fallbackEditorMode === "template-edit" ? "编辑模板" : fallbackEditorMode === "template-import" ? "导入模板预览" : "新建模板"}</DialogTitle><DialogDescription>{fallbackEditorMode === "template-import" ? "文件尚未写入服务器；确认内容后保存即可导入。" : "字段会直接写入现有代理订阅服务。"}</DialogDescription></DialogHeader>
             {editorMode === "subscription" ? <div className="space-y-5"><div className="flex flex-wrap gap-2">{["基本信息", "输出模板", "选择节点", "策略组分配", "确认保存"].map((title, index) => <Button key={title} variant={subscriptionStep === index ? "secondary" : "ghost"} size="sm" disabled={index > subscriptionStep + 1} onClick={() => setSubscriptionStep(index)}>{index + 1}. {title}</Button>)}</div>{subscriptionStep === 0 && <div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2 sm:col-span-2"><label className="text-sm font-medium">订阅名称</label><Input value={editorName} onChange={(event) => setEditorName(event.target.value)} placeholder="例如 myclash" /></div><div className="space-y-2"><label className="text-sm font-medium">到期时间</label><Input type="datetime-local" value={editorExpireAt} onChange={(event) => setEditorExpireAt(event.target.value)} /></div><div className="space-y-2"><label className="text-sm font-medium">访问次数限制</label><Input type="number" min="0" value={editorAccessLimit} onChange={(event) => setEditorAccessLimit(event.target.value)} placeholder="留空表示不限" /></div></div>}{subscriptionStep === 1 && <div className="space-y-4"><div className="space-y-2"><label className="text-sm font-medium">订阅类型</label><select value={editorOutputType} onChange={(event) => setEditorOutputType(event.target.value)} className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"><option value="clash">Clash / V2Ray</option><option value="surge">Surge</option><option value="egern">Egern</option><option value="loon">Loon</option></select></div><div className="space-y-2"><label className="text-sm font-medium">{editorOutputType.toUpperCase()} 模板</label><select value={subscriptionTemplate} onChange={(event) => setSubscriptionTemplate(event.target.value)} className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"><option value="">使用默认模板</option>{templates.map((template) => <option key={template.File} value={`./template/${template.File}`}>{template.File}</option>)}</select></div><div className="flex gap-5 text-sm"><label className="flex items-center gap-2"><input type="checkbox" checked={subscriptionUdp} onChange={(event) => setSubscriptionUdp(event.target.checked)} />启用 UDP</label><label className="flex items-center gap-2"><input type="checkbox" checked={subscriptionCert} onChange={(event) => setSubscriptionCert(event.target.checked)} />跳过证书验证</label></div></div>}{subscriptionStep === 2 && <div className="grid gap-4 md:grid-cols-2"><div className="rounded-lg border border-border/60 p-3"><p className="mb-2 text-sm font-medium">可选节点</p>{nodes.filter((node) => !node.Disabled && !editorNodeIds.includes(node.ID)).map((node) => <button key={node.ID} className="block w-full rounded px-2 py-2 text-left text-sm hover:bg-muted" onClick={() => toggleEditorNode(node.ID)}>{node.Name}<span className="float-right text-muted-foreground">加入</span></button>)}</div><div className="rounded-lg border border-border/60 p-3"><p className="mb-2 text-sm font-medium">已选节点 · {editorNodeIds.length}</p>{editorNodeIds.map((id, index) => <div key={id} className="flex items-center gap-2 py-2 text-sm"><span className="text-muted-foreground">{index + 1}</span><span className="flex-1">{nodes.find((node) => node.ID === id)?.Name}</span><Button variant="ghost" size="sm" onClick={() => toggleEditorNode(id)}>移除</Button></div>)}</div></div>}{subscriptionStep === 3 && <div className="space-y-3"><div className="flex gap-2"><Input value={policyGroupName} onChange={(event) => setPolicyGroupName(event.target.value)} placeholder="策略组名称，例如：节点选择" /><Button variant="outline" onClick={() => { const name = policyGroupName.trim(); if (name) { setPolicyGroups((current) => ({ ...current, [name]: { mode: "all", nodes: [] } })); setPolicyGroupName(""); } }}>添加策略组</Button></div>{Object.entries(policyGroups).map(([name, rule]) => <div key={name} className="rounded-lg border border-border/60 p-3"><div className="flex items-center justify-between"><strong className="text-sm">{name}</strong><Button variant="ghost" size="sm" onClick={() => setPolicyGroups((current) => { const next = { ...current }; delete next[name]; return next; })}>移除</Button></div><select value={rule.mode} onChange={(event) => setPolicyGroups((current) => ({ ...current, [name]: { ...rule, mode: event.target.value as "all" | "include" | "none" } }))} className="mt-2 h-9 rounded border border-input bg-background px-2 text-sm"><option value="all">全部已选节点</option><option value="include">指定节点</option><option value="none">不注入节点</option></select>{rule.mode === "include" && <div className="mt-2 flex flex-wrap gap-2">{editorNodeIds.map((id) => <label key={id} className="flex items-center gap-1 text-xs"><input type="checkbox" checked={rule.nodes.includes(id)} onChange={() => setPolicyGroups((current) => ({ ...current, [name]: { ...rule, nodes: rule.nodes.includes(id) ? rule.nodes.filter((item) => item !== id) : [...rule.nodes, id] } }))} />{nodes.find((node) => node.ID === id)?.Name}</label>)}</div>}</div>)}</div>}{subscriptionStep === 4 && <div className="space-y-2 rounded-lg border border-border/60 p-4 text-sm"><p><b>名称：</b>{editorName || "未填写"}</p><p><b>类型：</b>{editorOutputType.toUpperCase()}</p><p><b>节点：</b>{editorNodeIds.length} 个</p><p><b>策略组：</b>{Object.keys(policyGroups).length} 个</p></div>}<div className="flex justify-between"><Button variant="outline" disabled={subscriptionStep === 0} onClick={() => setSubscriptionStep((step) => step - 1)}>上一步</Button>{subscriptionStep < 4 ? <Button onClick={() => { if (subscriptionStep === 0 && !editorName.trim()) return toast.error("请输入订阅名称"); if (subscriptionStep === 2 && !editorNodeIds.length) return toast.error("至少选择一个节点"); setSubscriptionStep((step) => step + 1); }}>下一步</Button> : null}</div></div> : editorMode === "node" ? <div className="space-y-4"><div className="space-y-2"><label className="text-sm font-medium">节点名称</label><Input value={editorName} onChange={(event) => setEditorName(event.target.value)} placeholder="单条可填写；批量添加时留空自动读取链接注释" /></div><div className="space-y-2"><label className="text-sm font-medium">节点链接</label><textarea value={editorLink} onChange={(event) => setEditorLink(event.target.value)} placeholder="支持一个或多个链接，每行一条" className="min-h-32 w-full resize-y rounded-md border border-input bg-background p-3 font-mono text-xs" /></div><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={replaceIpEnabled} onChange={(event) => setReplaceIpEnabled(event.target.checked)} />替换入口 IP（SS / VLESS）</label>{replaceIpEnabled && <select value={replaceIpId} onChange={(event) => setReplaceIpId(event.target.value)} className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"><option value="">选择节点库入口 IP</option>{ipEntries.map((entry) => <option key={entry.ID} value={entry.ID}>{entry.Alias} · {entry.Address}</option>)}</select>}<div className="grid gap-4 sm:grid-cols-2"><div><p className="mb-2 text-sm font-medium">所属分组</p><div className="max-h-28 overflow-auto rounded border border-border/60 p-2">{Array.from(new Set(nodes.flatMap((node) => node.GroupNodes?.map((group) => group.Name) || []))).map((group) => <label key={group} className="mr-3 inline-flex items-center gap-1 text-sm"><input type="checkbox" checked={editorGroups.includes(group)} onChange={() => setEditorGroups((current) => current.includes(group) ? current.filter((item) => item !== group) : [...current, group])} />{group}</label>)}</div><Input className="mt-2" value={editorNewGroup} onChange={(event) => setEditorNewGroup(event.target.value)} placeholder="或新建分组名称" /></div><div><p className="mb-2 text-sm font-medium">关联订阅</p><div className="max-h-36 overflow-auto rounded border border-border/60 p-2">{subscriptions.map((sub) => <label key={sub.ID} className="block py-1 text-sm"><input type="checkbox" checked={editorSubscriptionIds.includes(sub.ID)} onChange={() => setEditorSubscriptionIds((current) => current.includes(sub.ID) ? current.filter((item) => item !== sub.ID) : [...current, sub.ID])} /> {sub.Name}</label>)}</div></div></div></div> : (editorMode === "node-subscription") ? <div className="space-y-5"><div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><label className="text-sm font-medium">名称</label><Input value={editorName} onChange={(event) => setEditorName(event.target.value)} placeholder="例如：全球高速" /></div><div className="space-y-2"><label className="text-sm font-medium">访问限额（可选）</label><Input type="number" min="0" value={editorAccessLimit} onChange={(event) => setEditorAccessLimit(event.target.value)} placeholder="留空表示不限" /></div><div className="space-y-2"><label className="text-sm font-medium">到期时间（可选）</label><Input type="datetime-local" value={editorExpireAt} onChange={(event) => setEditorExpireAt(event.target.value)} /></div></div><div className="space-y-2"><div className="flex items-center justify-between"><label className="text-sm font-medium">选择节点</label><span className="text-xs text-muted-foreground">已选 {editorNodeIds.length} 个</span></div><div className="grid max-h-56 gap-2 overflow-auto rounded-lg border border-border/60 p-3 sm:grid-cols-2">{nodes.filter((node) => !node.Disabled).map((node) => <label key={node.ID} className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/50"><input type="checkbox" checked={editorNodeIds.includes(node.ID)} onChange={() => toggleEditorNode(node.ID)} /><span className="min-w-0 truncate text-sm">{node.Name}</span><span className="ml-auto text-xs text-muted-foreground">{node.Link.split(":")[0]}</span></label>)}</div></div></div> : <div className="space-y-4"><div className="flex items-end gap-3"><div className="min-w-0 flex-1 space-y-2"><label className="text-sm font-medium">文件名</label><Input value={templateFilename} onChange={(event) => setTemplateFilename(event.target.value)} placeholder="例如：my-clash.yaml" /></div><Button variant="outline" size="sm" className="mb-0.5 gap-2" onClick={() => setTemplateFindOpen((open) => !open)}><Search className="h-3.5 w-3.5" />查找替换</Button></div>{templateFindOpen && <div className="grid gap-2 rounded-lg border border-border/60 bg-muted/20 p-3 sm:grid-cols-[1fr_1fr_auto]"><Input value={templateFindText} onChange={(event) => setTemplateFindText(event.target.value)} placeholder="查找内容" /><Input value={templateReplaceText} onChange={(event) => setTemplateReplaceText(event.target.value)} placeholder="替换为" /><Button variant="secondary" onClick={replaceTemplateText}>全部替换</Button></div>}<div className="grid min-h-[58svh] gap-4 lg:grid-cols-2"><section className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-border/60 bg-muted/10"><div className="flex items-center justify-between border-b border-border/60 px-4 py-3"><span className="text-sm font-semibold">YAML 编辑</span><span className="text-xs text-muted-foreground">Tab 缩进 2 个空格</span></div><div className="flex min-h-0 flex-1 overflow-hidden font-mono text-xs leading-6"><div aria-hidden className="select-none overflow-hidden border-r border-border/60 bg-muted/30 px-3 py-3 text-right text-muted-foreground">{Array.from({ length: Math.max(1, templateText.split("\n").length) }, (_, index) => <div key={index}>{index + 1}</div>)}</div><textarea value={templateText} onChange={(event) => setTemplateText(event.target.value)} placeholder="输入或粘贴模板内容" spellCheck={false} className="min-h-0 flex-1 resize-none bg-transparent p-3 font-mono text-xs leading-6 outline-none" /></div></section><section className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-border/60 bg-muted/10"><div className="flex items-center justify-between border-b border-border/60 px-4 py-3"><span className="text-sm font-semibold">实时预览</span><span className="text-xs text-muted-foreground">同步显示当前内容</span></div><pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words p-4 font-mono text-xs leading-6 text-foreground">{templateText || "# 暂无内容"}</pre></section></div></div>}
             <DialogFooter><Button variant="outline" onClick={() => setEditorMode(null)}>取消</Button><Button onClick={() => void saveEditor()} disabled={isSavingEditor}>{isSavingEditor ? "保存中…" : editorMode === "template-import" ? "保存模板" : "保存"}</Button></DialogFooter>
           </DialogContent>
@@ -659,24 +762,29 @@ export default function SubscriptionCenterPage() {
         </Dialog>
         <Dialog open={!!templatePreview} onOpenChange={(open) => { if (!open) setTemplatePreview(null); }}>
           <DialogContent className="max-w-3xl">
-            <DialogHeader><DialogTitle>{templatePreview?.File || "订阅模板"}</DialogTitle><DialogDescription>模板预览。编辑与新建将在下一步接入。</DialogDescription></DialogHeader>
+            <DialogHeader><DialogTitle>{templatePreview?.File || "订阅模板"}</DialogTitle><DialogDescription>模板内容预览；可随时关闭预览并进入可视化编辑器修改。</DialogDescription></DialogHeader>
             <pre className="max-h-[60svh] overflow-auto rounded-lg border border-border/60 bg-muted/20 p-4 font-mono text-xs leading-6 text-foreground">{templatePreview?.Text || ""}</pre>
             <DialogFooter><Button variant="outline" onClick={() => setTemplatePreview(null)}>关闭</Button></DialogFooter>
           </DialogContent>
         </Dialog>
-        <Dialog open={ipLibraryOpen} onOpenChange={setIpLibraryOpen}>
-          <DialogContent className="max-w-2xl">
-            <DialogHeader><DialogTitle>节点库</DialogTitle><DialogDescription>维护转发链路第一台机器的入口 IP；修改或删除不会影响已经保存的节点。</DialogDescription></DialogHeader>
-            <div className="grid gap-3 rounded-lg border border-border/60 bg-muted/15 p-3 sm:grid-cols-[1fr_1fr_auto]">
-              <Input value={ipForm.Address} onChange={(event) => setIpForm((current) => ({ ...current, Address: event.target.value }))} placeholder="IP 地址，例如 198.51.100.24" />
-              <Input value={ipForm.Alias} onChange={(event) => setIpForm((current) => ({ ...current, Alias: event.target.value }))} placeholder="别名，例如：香港入口 A" onKeyDown={(event) => { if (event.key === "Enter") void saveIpEntry(); }} />
-              <div className="flex gap-2"><Button onClick={() => void saveIpEntry()} disabled={isSavingIp}>{isSavingIp ? "保存中" : ipForm.ID ? "保存" : "加入节点库"}</Button>{ipForm.ID ? <Button variant="ghost" onClick={() => setIpForm({ ID: 0, Alias: "", Address: "" })}>取消</Button> : null}</div>
-            </div>
-            <div className="max-h-[45svh] overflow-auto rounded-lg border border-border/60">
-              <Table><TableHeader><TableRow><TableHead>别名</TableHead><TableHead>IP 地址</TableHead><TableHead>创建时间</TableHead><TableHead className="text-right">操作</TableHead></TableRow></TableHeader><TableBody>{ipEntries.map((entry) => <TableRow key={entry.ID}><TableCell className="font-medium">{entry.Alias}</TableCell><TableCell className="font-mono text-xs">{entry.Address}</TableCell><TableCell className="text-xs text-muted-foreground">{formatDate(entry.CreatedAt)}</TableCell><TableCell className="text-right"><Button variant="ghost" size="sm" onClick={() => setIpForm({ ID: entry.ID, Alias: entry.Alias, Address: entry.Address })}>编辑</Button><Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => void removeIpEntry(entry)}>删除</Button></TableCell></TableRow>)}</TableBody></Table>
-              {!ipEntries.length && <p className="py-12 text-center text-sm text-muted-foreground">节点库还是空的</p>}
-            </div>
-            <DialogFooter><Button variant="outline" onClick={() => setIpLibraryOpen(false)}>关闭</Button></DialogFooter>
+        <IpLibraryDialog open={ipLibraryOpen} onClose={() => setIpLibraryOpen(false)} entries={ipEntries} form={ipForm} setForm={setIpForm} saving={isSavingIp} onSave={() => void saveIpEntry()} onDelete={(entry) => void removeIpEntry(entry)} />
+        <Dialog open={createGroupOpen} onOpenChange={(open) => { setCreateGroupOpen(open); if (!open) setCreateGroupName(""); }}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader>
+              <DialogTitle>创建新分组</DialogTitle>
+              <DialogDescription>输入分组名称。创建成功后会自动刷新并选中该分组。</DialogDescription>
+            </DialogHeader>
+            <Input
+              autoFocus
+              value={createGroupName}
+              onChange={(event) => setCreateGroupName(event.target.value)}
+              onKeyDown={(event) => { if (event.key === "Enter") void createNodeGroup(); }}
+              placeholder="例如：香港 BGP 节点"
+            />
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setCreateGroupOpen(false)}>取消</Button>
+              <Button disabled={!createGroupName.trim() || isCreatingGroup} onClick={() => void createNodeGroup()}>{isCreatingGroup ? "创建中…" : "确定"}</Button>
+            </DialogFooter>
           </DialogContent>
         </Dialog>
       </div>

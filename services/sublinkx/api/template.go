@@ -5,16 +5,84 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
+	"net/http"
+	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"sublink/utils"
 	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"gopkg.in/yaml.v3"
 )
+
+const maxImportedTemplateBytes = 1024 * 1024
+
+// FetchTemp reads a public HTTP(S) template for the import dialog.  It is kept
+// server-side so browsers do not need to bypass CORS, while rejecting local and
+// private destinations to avoid turning the endpoint into an SSRF primitive.
+func FetchTemp(c *gin.Context) {
+	rawURL := strings.TrimSpace(c.PostForm("url"))
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Hostname() == "" || (parsed.Scheme != "https" && parsed.Scheme != "http") {
+		c.JSON(http.StatusBadRequest, gin.H{"msg": "请输入有效的 HTTP(S) 模板地址"})
+		return
+	}
+	host := parsed.Hostname()
+	if strings.EqualFold(host, "localhost") {
+		c.JSON(http.StatusBadRequest, gin.H{"msg": "不允许拉取本地或私有网络地址"})
+		return
+	}
+	resolved, err := net.LookupIP(host)
+	if err != nil || len(resolved) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"msg": "无法解析模板地址"})
+		return
+	}
+	for _, resolvedAddress := range resolved {
+		address, ok := netip.AddrFromSlice(resolvedAddress)
+		if !ok || !isPublicTemplateAddress(address) {
+			c.JSON(http.StatusBadRequest, gin.H{"msg": "不允许拉取本地或私有网络地址"})
+			return
+		}
+	}
+	client := &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(request *http.Request, via []*http.Request) error {
+		if len(via) >= 3 || (request.URL.Scheme != "https" && request.URL.Scheme != "http") {
+			return http.ErrUseLastResponse
+		}
+		return nil
+	}}
+	request, _ := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, parsed.String(), nil)
+	request.Header.Set("Accept", "text/plain, application/yaml, text/yaml, */*;q=0.1")
+	response, err := client.Do(request)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"msg": "拉取模板失败"})
+		return
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		c.JSON(http.StatusBadGateway, gin.H{"msg": fmt.Sprintf("模板服务器返回 %s", response.Status)})
+		return
+	}
+	content, err := io.ReadAll(io.LimitReader(response.Body, maxImportedTemplateBytes+1))
+	if err != nil || len(content) > maxImportedTemplateBytes {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"msg": "模板内容超过 1MB 限制或读取失败"})
+		return
+	}
+	if strings.TrimSpace(string(content)) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"msg": "拉取结果为空"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": "00000", "data": gin.H{"text": string(content), "status": response.StatusCode}, "msg": "ok"})
+}
+
+func isPublicTemplateAddress(address netip.Addr) bool {
+	return address.IsValid() && !address.IsLoopback() && !address.IsPrivate() && !address.IsLinkLocalUnicast() && !address.IsLinkLocalMulticast() && !address.IsUnspecified() && !address.IsMulticast()
+}
 
 type Temp struct {
 	File       string `json:"file"`
