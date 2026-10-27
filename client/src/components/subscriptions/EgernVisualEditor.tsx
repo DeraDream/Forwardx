@@ -59,7 +59,14 @@ function parse(value: string) {
     Array.isArray(root.policy_groups) ? root.policy_groups : []
   ).map((entry: Record<string, Record<string, unknown>>) => {
     const [type, settings] = Object.entries(entry || {})[0] || ["select", {}];
-    return { name: "", type, policies: [], ...(settings || {}) } as Group;
+    const normalized = settings && typeof settings === "object" ? settings : {};
+    const { policies, ...rest } = normalized;
+    return {
+      name: "",
+      type,
+      ...rest,
+      policies: Array.isArray(policies) ? policies.map(String) : [],
+    } as Group;
   });
   const rules = (Array.isArray(root.rules) ? root.rules : []).map(
     (entry: Record<string, Record<string, unknown>>) => {
@@ -98,8 +105,8 @@ export function EgernVisualEditor({ value, onChange, onError, onDirtyChange }: P
           policy_groups: groups.map(({ type, policies, ...settings }) => ({
             [type]: {
               ...settings,
-              ...(policies.filter(Boolean).length
-                ? { policies: policies.filter(Boolean) }
+              ...((Array.isArray(policies) ? policies : []).filter(Boolean).length
+                ? { policies: (Array.isArray(policies) ? policies : []).filter(Boolean) }
                 : {}),
             },
           })),

@@ -711,7 +711,7 @@ export function TemplateVisualEditorDialog({
   const hasUnsavedChanges =
     filename !== initialFilename ||
     externalVisualDirty ||
-    (mode === "code" ? source : yaml) !== initialOutputRef.current;
+    (detectTemplateKind(source) === "clash" && mode !== "code" ? yaml : source) !== initialOutputRef.current;
   const requestClose = () => {
     if (hasUnsavedChanges) {
       setCloseConfirmOpen(true);
@@ -750,7 +750,7 @@ export function TemplateVisualEditorDialog({
     [templateKind, currentOutput],
   );
   const visualRewriteRisk =
-    mode === "visual" &&
+    mode !== "code" &&
     (templateKind === "egern" || templateKind === "loon") &&
     /(^|\n)\s*[#;]/.test(source);
   const ruleTargetOptions = useMemo(
@@ -855,12 +855,12 @@ export function TemplateVisualEditorDialog({
         <Code2 className="mr-1 inline h-3.5 w-3.5" />
         {templateKind === "loon" ? "INI 代码" : "YAML 代码"}
       </button>
-      {templateKind === "clash" && <button
+      {templateKind !== "unknown" && <button
         className={`border-b-2 px-1 py-2 text-sm transition-colors ${mode === "rules" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
         onClick={() => setMode("rules")}
       >
         <GripVertical className="mr-1 inline h-3.5 w-3.5" />
-        可视化规则 <span className="ml-1 rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px]">{rules.length}</span>
+        可视化规则 {templateKind === "clash" && <span className="ml-1 rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px]">{rules.length}</span>}
       </button>}
     </div>
   );
@@ -1010,6 +1010,19 @@ export function TemplateVisualEditorDialog({
                   if (rule) setRuleEditor({ index, target: rule.target, type: rule.type, value: rule.value, noResolve: Boolean(rule.noResolve) });
                 }}
               />
+            ) : mode === "rules" ? (
+              <section className="flex min-h-0 flex-1 flex-col overflow-hidden bg-muted/20 p-4">
+                <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+                  <header className="border-b border-border bg-muted/30 px-4 py-3">
+                    <p className="text-sm font-semibold text-foreground">可视化规则 <span className="ml-1 rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] text-primary">{codeFormatLabel}</span></p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">按策略组展开、修改或新增规则；点击“应用更改”后写回模板代码。</p>
+                  </header>
+                  {visualRewriteRisk && <div className="mx-3 mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">此模板含注释。可视化保存前会再次确认；如需严格保持注释位置，请使用代码模式。</div>}
+                  <div className="min-h-0 flex-1 overflow-hidden [&_input]:border-border [&_input]:bg-background [&_input]:text-foreground [&_select]:border-border [&_select]:bg-background [&_select]:text-foreground">
+                    {templateKind === "egern" ? <EgernVisualEditor value={source} onChange={setSource} onDirtyChange={setExternalVisualDirty} onError={(message) => { if (message) toast.error(message); }} /> : <LoonVisualEditor value={source} onChange={setSource} onDirtyChange={setExternalVisualDirty} onError={(message) => { if (message) toast.error(message); }} />}
+                  </div>
+                </div>
+              </section>
             ) : (
               <div className="grid min-h-0 flex-1 gap-4 overflow-hidden bg-muted/20 p-4 lg:grid-cols-[minmax(0,1.04fr)_minmax(420px,.96fr)]">
                 <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-card shadow-sm">

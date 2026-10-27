@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.4.11] - 2026-10-27
+
+### Fixed
+
+- 修复 Egern 模板中 `policies: null` 导致可视化编辑器报错；模板列表改为按正文特征识别 Clash、Egern 与 Loon。
+- Egern、Loon 增加可视化规则页签，修正未改动直接关闭时的错误未保存提示。
+- 移除内置 Surge 默认模板及订阅向导入口；默认模板仅保留 Clash、Egern、Loon。Agent 保持 `2.2.231`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.4.10] - 2026-10-27
 
 ### Fixed
