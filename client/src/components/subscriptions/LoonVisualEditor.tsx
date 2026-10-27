@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronUp, GripVertical, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -16,6 +16,7 @@ type Props = {
   value: string;
   onChange: (value: string) => void;
   onError: (message: string) => void;
+  onDirtyChange: (dirty: boolean) => void;
 };
 const types = ["select", "url-test", "fallback", "load-balance"];
 const targetOf = (value: string) =>
@@ -71,16 +72,19 @@ function load(value: string) {
     .map((value) => ({ value, target: targetOf(value) }));
   return { sections, groups, rules };
 }
-export function LoonVisualEditor({ value, onChange, onError }: Props) {
+export function LoonVisualEditor({ value, onChange, onError, onDirtyChange }: Props) {
   const [sections, setSections] = useState<Section[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
   const [rules, setRules] = useState<Rule[]>([]);
+  const [expanded, setExpanded] = useState<number[]>([]);
+  const markDirty = () => onDirtyChange(true);
   useEffect(() => {
     try {
       const next = load(value);
       setSections(next.sections);
       setGroups(next.groups);
       setRules(next.rules);
+      onDirtyChange(false);
       onError("");
     } catch (error) {
       onError(error instanceof Error ? error.message : "Loon 格式错误");
@@ -93,12 +97,20 @@ export function LoonVisualEditor({ value, onChange, onError }: Props) {
     }));
     const pg = next.find((item) => item.name.toLowerCase() === "proxy group");
     const rs = next.find((item) => item.name.toLowerCase() === "rule");
-    if (pg)
-      pg.lines = groups.map(
+    if (pg) {
+      const notes = pg.lines.filter((line) => !line.trim() || /^\s*[#;]/.test(line));
+      pg.lines = [
+        ...notes,
+        ...groups.map(
         (group) =>
           `${group.name} = ${[group.type, ...group.policies.filter(Boolean), ...group.extras].join(",")}`,
-      );
-    if (rs) rs.lines = rules.map((rule) => rule.value);
+        ),
+      ];
+    }
+    if (rs) {
+      const notes = rs.lines.filter((line) => !line.trim() || /^\s*[#;]/.test(line));
+      rs.lines = [...notes, ...rules.map((rule) => rule.value)];
+    }
     return (
       next
         .map((section) =>
@@ -111,13 +123,36 @@ export function LoonVisualEditor({ value, onChange, onError }: Props) {
     rules
       .map((rule, index) => ({ rule, index }))
       .filter((item) => item.rule.target === name);
+  const renameGroup = (index: number, name: string) => {
+    const previous = groups[index]?.name;
+    setGroups((items) => items.map((item, position) => position === index ? { ...item, name } : item));
+    if (previous !== undefined && previous !== name) {
+      setRules((items) => items.map((rule) => rule.target === previous ? { ...rule, target: name, value: rule.value.replace(new RegExp(`,\\s*${previous.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`), `,${name}`) } : rule));
+    }
+  };
+  const moveGroup = (index: number, amount: number) =>
+    setGroups((items) => {
+      const next = [...items];
+      const target = index + amount;
+      if (target < 0 || target >= next.length) return items;
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  const removeGroup = (index: number) => {
+    markDirty();
+    const name = groups[index]?.name;
+    setGroups((items) => items.filter((_, position) => position !== index));
+    setRules((items) => items.filter((rule) => rule.target !== name));
+    setExpanded((items) => items.filter((position) => position !== index).map((position) => position > index ? position - 1 : position));
+  };
   return (
-    <section className="min-h-0 flex-1 overflow-auto p-3">
+    <section className="min-h-0 flex-1 overflow-auto p-3" onChangeCapture={markDirty}>
       <div className="mb-3 flex items-center justify-between">
         <strong className="text-sm">Loon 策略组 · {groups.length}</strong>
         <Button
           size="sm"
           onClick={() => {
+            markDirty();
             setSections((items) =>
               items.some((item) => item.name.toLowerCase() === "proxy group")
                 ? items
@@ -143,34 +178,35 @@ export function LoonVisualEditor({ value, onChange, onError }: Props) {
         </Button>
       </div>
       {groups.map((group, index) => (
-        <article
-          key={index}
-          className="mb-3 space-y-3 rounded-md border border-border/70 p-3"
-        >
+        <article key={index} className="mb-3 overflow-hidden rounded-md border border-border/70">
+          <div className="flex items-center gap-2 bg-muted/30 px-3 py-2.5">
+            <button className="flex min-w-0 flex-1 items-center gap-2 text-left text-sm font-semibold" onClick={() => setExpanded((items) => items.includes(index) ? items.filter((item) => item !== index) : [...items, index])}>
+              <GripVertical className="size-4 shrink-0 text-muted-foreground" />
+              <span className="truncate">{group.name || `未命名策略组 ${index + 1}`}</span>
+              <span className="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] font-medium text-primary">{group.type}</span>
+            </button>
+            <Button variant="ghost" size="icon" className="size-7" disabled={!index} onClick={() => { markDirty(); moveGroup(index, -1); }}><ChevronUp className="size-4" /></Button>
+            <Button variant="ghost" size="icon" className="size-7" disabled={index === groups.length - 1} onClick={() => { markDirty(); moveGroup(index, 1); }}><ChevronDown className="size-4" /></Button>
+            <Button variant="ghost" size="icon" className="size-7 text-destructive hover:text-destructive" onClick={() => removeGroup(index)}><Trash2 className="size-4" /></Button>
+          </div>
+          {expanded.includes(index) && <div className="space-y-3 p-3">
           <div className="grid gap-3 sm:grid-cols-2">
             <Input
               value={group.name}
-              onChange={(event) =>
-                setGroups((items) =>
-                  items.map((item, position) =>
-                    position === index
-                      ? { ...item, name: event.target.value }
-                      : item,
-                  ),
-                )
-              }
+              onChange={(event) => renameGroup(index, event.target.value)}
             />
             <Select
               value={group.type}
-              onValueChange={(type) =>
+              onValueChange={(type) => {
+                markDirty();
                 setGroups((items) =>
                   items.map((item, position) =>
                     position === index
                       ? { ...item, type }
                       : item,
                   ),
-                )
-              }
+                );
+              }}
             >
               <SelectTrigger className="h-10 border-input bg-background"><SelectValue /></SelectTrigger>
               <SelectContent>{types.map((type) => <SelectItem key={type} value={type}>{type}</SelectItem>)}</SelectContent>
@@ -218,11 +254,12 @@ export function LoonVisualEditor({ value, onChange, onError }: Props) {
               <Button
                 variant="ghost"
                 size="icon"
-                onClick={() =>
+                onClick={() => {
+                  markDirty();
                   setRules((items) =>
                     items.filter((_, position) => position !== ruleIndex),
-                  )
-                }
+                  );
+                }}
               >
                 <Trash2 className="h-4 w-4 text-destructive" />
               </Button>
@@ -231,21 +268,23 @@ export function LoonVisualEditor({ value, onChange, onError }: Props) {
           <Button
             size="sm"
             variant="outline"
-            onClick={() =>
+            onClick={() => {
+              markDirty();
               setRules((items) => [
                 ...items,
                 {
                   value: `DOMAIN-SUFFIX,example.com,${group.name}`,
                   target: group.name,
                 },
-              ])
-            }
+              ]);
+            }}
           >
             添加规则
           </Button>
+          </div>}
         </article>
       ))}
-      <Button onClick={() => onChange(output)}>应用更改</Button>
+      <Button onClick={() => { onChange(output); onDirtyChange(false); }}>应用更改</Button>
     </section>
   );
 }
