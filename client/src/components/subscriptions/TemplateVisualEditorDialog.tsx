@@ -123,6 +123,27 @@ const ruleTypeGroups = [
   { label: "端口与进程", types: ["DST-PORT", "SRC-PORT", "PROCESS-NAME", "PROCESS-NAME-WILDCARD", "PROCESS-NAME-REGEX"] },
   { label: "高级规则", types: ["RULE-SET", "NETWORK", "MATCH"] },
 ];
+const ruleTypeDescriptions: Record<string, string> = {
+  DOMAIN: "精确匹配指定域名",
+  "DOMAIN-SUFFIX": "匹配主域及所有子域名",
+  "DOMAIN-KEYWORD": "匹配域名中的关键词",
+  "DOMAIN-WILDCARD": "按通配符匹配域名",
+  "DOMAIN-REGEX": "按正则表达式匹配域名",
+  "IP-CIDR": "匹配 IPv4 网段或地址",
+  "IP-CIDR6": "匹配 IPv6 网段或地址",
+  "IP-SUFFIX": "匹配 IP 地址后缀",
+  "IP-ASN": "匹配 ASN 自治系统编号",
+  GEOIP: "按国家或地区匹配 IP",
+  GEOSITE: "按 geosite 规则集匹配域名",
+  "DST-PORT": "匹配目标端口",
+  "SRC-PORT": "匹配来源端口",
+  "PROCESS-NAME": "精确匹配进程名称",
+  "PROCESS-NAME-WILDCARD": "按通配符匹配进程名",
+  "PROCESS-NAME-REGEX": "按正则匹配进程名",
+  "RULE-SET": "引用已配置的规则集",
+  NETWORK: "匹配 TCP 或 UDP 协议",
+  MATCH: "匹配其余全部流量",
+};
 
 const editorFieldClass =
   "border border-border bg-background text-foreground shadow-sm placeholder:text-muted-foreground focus-visible:border-primary focus-visible:ring-primary/30";
@@ -271,7 +292,11 @@ function CodeSurface({
           const target = event.currentTarget;
           if (overlayRef.current) overlayRef.current.style.transform = `translate(${-target.scrollLeft}px, ${-target.scrollTop}px)`;
           if (lineRef.current) lineRef.current.style.transform = `translateY(${-target.scrollTop}px)`;
-        }} />
+        }}>
+          {/* Absolute overlays do not contribute to scroll dimensions. Keep an invisible
+              copy in normal flow so this viewport can scroll and focusLine can work. */}
+          <pre aria-hidden className="pointer-events-none m-0 min-w-max select-none whitespace-pre py-4 pl-4 pr-6 text-transparent">{value || " "}</pre>
+        </div>
       ) : (
         <textarea
           ref={textareaRef}
@@ -1413,7 +1438,7 @@ export function TemplateVisualEditorDialog({
               <section className="rounded-xl border border-border bg-muted/15 p-4">
                 <div className="mb-3 flex items-center justify-between gap-3"><div><p className="text-sm font-semibold text-foreground">匹配类型</p><p className="mt-0.5 text-xs text-muted-foreground">选择要识别的流量特征</p></div><span className={`rounded border px-2 py-1 font-mono text-[10px] font-semibold ${ruleTagClass(ruleEditor.type)}`}>{ruleEditor.type}</span></div>
                 <div className="space-y-3">
-                  {ruleTypeGroups.map((group) => <div key={group.label}><p className="mb-1.5 text-[11px] font-medium text-muted-foreground">{group.label}</p><div className="flex flex-wrap gap-1.5">{group.types.map((type) => <button key={type} type="button" onClick={() => setRuleEditor({ ...ruleEditor, type, value: type === ruleEditor.type ? ruleEditor.value : "", noResolve: false })} className={`rounded-md border px-2 py-1.5 font-mono text-[11px] font-semibold transition-colors ${ruleEditor.type === type ? `${ruleTagClass(type)} ring-1 ring-current/20` : "border-border bg-background text-muted-foreground hover:border-primary/45 hover:text-foreground"}`}>{type}</button>)}</div></div>)}
+                  {ruleTypeGroups.map((group) => <div key={group.label}><p className="mb-1.5 text-[11px] font-medium text-muted-foreground">{group.label}</p><div className="flex flex-wrap gap-1.5">{group.types.map((type) => <button key={type} type="button" onClick={() => setRuleEditor({ ...ruleEditor, type, value: type === ruleEditor.type ? ruleEditor.value : "", noResolve: false })} className={`flex max-w-[160px] flex-col items-start gap-0.5 rounded-md border px-2 py-1.5 text-left transition-colors ${ruleEditor.type === type ? `${ruleTagClass(type)} ring-1 ring-current/20` : "border-border bg-background text-muted-foreground hover:border-primary/45 hover:text-foreground"}`}><span className="font-mono text-[11px] font-semibold leading-tight">{type}</span><span className="font-sans text-[10px] font-normal leading-tight opacity-75">{ruleTypeDescriptions[type]}</span></button>)}</div></div>)}
                   <div className="flex flex-wrap items-center gap-2 border-t border-border/70 pt-3"><span className="text-[11px] text-muted-foreground">全部类型：</span><TemplateSelect compact value={ruleEditor.type} options={ruleTypes} mono onValueChange={(type) => setRuleEditor({ ...ruleEditor, type, value: type === ruleEditor.type ? ruleEditor.value : "", noResolve: false })} /></div>
                 </div>
               </section>
