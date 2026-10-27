@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.4.12] - 2026-10-27
+
+### Fixed
+
+- 新建订阅第四步改为解析 Clash YAML 的 `proxy-groups` 数组，完整识别包括行内对象在内的全部策略组。
+- 模板选择下拉按实际正文格式过滤，避免 Clash、Egern、Loon 模板混列；移除本地演示模板残留。Agent 保持 `2.2.231`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.4.11] - 2026-10-27
 
 ### Fixed

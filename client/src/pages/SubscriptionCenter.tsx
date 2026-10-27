@@ -16,6 +16,7 @@ import { NodeAddDialog } from "@/components/subscriptions/NodeAddDialog";
 import { IpLibraryDialog } from "@/components/subscriptions/IpLibraryDialog";
 import { TemplateImportDialog } from "@/components/subscriptions/TemplateImportDialog";
 import { TemplateVisualEditorDialog } from "@/components/subscriptions/TemplateVisualEditorDialog";
+import { parseDocument as parseYamlDocument } from "yaml";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { Clock3, Copy, Ellipsis, FileCode2, FileText, Library, LayoutGrid, Link2, List, Loader2, Network, Pencil, Plus, Power, RefreshCw, Search, Server, Trash2, UsersRound } from "lucide-react";
@@ -141,6 +142,48 @@ function templatePolicyGroups(text: string, outputType: string) {
     for (const line of lines.slice(start + 1)) {
       if (/^\s*\[[^\]]+\]\s*$/.test(line)) break;
       const match = line.replace(/^\s*#.*$/, "").match(/^\s*([^=,#]+?)\s*=/);
+      if (match?.[1]?.trim()) names.push(match[1].trim());
+    }
+    return [...new Set(names)];
+  }
+  if (outputType === "clash" || outputType === "egern") {
+    const document = parseYamlDocument(text, { prettyErrors: false, strict: false });
+    const root = document.toJS();
+    if (!document.errors.length && root && !Array.isArray(root) && typeof root === "object") {
+      const config = root as Record<string, unknown>;
+      if (outputType === "clash") {
+        const groups = Array.isArray(config["proxy-groups"]) ? config["proxy-groups"] : [];
+        const names = groups
+          .filter((group): group is Record<string, unknown> => Boolean(group) && typeof group === "object" && !Array.isArray(group))
+          .map((group) => String(group.name || "").trim())
+          .filter(Boolean);
+        if (names.length) return [...new Set(names)];
+      }
+      if (outputType === "egern") {
+        const groups = Array.isArray(config.policy_groups) ? config.policy_groups : [];
+        const names = groups.flatMap((entry) => {
+          if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+          return Object.values(entry as Record<string, unknown>).flatMap((settings) =>
+            settings && typeof settings === "object" && !Array.isArray(settings)
+              ? [String((settings as Record<string, unknown>).name || "").trim()]
+              : [],
+          );
+        }).filter(Boolean);
+        if (names.length) return [...new Set(names)];
+      }
+    }
+  }
+  if (outputType === "egern") {
+    const start = lines.findIndex((line) => /^\s*policy_groups\s*:\s*$/i.test(line));
+    if (start < 0) return [];
+    const sectionIndent = lines[start].search(/\S|$/);
+    const names: string[] = [];
+    for (const line of lines.slice(start + 1)) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const indent = line.search(/\S|$/);
+      if (indent <= sectionIndent && !trimmed.startsWith("-")) break;
+      const match = line.match(/^\s+name\s*:\s*["']?([^"'\n#]+)["']?\s*$/i);
       if (match?.[1]?.trim()) names.push(match[1].trim());
     }
     return [...new Set(names)];
