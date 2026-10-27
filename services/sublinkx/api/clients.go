@@ -268,6 +268,7 @@ func templateFingerprint(configText string, format string) (string, bool) {
 	if err := json.Unmarshal([]byte(configText), &config); err != nil {
 		return "config-error", true
 	}
+	normalizeSubscriptionTemplateConfig(&config)
 
 	templatePath := config.Clash
 	if format == "surge" {
@@ -290,6 +291,22 @@ func templateFingerprint(configText string, format string) (string, bool) {
 		return "missing:" + templatePath, true
 	}
 	return "local:" + templatePath + ":" + Md5(string(content)), true
+}
+
+// normalizeSubscriptionTemplateConfig keeps subscriptions created by older
+// ForwardX versions working. Those records can have an empty per-client
+// template field, whereas SublinkX expects a concrete local path and would
+// otherwise attempt to open an empty filename.
+func normalizeSubscriptionTemplateConfig(config *node.SqlConfig) {
+	if strings.TrimSpace(config.Clash) == "" {
+		config.Clash = "./template/clash.yaml"
+	}
+	if strings.TrimSpace(config.Egern) == "" {
+		config.Egern = "./template/egern.yaml"
+	}
+	if strings.TrimSpace(config.Loon) == "" {
+		config.Loon = "./template/loon.conf"
+	}
 }
 
 func subscriptionNodesFingerprint(nodes []models.Node) string {
@@ -580,6 +597,7 @@ func buildClashSubscription(c *gin.Context) (subscriptionCacheEntry, error) {
 	if err != nil {
 		return subscriptionCacheEntry{}, fmt.Errorf("配置读取错误")
 	}
+	normalizeSubscriptionTemplateConfig(&configs)
 	DecodeClash, err := node.EncodeClash(urls, configs)
 	if err != nil {
 		return subscriptionCacheEntry{}, err
@@ -655,6 +673,7 @@ func buildLoonSubscription(c *gin.Context) (subscriptionCacheEntry, error) {
 	if err := json.Unmarshal([]byte(sub.Config), &config); err != nil {
 		return subscriptionCacheEntry{}, fmt.Errorf("配置读取错误")
 	}
+	normalizeSubscriptionTemplateConfig(&config)
 	output, err := node.EncodeLoon(urls, config)
 	if err != nil {
 		return subscriptionCacheEntry{}, err
@@ -706,6 +725,7 @@ func buildEgernSubscription(c *gin.Context) (subscriptionCacheEntry, error) {
 	if err := json.Unmarshal([]byte(sub.Config), &configs); err != nil {
 		return subscriptionCacheEntry{}, fmt.Errorf("配置读取错误")
 	}
+	normalizeSubscriptionTemplateConfig(&configs)
 	configs.EgernUpdateURL = egernSubscriptionURL(c)
 	output, err := node.EncodeEgern(urls, configs)
 	if err != nil {

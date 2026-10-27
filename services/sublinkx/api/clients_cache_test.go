@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"sublink/models"
+	"sublink/node"
 
 	"github.com/gin-gonic/gin"
 )
@@ -39,6 +40,21 @@ func TestRemoteTemplateDisablesSubscriptionCache(t *testing.T) {
 	config := `{"clash":"https://example.com/clash.yaml"}`
 	if _, cacheable := templateFingerprint(config, "clash"); cacheable {
 		t.Fatal("remote templates must not use the generated subscription cache")
+	}
+}
+
+func TestNormalizeSubscriptionTemplateConfigUsesEmbeddedDefaults(t *testing.T) {
+	config := node.SqlConfig{}
+	normalizeSubscriptionTemplateConfig(&config)
+
+	if config.Clash != "./template/clash.yaml" {
+		t.Fatalf("unexpected Clash default: %q", config.Clash)
+	}
+	if config.Egern != "./template/egern.yaml" {
+		t.Fatalf("unexpected Egern default: %q", config.Egern)
+	}
+	if config.Loon != "./template/loon.conf" {
+		t.Fatalf("unexpected Loon default: %q", config.Loon)
 	}
 }
 

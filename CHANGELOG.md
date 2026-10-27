@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.4.13] - 2026-10-27
+
+### Fixed
+
+- 订阅生成兼容历史空模板配置：Clash、Egern、Loon 自动回退到内置默认模板，避免公开订阅链接因读取空路径而返回 `open : no such file or directory`。Agent 保持 `2.2.231`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.4.12] - 2026-10-27
 
 ### Fixed
