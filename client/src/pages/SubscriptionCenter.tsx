@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -19,7 +19,7 @@ import { TemplateVisualEditorDialog } from "@/components/subscriptions/TemplateV
 import { parseDocument as parseYamlDocument } from "yaml";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import { Clock3, Copy, Ellipsis, FileCode2, FileText, Library, LayoutGrid, Link2, List, Loader2, Network, Pencil, Plus, Power, RefreshCw, Search, Server, Trash2, UsersRound } from "lucide-react";
+import { Activity, Clock3, Copy, Database, Ellipsis, FileCode2, FileText, FolderPlus, Library, LayoutGrid, Link2, List, Loader2, MonitorSmartphone, Network, Pencil, Plus, Power, RefreshCw, Search, Server, Trash2, Upload, UsersRound } from "lucide-react";
 
 type SubscriptionSection = "subscriptions" | "node-subscriptions" | "nodes" | "templates";
 type SubscriptionViewMode = "card" | "table";
@@ -125,6 +125,60 @@ function statusOf(subscription: SubscriptionRecord) {
   return { label: "有效", className: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" };
 }
 
+type NodeProtocol = "ss" | "ssr" | "vless" | "vmess" | "trojan" | "hy2" | "tuic" | "snell" | "other";
+
+function nodeProtocol(link: string): NodeProtocol {
+  const value = (link.match(/^([a-z0-9+-]+):\/\//i)?.[1] || "").toLowerCase();
+  if (value === "hysteria2" || value === "hy2") return "hy2";
+  if (["ss", "ssr", "vless", "vmess", "trojan", "tuic", "snell"].includes(value)) return value as NodeProtocol;
+  return "other";
+}
+
+function nodeProtocolLabel(protocol: NodeProtocol) {
+  return protocol === "hy2" ? "HY2" : protocol === "other" ? "未知" : protocol.toUpperCase();
+}
+
+function nodeProtocolClass(protocol: NodeProtocol) {
+  return ({
+    ss: "border-blue-500/30 bg-blue-500/10 text-blue-600 dark:text-blue-300",
+    ssr: "border-sky-500/30 bg-sky-500/10 text-sky-600 dark:text-sky-300",
+    vless: "border-violet-500/30 bg-violet-500/10 text-violet-600 dark:text-violet-300",
+    vmess: "border-purple-500/30 bg-purple-500/10 text-purple-600 dark:text-purple-300",
+    trojan: "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300",
+    hy2: "border-orange-500/30 bg-orange-500/10 text-orange-600 dark:text-orange-300",
+    tuic: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300",
+    snell: "border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-300",
+    other: "border-border bg-muted/60 text-muted-foreground",
+  } as const)[protocol];
+}
+
+function nodeEndpoint(link: string) {
+  const protocol = nodeProtocol(link);
+  if (protocol === "ss") {
+    const payload = link.replace(/^ss:\/\//i, "").split(/[?#]/)[0];
+    // SIP002 links may put the entire method:password@host:port payload in Base64.
+    // Decode only that legacy form; modern ss://method:password@host:port links
+    // continue through the standard URL parser below.
+    if (!payload.includes("@")) {
+      try {
+        const normalized = payload.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(payload.length / 4) * 4, "=");
+        const decoded = typeof atob === "function" ? atob(normalized) : "";
+        const match = decoded.match(/@([^:/?#]+)(?::(\d+))?/);
+        if (match?.[1]) return { host: match[1], port: match[2] || "--" };
+      } catch {
+        // Keep the regular parser fallback for malformed or non-Base64 links.
+      }
+    }
+  }
+  try {
+    const url = new URL(link);
+    return { host: url.hostname || "--", port: url.port || "--" };
+  } catch {
+    const match = link.match(/@([^:/?#]+)(?::(\d+))?/);
+    return { host: match?.[1] || "--", port: match?.[2] || "--" };
+  }
+}
+
 function subscriptionUrl(subscription: SubscriptionRecord, client: string) {
   const url = new URL("/c/", window.location.origin);
   url.searchParams.set("token", subscription.Token || "");
@@ -206,10 +260,15 @@ export default function SubscriptionCenterPage() {
   const [nodeSubscriptions, setNodeSubscriptions] = useState<NodeSubscriptionRecord[]>([]);
   const [nodes, setNodes] = useState<NodeRecord[]>([]);
   const [nodeGroups, setNodeGroups] = useState<string[]>([]);
+  const nodeBackupInputRef = useRef<HTMLInputElement>(null);
   const [templates, setTemplates] = useState<TemplateRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [subscriptionClientFilter, setSubscriptionClientFilter] = useState<"all" | "clash" | "egern" | "loon">("all");
+  const [nodeSearchQuery, setNodeSearchQuery] = useState("");
+  const [nodeProtocolFilter, setNodeProtocolFilter] = useState<NodeProtocol | "all">("all");
+  const [nodeGroupFilter, setNodeGroupFilter] = useState<string | "all">("all");
   const [clientSubscription, setClientSubscription] = useState<SubscriptionRecord | null>(null);
   const [logSubscription, setLogSubscription] = useState<SubscriptionRecord | null>(null);
   const [templatePreview, setTemplatePreview] = useState<TemplateRecord | null>(null);
@@ -221,6 +280,7 @@ export default function SubscriptionCenterPage() {
   const [editorName, setEditorName] = useState("");
   const [editorOriginalName, setEditorOriginalName] = useState("");
   const [editorLink, setEditorLink] = useState("");
+  const [editingNode, setEditingNode] = useState<NodeRecord | null>(null);
   const [editorNodeIds, setEditorNodeIds] = useState<number[]>([]);
   const [editorExpireAt, setEditorExpireAt] = useState("");
   const [editorAccessLimit, setEditorAccessLimit] = useState("");
@@ -296,9 +356,31 @@ export default function SubscriptionCenterPage() {
 
   const visibleSubscriptions = useMemo(() => {
     const keyword = searchQuery.trim().toLowerCase();
-    if (!keyword) return subscriptions;
-    return subscriptions.filter((item) => `${item.Name} ${outputTypeOf(item)}`.toLowerCase().includes(keyword));
-  }, [searchQuery, subscriptions]);
+    return subscriptions.filter((item) => {
+      const client = outputTypeOf(item);
+      return (subscriptionClientFilter === "all" || client === subscriptionClientFilter)
+        && (!keyword || `${item.Name} ${client} ${item.Token || ""} ${(item.Nodes || []).length}`.toLowerCase().includes(keyword));
+    });
+  }, [searchQuery, subscriptionClientFilter, subscriptions]);
+  const visibleNodeSubscriptions = useMemo(() => {
+    const keyword = searchQuery.trim().toLowerCase();
+    return nodeSubscriptions.filter((item) => !keyword || `${item.Name} ${item.Token || ""} ${(item.Nodes || []).length}`.toLowerCase().includes(keyword));
+  }, [nodeSubscriptions, searchQuery]);
+  const visibleNodes = useMemo(() => {
+    const keyword = nodeSearchQuery.trim().toLowerCase();
+    return nodes.filter((node) => {
+      const protocol = nodeProtocol(node.Link);
+      const matchesProtocol = nodeProtocolFilter === "all" || protocol === nodeProtocolFilter;
+      const matchesGroup = nodeGroupFilter === "all" || node.GroupNodes?.some((group) => group.Name === nodeGroupFilter);
+      const matchesSearch = !keyword || `${node.Name} ${node.Link} ${(node.GroupNodes || []).map((group) => group.Name).join(" ")}`.toLowerCase().includes(keyword);
+      return matchesProtocol && matchesGroup && matchesSearch;
+    });
+  }, [nodeGroupFilter, nodeProtocolFilter, nodeSearchQuery, nodes]);
+  const nodeProtocolCounts = useMemo(() => nodes.reduce((result, node) => {
+    const protocol = nodeProtocol(node.Link);
+    result[protocol] = (result[protocol] || 0) + 1;
+    return result;
+  }, {} as Partial<Record<NodeProtocol, number>>), [nodes]);
 
   const changeViewMode = (nextViewMode: SubscriptionViewMode) => {
     setViewMode(nextViewMode);
@@ -342,6 +424,44 @@ export default function SubscriptionCenterPage() {
     }
   };
 
+  const setSubscriptionRevoked = async (subscription: SubscriptionRecord) => {
+    const revoke = !subscription.Revoked;
+    if (!await confirm({ title: revoke ? "停用订阅" : "恢复订阅", description: revoke ? `停用「${subscription.Name}」后，该订阅地址将立即不可用。` : `恢复「${subscription.Name}」的订阅访问吗？`, confirmText: revoke ? "停用" : "恢复", tone: revoke ? "destructive" : "default" })) return;
+    try {
+      const body = new FormData(); body.set("id", String(subscription.ID)); body.set("revoked", String(revoke));
+      await sublinkRequest("/api/v1/subcription/revoked", { method: "POST", body });
+      toast.success(revoke ? "订阅已停用" : "订阅已恢复"); await loadSubscriptions();
+    } catch (error) { toast.error(error instanceof Error ? error.message : "订阅状态更新失败"); }
+  };
+
+  const editNodeSubscription = (subscription: NodeSubscriptionRecord) => {
+    setEditorMode("node-subscription"); setEditorOriginalName(subscription.Name); setEditorName(subscription.Name);
+    setEditorNodeIds((subscription.Nodes || []).map((node) => node.ID));
+    setEditorExpireAt(subscription.ExpireAt ? new Date(subscription.ExpireAt).toISOString().slice(0, 16) : "");
+    setEditorAccessLimit(subscription.AccessLimit ? String(subscription.AccessLimit) : "");
+  };
+
+  const postNodeSubscriptionAction = async (path: string, id: number) => {
+    const body = new FormData(); body.set("id", String(id));
+    await sublinkRequest(path, { method: "POST", body }); await loadSubscriptions();
+  };
+
+  const resetNodeSubscriptionToken = async (subscription: NodeSubscriptionRecord) => {
+    if (!await confirm({ title: "重置节点订阅 Token", description: `重置「${subscription.Name}」后，旧链接会立刻失效。`, confirmText: "重置 Token" })) return;
+    try { await postNodeSubscriptionAction("/api/v1/node-subscription/reset-token", subscription.ID); toast.success("节点订阅 Token 已重置"); } catch (error) { toast.error(error instanceof Error ? error.message : "Token 重置失败"); }
+  };
+
+  const setNodeSubscriptionRevoked = async (subscription: NodeSubscriptionRecord) => {
+    const revoke = !subscription.Revoked;
+    if (!await confirm({ title: revoke ? "停用节点订阅" : "恢复节点订阅", description: revoke ? `停用「${subscription.Name}」后，该链接将立即不可用。` : `恢复「${subscription.Name}」的访问吗？`, confirmText: revoke ? "停用" : "恢复", tone: revoke ? "destructive" : "default" })) return;
+    try { const body = new FormData(); body.set("id", String(subscription.ID)); body.set("revoked", String(revoke)); await sublinkRequest("/api/v1/node-subscription/revoked", { method: "POST", body }); toast.success(revoke ? "节点订阅已停用" : "节点订阅已恢复"); await loadSubscriptions(); } catch (error) { toast.error(error instanceof Error ? error.message : "节点订阅状态更新失败"); }
+  };
+
+  const deleteNodeSubscription = async (subscription: NodeSubscriptionRecord) => {
+    if (!await confirm({ title: "删除节点订阅", description: `确定删除「${subscription.Name}」吗？此操作无法撤销。`, confirmText: "删除", tone: "destructive" })) return;
+    try { await sublinkRequest(`/api/v1/node-subscription/delete?id=${encodeURIComponent(String(subscription.ID))}`, { method: "DELETE" }); toast.success("节点订阅已删除"); await loadSubscriptions(); } catch (error) { toast.error(error instanceof Error ? error.message : "删除失败"); }
+  };
+
   const copySubscriptionUrl = async (subscription: SubscriptionRecord, client = outputTypeOf(subscription)) => {
     try {
       await navigator.clipboard.writeText(subscriptionUrl(subscription, client));
@@ -373,6 +493,30 @@ export default function SubscriptionCenterPage() {
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "节点状态更新失败");
     }
+  };
+
+  const exportNodes = async () => {
+    try {
+      const response = await fetch("/api/v1/nodes/export", { credentials: "same-origin" });
+      if (!response.ok) throw new Error("节点导出失败");
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url; anchor.download = "sublink-nodes.json"; anchor.click();
+      URL.revokeObjectURL(url);
+      toast.success("节点备份已导出");
+    } catch (error) { toast.error(error instanceof Error ? error.message : "节点导出失败"); }
+  };
+
+  const importNodeBackup = async (file?: File) => {
+    if (!file) return;
+    try {
+      const body = new FormData(); body.set("file", file);
+      await sublinkRequest("/api/v1/nodes/import", { method: "POST", body });
+      toast.success("节点备份已导入");
+      await loadSubscriptions();
+    } catch (error) { toast.error(error instanceof Error ? error.message : "节点备份导入失败"); }
+    finally { if (nodeBackupInputRef.current) nodeBackupInputRef.current.value = ""; }
   };
 
   const deleteResource = async (kind: "node-subscription" | "nodes" | "template", label: string, value: string | number) => {
@@ -445,8 +589,14 @@ export default function SubscriptionCenterPage() {
     setEditorName(""); setEditorLink(""); setEditorNodeIds([]); setEditorExpireAt(""); setEditorAccessLimit(""); setEditorOutputType("clash");
     setTemplateFilename(template?.File || ""); setTemplateOriginalFilename(template?.File || ""); setTemplateText(template?.Text || "");
     setSubscriptionStep(0); setSubscriptionTemplate(""); setSubscriptionUdp(true); setSubscriptionCert(true); setSubscriptionDedupe(true); setSubscriptionDoh(false); setPolicyGroupName(""); setPolicyGroups({});
-    setEditorGroups([]); setEditorNewGroup(""); setEditorSubscriptionIds([]); setReplaceIpEnabled(false); setReplaceIpId("");
+    setEditorGroups([]); setEditorNewGroup(""); setEditorSubscriptionIds([]); setReplaceIpEnabled(false); setReplaceIpId(""); setEditingNode(null);
     if (mode === "node") void loadIpLibrary();
+  };
+
+  const openNodeEditor = (node: NodeRecord) => {
+    openEditor("node");
+    setEditingNode(node); setEditorName(node.Name); setEditorLink(node.Link);
+    setEditorGroups((node.GroupNodes || []).map((group) => group.Name));
   };
 
   const toggleEditorNode = (id: number) => setEditorNodeIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
@@ -484,7 +634,12 @@ export default function SubscriptionCenterPage() {
         if (!links.length) throw new Error("请填写至少一个节点链接");
         if (links.length > 1 && editorName.trim()) throw new Error("批量添加时请留空节点名称，以链接注释作为名称");
         if (replaceIpEnabled && !replaceIpId) throw new Error("请选择节点库入口 IP");
-        for (const link of links) { const body = new FormData(); body.set("name", links.length === 1 ? editorName.trim() : ""); body.set("link", link); body.set("group", editorGroups.length ? editorGroups.join(",") : editorNewGroup.trim()); body.set("subscription_ids", editorSubscriptionIds.join(",")); if (replaceIpEnabled) body.set("replace_ip_id", replaceIpId); await sublinkRequest("/api/v1/nodes/add", { method: "POST", body }); }
+        if (editingNode) {
+          if (links.length !== 1 || !editorName.trim()) throw new Error("编辑节点时请填写名称和一个节点链接");
+          const body = new FormData(); body.set("id", String(editingNode.ID)); body.set("name", editorName.trim()); body.set("link", links[0]); body.set("group", editorGroups.join(",")); if (replaceIpEnabled) body.set("replace_ip_id", replaceIpId); await sublinkRequest("/api/v1/nodes/update", { method: "POST", body });
+        } else {
+          for (const link of links) { const body = new FormData(); body.set("name", links.length === 1 ? editorName.trim() : ""); body.set("link", link); body.set("group", editorGroups.length ? editorGroups.join(",") : editorNewGroup.trim()); body.set("subscription_ids", editorSubscriptionIds.join(",")); if (replaceIpEnabled) body.set("replace_ip_id", replaceIpId); await sublinkRequest("/api/v1/nodes/add", { method: "POST", body }); }
+        }
       } else if (editorMode === "subscription" || editorMode === "node-subscription") {
         if (!editorName.trim() || !editorNodeIds.length) throw new Error("请填写名称并至少选择一个节点");
         const body = new FormData(); body.set("name", editorName.trim()); body.set("nodes", editorNodeIds.join(",")); body.set("expire_at", editorExpireAt); body.set("access_limit", editorAccessLimit);
@@ -573,10 +728,26 @@ export default function SubscriptionCenterPage() {
         <DropdownMenuItem onSelect={() => void handleResetToken(subscription)}>
           <RefreshCw className="h-4 w-4" />重置 Token
         </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => void setSubscriptionRevoked(subscription)}>
+          <Power className="h-4 w-4" />{subscription.Revoked ? "恢复订阅" : "停用订阅"}
+        </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem variant="destructive" onSelect={() => void handleDelete(subscription)}>
           <Trash2 className="h-4 w-4" />删除
         </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+
+  const renderNodeSubscriptionActions = (subscription: NodeSubscriptionRecord) => (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="size-8" aria-label={`${subscription.Name} 更多操作`}><Ellipsis className="size-4" /></Button></DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem onSelect={() => editNodeSubscription(subscription)}><Pencil className="size-4" />编辑</DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => void resetNodeSubscriptionToken(subscription)}><RefreshCw className="size-4" />重置 Token</DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => void setNodeSubscriptionRevoked(subscription)}><Power className="size-4" />{subscription.Revoked ? "恢复订阅" : "停用订阅"}</DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem variant="destructive" onSelect={() => void deleteNodeSubscription(subscription)}><Trash2 className="size-4" />删除</DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -641,21 +812,12 @@ export default function SubscriptionCenterPage() {
 
         {activeSection === "subscriptions" ? (
           <section className="overflow-visible bg-transparent">
-            <CardHeader className="flex flex-col gap-4 px-0 pb-5 pt-0 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex items-center gap-3">
-                <div className="grid h-10 w-10 place-items-center rounded-lg border border-primary/25 bg-primary/10 text-primary">
-                  <FileText className="h-5 w-5" />
-                </div>
-                <div>
-                  <CardTitle className="text-base">全部订阅</CardTitle>
-                  <CardDescription className="mt-1">订阅地址与使用情况</CardDescription>
-                </div>
-                <Badge variant="outline" className="ml-1 tabular-nums">{subscriptions.length.toString().padStart(2, "0")} 条</Badge>
+            <CardHeader className="space-y-4 px-0 pb-5 pt-0">
+              <div className="flex flex-col gap-4 rounded-xl border border-border/60 bg-card/70 p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between sm:p-5">
+                <div className="flex items-start gap-3"><div className="grid size-10 shrink-0 place-items-center rounded-lg border border-primary/25 bg-primary/10 text-primary"><Link2 className="size-5" /></div><div><CardTitle className="text-lg">订阅链接</CardTitle><CardDescription className="mt-1">管理订阅地址、客户端入口、模板与访问统计</CardDescription><div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs"><span>总计 <b className="font-mono text-primary">{subscriptions.length}</b> 条</span><span className="text-emerald-600 dark:text-emerald-400">● 有效 {subscriptions.filter((item) => !item.Revoked && !isExpired(item)).length}</span><span className="text-destructive">● 异常 {subscriptions.filter((item) => item.Revoked || isExpired(item)).length}</span><span className="text-muted-foreground">累计请求 {subscriptions.reduce((sum, item) => sum + Number(item.AccessCount || 0), 0).toLocaleString()} 次</span></div></div></div>
+                <Button className="shrink-0 gap-2" onClick={() => openEditor("subscription")}><Plus className="size-4" />添加订阅</Button>
               </div>
-              <div className="relative w-full sm:w-72">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <Input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="搜索订阅名称" className="h-9 pl-9" />
-              </div>
+              <div className="flex flex-col gap-3 rounded-xl border border-border/55 bg-card/55 p-3 shadow-sm lg:flex-row lg:items-center lg:justify-between"><div className="flex flex-wrap items-center gap-1.5">{(["all", "clash", "egern", "loon"] as const).map((client) => <Button key={client} size="sm" variant={subscriptionClientFilter === client ? "default" : "ghost"} className="h-8 gap-1.5" onClick={() => setSubscriptionClientFilter(client)}>{client === "all" ? "全部" : client === "clash" ? "Clash" : client === "egern" ? "Egern" : "Loon"}<span className="rounded bg-foreground/10 px-1 font-mono text-[10px]">{client === "all" ? subscriptions.length : subscriptions.filter((item) => outputTypeOf(item) === client).length}</span></Button>)}</div><div className="relative w-full lg:w-72"><Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" /><Input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="搜索订阅名称、节点或 Token…" className="h-8 pl-8 text-xs" /></div></div>
             </CardHeader>
             <CardContent className={cn("p-0", viewMode === "table" && "overflow-hidden rounded-lg border border-border/40 bg-card/60 backdrop-blur-md")}>
               {isLoading ? (
@@ -665,32 +827,29 @@ export default function SubscriptionCenterPage() {
                   <div className="space-y-3"><p className="text-sm text-muted-foreground">{loadError}</p><Button variant="outline" size="sm" onClick={() => void loadSubscriptions()}>重新加载</Button></div>
                 </div>
               ) : viewMode === "card" ? (
-                <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-3">
+                <div className="grid grid-cols-[repeat(auto-fill,minmax(248px,1fr))] gap-4">
                   {visibleSubscriptions.map((subscription) => {
                     const status = statusOf(subscription);
                     const accessCount = Number(subscription.AccessCount || 0);
                     const accessLimit = Number(subscription.AccessLimit || 0);
                     const progress = accessLimit > 0 ? Math.min(100, Math.round(accessCount / accessLimit * 100)) : 100;
                     return (
-                      <article key={subscription.ID} className="flex min-h-64 flex-col rounded-xl border border-border/55 bg-background/45 p-4 shadow-sm transition-colors hover:border-primary/35 hover:bg-background/65">
+                      <article key={subscription.ID} className="flex min-h-72 flex-col rounded-xl border border-border/65 bg-card/75 p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md">
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
-                            <h2 className="truncate font-semibold">{subscription.Name}</h2>
-                            <p className="mt-1 text-xs text-muted-foreground">{outputTypeOf(subscription).toUpperCase()} · {subscription.Nodes?.filter((node) => !node.Disabled).length || 0} 个可用节点</p>
+                            <h2 className="truncate font-semibold tracking-tight">{subscription.Name}</h2>
+                            <p className="mt-1 font-mono text-[11px] text-muted-foreground">ID · {subscription.Token ? `${subscription.Token.slice(0, 8)}…` : `sub_${subscription.ID}`}</p>
                           </div>
                           <div className="flex shrink-0 items-center gap-1">
                             <Badge variant="outline" className={cn("gap-1.5", status.className)}><span className="h-1.5 w-1.5 rounded-full bg-current" />{status.label}</Badge>
                             {renderMoreActions(subscription)}
                           </div>
                         </div>
-                        <div className="mt-7">
-                          <div className="flex items-end gap-1.5"><span className="text-4xl font-semibold tracking-tight tabular-nums">{accessCount.toLocaleString()}</span><span className="mb-1 text-sm text-muted-foreground">次访问</span></div>
-                          <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${progress}%` }} /></div>
-                          <p className="mt-2 text-xs text-muted-foreground">{accessLimit > 0 ? `访问限制 ${accessCount.toLocaleString()} / ${accessLimit.toLocaleString()}` : "访问次数不限"}</p>
-                        </div>
+                        <div className="mt-4 flex items-center justify-between rounded-lg border border-border/55 bg-muted/30 px-3 py-2.5 text-xs"><div><p className="text-muted-foreground">客户端 / 模板</p><p className="mt-1 font-medium uppercase">{outputTypeOf(subscription)} <span className="font-normal text-muted-foreground">· 已选模板</span></p></div><div className="text-right"><p className="text-muted-foreground">关联节点</p><p className="mt-1 font-mono font-semibold text-primary">{subscription.Nodes?.filter((node) => !node.Disabled).length || 0} 个</p></div></div>
+                        <div className="mt-3"><div className="flex items-end justify-between gap-2"><span className="flex items-center gap-1.5 text-xs text-secondary-foreground"><Activity className="size-3.5 text-primary" />访问统计</span><span className="font-mono text-xs font-semibold">{accessCount.toLocaleString()} <span className="font-sans font-normal text-muted-foreground">/ {accessLimit > 0 ? accessLimit.toLocaleString() : "不限"}</span></span></div><div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${progress}%` }} /></div></div>
                         <div className="mt-auto pt-7">
-                          <div className="flex items-center gap-1.5 text-xs text-muted-foreground"><Clock3 className="h-3.5 w-3.5" />创建于 {formatDate(subscription.CreatedAt || subscription.CreateDate)}</div>
-                          <Button variant="outline" className="mt-4 w-full gap-2" onClick={() => setClientSubscription(subscription)}><UsersRound className="h-4 w-4" />查看客户端</Button>
+                          <div className="flex items-center justify-between text-xs text-muted-foreground"><span className="flex items-center gap-1.5"><Clock3 className="size-3.5" />{formatDate(subscription.CreatedAt || subscription.CreateDate)}</span><Button variant="ghost" size="icon" className="size-7" title="复制订阅链接" onClick={() => void copySubscriptionUrl(subscription)}><Copy className="size-3.5" /></Button></div>
+                          <div className="mt-3 flex gap-2"><Button variant="outline" size="sm" className="flex-1 gap-1.5" onClick={() => setClientSubscription(subscription)}><MonitorSmartphone className="size-3.5" />客户端</Button><Button variant="ghost" size="icon" className="size-8" title="访问记录" onClick={() => setLogSubscription(subscription)}><Clock3 className="size-3.5" /></Button>{renderMoreActions(subscription)}</div>
                         </div>
                       </article>
                     );
@@ -702,18 +861,18 @@ export default function SubscriptionCenterPage() {
                   <CardContent className="p-0">
                     <div className="overflow-x-auto">
                       <Table>
-                        <TableHeader><TableRow><TableHead>订阅名称</TableHead><TableHead>客户端</TableHead><TableHead>状态</TableHead><TableHead>访问量</TableHead><TableHead>创建时间</TableHead><TableHead className="text-right">操作</TableHead></TableRow></TableHeader>
+                        <TableHeader><TableRow><TableHead>订阅名称 / 节点</TableHead><TableHead>客户端 / 模板</TableHead><TableHead>状态</TableHead><TableHead>访问次数 / 上限</TableHead><TableHead>创建时间</TableHead><TableHead className="text-right">操作</TableHead></TableRow></TableHeader>
                         <TableBody>{visibleSubscriptions.map((subscription) => {
                       const status = statusOf(subscription);
                       const accessCount = Number(subscription.AccessCount || 0);
                       const accessLimit = Number(subscription.AccessLimit || 0);
                       return <TableRow key={subscription.ID}>
-                        <TableCell><div className="font-medium">{subscription.Name}</div><div className="mt-1 text-xs text-muted-foreground">订阅地址 · Token 已启用</div></TableCell>
-                        <TableCell><Button variant="ghost" size="sm" className="h-8 text-primary" onClick={() => setClientSubscription(subscription)}>查看客户端</Button></TableCell>
+                        <TableCell className="min-w-48"><div className="font-medium">{subscription.Name}</div><div className="mt-1 font-mono text-[11px] text-muted-foreground">{subscription.Token ? `ID · ${subscription.Token.slice(0, 8)}…` : `sub_${subscription.ID}`} · {subscription.Nodes?.filter((node) => !node.Disabled).length || 0} 个节点</div></TableCell>
+                        <TableCell><Button variant="ghost" size="sm" className="h-8 gap-1.5 text-primary" onClick={() => setClientSubscription(subscription)}><MonitorSmartphone className="size-3.5" />{outputTypeOf(subscription).toUpperCase()}</Button><p className="mt-0.5 text-[11px] text-muted-foreground">已选模板</p></TableCell>
                         <TableCell><Badge variant="outline" className={cn("gap-1.5", status.className)}><span className="h-1.5 w-1.5 rounded-full bg-current" />{status.label}</Badge></TableCell>
-                        <TableCell><div className="font-semibold tabular-nums">{accessCount.toLocaleString()} <span className="text-xs font-normal text-muted-foreground">次</span></div><div className="mt-2 h-1 w-36 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary" style={{ width: `${accessLimit > 0 ? Math.min(100, accessCount / accessLimit * 100) : 100}%` }} /></div></TableCell>
+                        <TableCell><div className="font-mono font-semibold tabular-nums">{accessCount.toLocaleString()} <span className="font-sans text-xs font-normal text-muted-foreground">/ {accessLimit > 0 ? accessLimit.toLocaleString() : "不限"}</span></div><div className="mt-2 h-1 w-36 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary" style={{ width: `${accessLimit > 0 ? Math.min(100, accessCount / accessLimit * 100) : 100}%` }} /></div></TableCell>
                         <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{formatDate(subscription.CreatedAt || subscription.CreateDate)}</TableCell>
-                        <TableCell><div className="flex justify-end gap-1"><Button variant="ghost" size="sm" className="h-8" onClick={() => setLogSubscription(subscription)}>记录</Button><Button variant="ghost" size="sm" className="h-8" onClick={() => void copySubscriptionUrl(subscription)}><Copy className="h-3.5 w-3.5" /></Button>{renderMoreActions(subscription)}</div></TableCell>
+                        <TableCell><div className="flex justify-end gap-1"><Button variant="ghost" size="sm" className="h-8 gap-1.5" onClick={() => setClientSubscription(subscription)}><MonitorSmartphone className="size-3.5" />客户端</Button><Button variant="ghost" size="icon" className="size-8" title="复制订阅链接" onClick={() => void copySubscriptionUrl(subscription)}><Copy className="size-3.5" /></Button>{renderMoreActions(subscription)}</div></TableCell>
                       </TableRow>;
                         })}</TableBody>
                       </Table>
@@ -727,20 +886,57 @@ export default function SubscriptionCenterPage() {
         ) : (
           <section className="bg-transparent">
             <CardHeader className="flex-row items-start justify-between gap-4 px-0 pb-5 pt-0">
-              <div><CardTitle className="flex items-center gap-2 text-lg"><ActiveIcon className="h-5 w-5 text-primary" />{activeItem.label}</CardTitle><CardDescription className="mt-1.5">{sectionDescriptions[activeSection]}</CardDescription></div>
+              <div><CardTitle className="flex items-center gap-2 text-lg"><ActiveIcon className="h-5 w-5 text-primary" />{activeItem.label}</CardTitle><CardDescription className="mt-1.5">{activeSection === "node-subscriptions" ? `原始节点订阅入口 · 共 ${nodeSubscriptions.length} 条 · 可用节点 ${nodeSubscriptions.reduce((sum, item) => sum + (item.Nodes?.filter((node) => !node.Disabled).length || 0), 0)} 个` : sectionDescriptions[activeSection]}</CardDescription></div>
               <div className="flex shrink-0 gap-2">
+                {activeSection === "node-subscriptions" && <div className="relative hidden w-64 sm:block"><Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" /><Input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="搜索节点订阅或 Token…" className="h-8 pl-8 text-xs" /></div>}
                 {activeSection === "nodes" && <Button variant="outline" size="sm" className="gap-2" onClick={openIpLibrary}><Library className="h-4 w-4" />节点库</Button>}
                 {activeSection === "templates" && <Button variant="outline" size="sm" className="gap-2" onClick={() => openEditor("template-import")}><FileText className="h-4 w-4" />导入模板</Button>}
               </div>
             </CardHeader>
             <CardContent className={cn("p-0", viewMode === "table" && "overflow-hidden rounded-lg border border-border/40 bg-card/60 backdrop-blur-md")}>
               {isLoading ? <div className="grid min-h-64 place-items-center text-sm text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" />正在读取数据</div> : loadError ? <div className="py-16 text-center text-sm text-muted-foreground">{loadError}</div> : activeSection === "node-subscriptions" ? (
-                viewMode === "card" ? <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{nodeSubscriptions.map((item) => {
+                viewMode === "card" ? <div className="grid grid-cols-[repeat(auto-fill,minmax(248px,1fr))] gap-4">{visibleNodeSubscriptions.map((item) => {
                   const count = Number(item.AccessCount || 0); const limit = Number(item.AccessLimit || 0); const status = statusOf(item);
-                  return <article key={item.ID} className="flex min-h-56 flex-col rounded-xl border border-border/55 bg-background/45 p-4 shadow-sm transition-colors hover:border-primary/35 hover:bg-background/65"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><h2 className="truncate font-semibold">{item.Name}</h2><p className="mt-1 text-xs text-muted-foreground">原始节点订阅 · {item.Nodes?.filter((node) => !node.Disabled).length || 0} 个可用节点</p></div><Badge variant="outline" className={cn("gap-1.5", status.className)}><span className="h-1.5 w-1.5 rounded-full bg-current" />{status.label}</Badge></div><div className="mt-7"><div className="flex items-end gap-1.5"><span className="text-4xl font-semibold tracking-tight tabular-nums">{count.toLocaleString()}</span><span className="mb-1 text-sm text-muted-foreground">次访问</span></div><p className="mt-2 text-xs text-muted-foreground">{limit ? `访问限制 ${count.toLocaleString()} / ${limit.toLocaleString()}` : "访问次数不限"}</p></div><div className="mt-auto flex items-center justify-between pt-7 text-xs text-muted-foreground"><span className="flex items-center gap-1.5"><Clock3 className="h-3.5 w-3.5" />{formatDate(item.CreatedAt)}</span><Button variant="outline" size="sm" className="gap-2" onClick={() => void copyNodeSubscriptionUrl(item)}><Copy className="h-3.5 w-3.5" />复制链接</Button></div></article>;
-                })}{!nodeSubscriptions.length && <p className="col-span-full py-16 text-center text-sm text-muted-foreground">暂无节点订阅</p>}</div> : <div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>名称</TableHead><TableHead>可用节点</TableHead><TableHead>访问量</TableHead><TableHead>状态</TableHead><TableHead className="text-right">操作</TableHead></TableRow></TableHeader><TableBody>{nodeSubscriptions.map((item) => <TableRow key={item.ID}><TableCell><div className="font-medium">{item.Name}</div><div className="mt-1 text-xs text-muted-foreground">原始节点订阅</div></TableCell><TableCell>{item.Nodes?.filter((node) => !node.Disabled).length || 0}</TableCell><TableCell className="tabular-nums">{Number(item.AccessCount || 0).toLocaleString()} 次</TableCell><TableCell><Badge variant="outline" className={cn("gap-1.5", statusOf(item).className)}>{statusOf(item).label}</Badge></TableCell><TableCell className="text-right"><Button variant="ghost" size="sm" className="gap-2" onClick={() => void copyNodeSubscriptionUrl(item)}><Copy className="h-3.5 w-3.5" />复制链接</Button></TableCell></TableRow>)}</TableBody></Table>{!nodeSubscriptions.length && <p className="py-16 text-center text-sm text-muted-foreground">暂无节点订阅</p>}</div>
+                  const progress = limit > 0 ? Math.min(100, Math.round(count / limit * 100)) : 100;
+                  return <article key={item.ID} className="flex min-h-72 flex-col rounded-xl border border-border/65 bg-card/75 p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><h2 className="truncate font-semibold tracking-tight">{item.Name}</h2><p className="mt-1 font-mono text-[11px] text-muted-foreground">RAW · {item.Token ? `${item.Token.slice(0, 8)}…` : `node_${item.ID}`}</p></div><Badge variant="outline" className={cn("gap-1.5", status.className)}><span className="size-1.5 rounded-full bg-current" />{status.label}</Badge></div><div className="mt-4 rounded-lg border border-border/55 bg-muted/30 px-3 py-2.5"><p className="text-xs text-muted-foreground">原始节点订阅</p><p className="mt-1 font-mono text-sm font-semibold text-primary">{item.Nodes?.filter((node) => !node.Disabled).length || 0} <span className="font-sans text-xs font-normal text-muted-foreground">个可用节点</span></p></div><div className="mt-3"><div className="flex items-end justify-between gap-2"><span className="flex items-center gap-1.5 text-xs text-secondary-foreground"><Activity className="size-3.5 text-primary" />访问统计</span><span className="font-mono text-xs font-semibold">{count.toLocaleString()} <span className="font-sans font-normal text-muted-foreground">/ {limit ? limit.toLocaleString() : "不限"}</span></span></div><div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary" style={{ width: `${progress}%` }} /></div></div><div className="mt-auto flex items-center justify-between border-t border-border/55 pt-3 text-xs text-muted-foreground"><span className="flex items-center gap-1.5"><Clock3 className="size-3.5" />{formatDate(item.CreatedAt)}</span><div className="flex items-center gap-1"><Button variant="outline" size="sm" className="h-8 gap-1.5" onClick={() => void copyNodeSubscriptionUrl(item)}><Copy className="size-3.5" />复制链接</Button>{renderNodeSubscriptionActions(item)}</div></div></article>;
+                })}{!visibleNodeSubscriptions.length && <p className="col-span-full py-16 text-center text-sm text-muted-foreground">暂无匹配的节点订阅</p>}</div> : <div className="overflow-x-auto rounded-xl border border-border/60 bg-card/70 shadow-sm"><Table><TableHeader><TableRow><TableHead>节点订阅</TableHead><TableHead>可用节点</TableHead><TableHead>访问次数 / 上限</TableHead><TableHead>创建时间</TableHead><TableHead>状态</TableHead><TableHead className="text-right">操作</TableHead></TableRow></TableHeader><TableBody>{visibleNodeSubscriptions.map((item) => <TableRow key={item.ID}><TableCell><div className="font-medium">{item.Name}</div><div className="mt-1 font-mono text-[11px] text-muted-foreground">RAW · {item.Token ? `${item.Token.slice(0, 8)}…` : "Token 已启用"}</div></TableCell><TableCell className="font-mono text-primary">{item.Nodes?.filter((node) => !node.Disabled).length || 0} 个</TableCell><TableCell className="font-mono">{Number(item.AccessCount || 0).toLocaleString()} <span className="font-sans text-xs text-muted-foreground">/ {item.AccessLimit ? Number(item.AccessLimit).toLocaleString() : "不限"}</span></TableCell><TableCell className="whitespace-nowrap text-xs text-muted-foreground">{formatDate(item.CreatedAt)}</TableCell><TableCell><Badge variant="outline" className={cn("gap-1.5", statusOf(item).className)}><span className="size-1.5 rounded-full bg-current" />{statusOf(item).label}</Badge></TableCell><TableCell className="text-right"><div className="flex justify-end gap-1"><Button variant="ghost" size="sm" className="gap-1.5" onClick={() => void copyNodeSubscriptionUrl(item)}><Copy className="size-3.5" />复制链接</Button>{renderNodeSubscriptionActions(item)}</div></TableCell></TableRow>)}</TableBody></Table>{!visibleNodeSubscriptions.length && <p className="py-16 text-center text-sm text-muted-foreground">暂无匹配的节点订阅</p>}</div>
               ) : activeSection === "nodes" ? (
-                viewMode === "card" ? <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{nodes.map((node) => <article key={node.ID} className="flex min-h-52 flex-col rounded-xl border border-border/55 bg-background/45 p-4 shadow-sm transition-colors hover:border-primary/35 hover:bg-background/65"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><h2 className="truncate font-semibold">{node.Name}</h2><p className="mt-1 truncate font-mono text-xs text-muted-foreground">{node.Link}</p></div><Badge variant="outline" className={node.Disabled ? "border-muted-foreground/25 text-muted-foreground" : "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"}>{node.Disabled ? "已停用" : "可用"}</Badge></div><div className="mt-6 flex flex-wrap gap-1.5">{node.GroupNodes?.map((group) => <Badge key={group.ID} variant="secondary" className="font-normal">{group.Name}</Badge>)}{!node.GroupNodes?.length && <span className="text-xs text-muted-foreground">未分组节点</span>}</div><div className="mt-auto flex justify-between gap-2 pt-7"><Button variant="outline" size="sm" className="gap-2" onClick={() => void navigator.clipboard.writeText(node.Link).then(() => toast.success("节点链接已复制"))}><Copy className="h-3.5 w-3.5" />复制节点</Button><Button variant="ghost" size="sm" className="gap-2" onClick={() => void toggleNode(node)}><Power className="h-3.5 w-3.5" />{node.Disabled ? "启用" : "停用"}</Button></div></article>)}{!nodes.length && <p className="col-span-full py-16 text-center text-sm text-muted-foreground">暂无节点</p>}</div> : <div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>节点</TableHead><TableHead>协议</TableHead><TableHead>分组</TableHead><TableHead>状态</TableHead><TableHead className="text-right">操作</TableHead></TableRow></TableHeader><TableBody>{nodes.map((node) => <TableRow key={node.ID}><TableCell><div className="font-medium">{node.Name}</div><div className="mt-1 max-w-80 truncate font-mono text-xs text-muted-foreground">{node.Link}</div></TableCell><TableCell className="uppercase">{node.Link.split(":")[0] || "--"}</TableCell><TableCell>{node.GroupNodes?.map((group) => group.Name).join("、") || "--"}</TableCell><TableCell><Badge variant="outline" className={node.Disabled ? "text-muted-foreground" : "border-emerald-500/30 text-emerald-600"}>{node.Disabled ? "已停用" : "可用"}</Badge></TableCell><TableCell className="text-right"><Button variant="ghost" size="sm" onClick={() => void toggleNode(node)}>{node.Disabled ? "启用" : "停用"}</Button></TableCell></TableRow>)}</TableBody></Table>{!nodes.length && <p className="py-16 text-center text-sm text-muted-foreground">暂无节点</p>}</div>
+                <div className="space-y-4">
+                  <div className="rounded-xl border border-border/60 bg-card/70 p-4 shadow-sm sm:p-5">
+                    <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+                        <span className="font-semibold">总计 <b className="font-mono text-primary">{nodes.length}</b> 个节点</span>
+                        <span className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400"><span className="size-1.5 rounded-full bg-current" />已启用 {nodes.filter((node) => !node.Disabled).length}</span>
+                        <span className="flex items-center gap-1.5 text-destructive"><span className="size-1.5 rounded-full bg-current" />已停用 {nodes.filter((node) => node.Disabled).length}</span>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button variant="outline" size="sm" className="gap-1.5" onClick={openIpLibrary}><Database className="size-3.5" />IP 库</Button>
+                        <Button variant="outline" size="sm" className="gap-1.5" onClick={() => nodeBackupInputRef.current?.click()}><Upload className="size-3.5" />导入备份</Button>
+                        <Button variant="outline" size="sm" className="gap-1.5" onClick={() => void exportNodes()}><FileText className="size-3.5" />导出节点</Button>
+                        <Button size="sm" className="gap-1.5" onClick={() => openEditor("node")}><Plus className="size-3.5" />添加节点</Button>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex flex-col gap-3 rounded-xl border border-border/55 bg-card/55 p-3 shadow-sm lg:flex-row lg:items-center lg:justify-between">
+                    <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                      <Button size="sm" variant={nodeGroupFilter === "all" ? "default" : "ghost"} className="h-8 gap-1.5" onClick={() => setNodeGroupFilter("all")}>全部 <span className="rounded bg-foreground/10 px-1 font-mono text-[10px]">{nodes.length}</span></Button>
+                      {nodeGroups.map((group) => <Button key={group} size="sm" variant={nodeGroupFilter === group ? "secondary" : "ghost"} className="h-8 gap-1.5" onClick={() => setNodeGroupFilter(group)}><span className="size-1.5 rounded-full bg-primary" />{group}<span className="rounded bg-muted px-1 font-mono text-[10px]">{nodes.filter((node) => node.GroupNodes?.some((item) => item.Name === group)).length}</span></Button>)}
+                      <Button size="sm" variant="ghost" className="h-8 gap-1.5 text-primary" onClick={() => setCreateGroupOpen(true)}><FolderPlus className="size-3.5" />分组管理</Button>
+                    </div>
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                      <div className="relative min-w-0 sm:w-60"><Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" /><Input value={nodeSearchQuery} onChange={(event) => setNodeSearchQuery(event.target.value)} placeholder="搜索别名 / IP / 端口…" className="h-8 pl-8 text-xs" /></div>
+                      <div className="flex rounded-md bg-muted/70 p-0.5" aria-label="按协议筛选">{(["all", "ss", "vless", "trojan"] as const).map((protocol) => <Button key={protocol} variant="ghost" size="sm" className={cn("h-7 px-2.5 text-[11px]", nodeProtocolFilter === protocol && "bg-background shadow-sm text-primary")} onClick={() => setNodeProtocolFilter(protocol)}>{protocol === "all" ? "全部协议" : nodeProtocolLabel(protocol)}{protocol !== "all" && nodeProtocolCounts[protocol] ? <span className="ml-1 font-mono text-[10px] text-muted-foreground">{nodeProtocolCounts[protocol]}</span> : null}</Button>)}</div>
+                    </div>
+                  </div>
+                  {viewMode === "card" ? <div className="grid grid-cols-[repeat(auto-fill,minmax(248px,1fr))] gap-4">{visibleNodes.map((node, index) => {
+                    const protocol = nodeProtocol(node.Link); const endpoint = nodeEndpoint(node.Link);
+                    return <article key={node.ID} className={cn("flex min-h-72 flex-col overflow-hidden rounded-xl border bg-card/75 p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md", node.Disabled ? "border-border/50 opacity-70" : "border-border/70")}>
+                      <div className="flex items-start justify-between gap-2"><div className="min-w-0"><h2 className="truncate font-semibold tracking-tight">{node.Name}</h2><div className="mt-2 flex flex-wrap items-center gap-1.5"><Badge variant="outline" className={cn("rounded-md px-2 py-0 font-mono text-[10px] tracking-wide", nodeProtocolClass(protocol))}>{nodeProtocolLabel(protocol)}</Badge>{node.GroupNodes?.map((group) => <Badge key={group.ID} variant="secondary" className="rounded-md px-2 py-0 text-[10px] font-normal">● {group.Name}</Badge>)}</div></div><div className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"><span className="font-mono">#{String(index + 1).padStart(2, "0")}</span><Badge variant="outline" className={cn("gap-1 rounded-full px-2 py-0", node.Disabled ? "border-destructive/25 bg-destructive/10 text-destructive" : "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300")}><span className="size-1.5 rounded-full bg-current" />{node.Disabled ? "已停用" : "可用"}</Badge></div></div>
+                      <div className="mt-4 rounded-lg border border-border/60 bg-muted/35 p-3 font-mono text-[11px]"><p className="text-[10px] text-muted-foreground">连接端点</p><div className="mt-1 flex items-baseline justify-between gap-2"><span className="truncate font-medium">{endpoint.host}</span><span className="shrink-0 text-muted-foreground">:{endpoint.port}</span></div><div className="mt-3 border-t border-border/55 pt-2"><p className="truncate text-muted-foreground">{node.Link}</p></div></div>
+                      <div className="mt-auto flex items-center justify-between border-t border-border/55 pt-3 text-xs text-muted-foreground"><span>{formatDate(node.CreatedAt)}</span><div className="flex items-center gap-0.5"><Button variant="ghost" size="icon" className="size-7" title="编辑节点" onClick={() => openNodeEditor(node)}><Pencil className="size-3.5" /></Button><Button variant="ghost" size="icon" className="size-7" title="复制节点链接" onClick={() => void navigator.clipboard.writeText(node.Link).then(() => toast.success("节点链接已复制"))}><Copy className="size-3.5" /></Button><Button variant="ghost" size="icon" className="size-7" title={node.Disabled ? "启用节点" : "停用节点"} onClick={() => void toggleNode(node)}><Power className="size-3.5" /></Button><Button variant="ghost" size="icon" className="size-7 text-destructive hover:text-destructive" title="删除节点" onClick={() => void deleteResource("nodes", node.Name, node.ID)}><Trash2 className="size-3.5" /></Button></div></div>
+                    </article>;
+                  })}{!visibleNodes.length && <p className="col-span-full rounded-xl border border-dashed border-border py-16 text-center text-sm text-muted-foreground">未找到匹配的节点</p>}</div> : <div className="overflow-x-auto rounded-xl border border-border/60 bg-card/70 shadow-sm"><Table><TableHeader><TableRow className="hover:bg-transparent"><TableHead className="w-14 text-center">#</TableHead><TableHead>节点名称</TableHead><TableHead>协议</TableHead><TableHead>节点链接（Token / URI）</TableHead><TableHead>连接端点</TableHead><TableHead>所属分组</TableHead><TableHead>状态</TableHead><TableHead className="text-right">操作</TableHead></TableRow></TableHeader><TableBody>{visibleNodes.map((node, index) => { const protocol = nodeProtocol(node.Link); const endpoint = nodeEndpoint(node.Link); return <TableRow key={node.ID} className={cn("group", node.Disabled && "opacity-60")}><TableCell className="text-center font-mono text-xs text-muted-foreground">{String(index + 1).padStart(2, "0")}</TableCell><TableCell className="min-w-44"><div className="font-medium">{node.Name}</div><div className="mt-1 text-[11px] text-muted-foreground">创建于 {formatDate(node.CreatedAt)}</div></TableCell><TableCell><Badge variant="outline" className={cn("rounded-md px-2 py-0 font-mono text-[10px] tracking-wide", nodeProtocolClass(protocol))}>{nodeProtocolLabel(protocol)}</Badge></TableCell><TableCell className="max-w-64"><div className="flex items-center gap-1"><code className="block truncate text-xs text-muted-foreground">{node.Link}</code><Button variant="ghost" size="icon" className="size-7 shrink-0 opacity-60 group-hover:opacity-100" title="复制节点链接" onClick={() => void navigator.clipboard.writeText(node.Link).then(() => toast.success("节点链接已复制"))}><Copy className="size-3.5" /></Button></div></TableCell><TableCell className="font-mono text-xs"><span>{endpoint.host}</span><span className="mx-1.5 text-muted-foreground">:</span><span className="text-primary">{endpoint.port}</span></TableCell><TableCell><div className="flex max-w-40 flex-wrap gap-1">{node.GroupNodes?.map((group) => <Badge key={group.ID} variant="secondary" className="rounded-md text-[10px] font-normal">{group.Name}</Badge>) || <span className="text-muted-foreground">--</span>}</div></TableCell><TableCell><Badge variant="outline" className={cn("gap-1 rounded-full", node.Disabled ? "border-destructive/25 bg-destructive/10 text-destructive" : "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300")}><span className="size-1.5 rounded-full bg-current" />{node.Disabled ? "已停用" : "可用"}</Badge></TableCell><TableCell><div className="flex justify-end gap-0.5"><Button variant="ghost" size="icon" className="size-8" title="编辑节点" onClick={() => openNodeEditor(node)}><Pencil className="size-4" /></Button><Button variant="ghost" size="icon" className="size-8" title={node.Disabled ? "启用节点" : "停用节点"} onClick={() => void toggleNode(node)}><Power className="size-4" /></Button><Button variant="ghost" size="icon" className="size-8 text-destructive hover:text-destructive" title="删除节点" onClick={() => void deleteResource("nodes", node.Name, node.ID)}><Trash2 className="size-4" /></Button></div></TableCell></TableRow>; })}</TableBody></Table>{!visibleNodes.length && <p className="py-16 text-center text-sm text-muted-foreground">未找到匹配的节点</p>}</div>}
+                </div>
               ) : (
                 viewMode === "card" ? <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{templates.map((template) => <article key={template.File} className="flex min-h-52 flex-col rounded-xl border border-border/55 bg-background/45 p-4 shadow-sm transition-colors hover:border-primary/35 hover:bg-background/65"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><h2 className="truncate font-semibold">{template.File}</h2><p className="mt-1 text-xs text-muted-foreground">{templateFormat(template)} 模板</p></div><FileCode2 className="h-5 w-5 shrink-0 text-primary" /></div><pre className="mt-5 line-clamp-3 overflow-hidden rounded-lg bg-muted/35 p-3 font-mono text-xs leading-5 text-muted-foreground">{template.Text}</pre><div className="mt-auto flex items-center justify-between gap-2 pt-5 text-xs text-muted-foreground"><span>{formatDate(template.CreateDate)}</span><div className="flex gap-1"><Button variant="ghost" size="sm" onClick={() => openEditor("template-edit", template)}>编辑</Button><Button variant="outline" size="sm" onClick={() => setTemplatePreview(template)}>查看</Button></div></div></article>)}{!templates.length && <p className="col-span-full py-16 text-center text-sm text-muted-foreground">暂无订阅模板</p>}</div> : <div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>模板文件</TableHead><TableHead>类型</TableHead><TableHead>更新时间</TableHead><TableHead className="text-right">操作</TableHead></TableRow></TableHeader><TableBody>{templates.map((template) => <TableRow key={template.File}><TableCell className="font-medium">{template.File}</TableCell><TableCell>{templateFormat(template)}</TableCell><TableCell className="text-xs text-muted-foreground">{formatDate(template.CreateDate)}</TableCell><TableCell className="text-right"><Button variant="ghost" size="sm" onClick={() => openEditor("template-edit", template)}>编辑</Button><Button variant="ghost" size="sm" onClick={() => setTemplatePreview(template)}>查看</Button></TableCell></TableRow>)}</TableBody></Table>{!templates.length && <p className="py-16 text-center text-sm text-muted-foreground">暂无订阅模板</p>}</div>
               )}
@@ -764,17 +960,17 @@ export default function SubscriptionCenterPage() {
           policyGroupName={policyGroupName} setPolicyGroupName={setPolicyGroupName}
           saving={isSavingEditor} onSave={() => void saveEditor()} onClose={() => setEditorMode(null)}
         /> : isNodeSubscriptionDialogOpen ? <NodeSubscriptionDialog
-          open
+          open title={editorOriginalName ? "编辑节点订阅" : undefined}
           name={editorName} setName={setEditorName}
           expireAt={editorExpireAt} setExpireAt={setEditorExpireAt}
           accessLimit={editorAccessLimit} setAccessLimit={setEditorAccessLimit}
           nodes={nodes} selectedNodeIds={editorNodeIds} toggleNode={toggleEditorNode}
           saving={isSavingEditor} onSave={() => void saveEditor()} onClose={() => setEditorMode(null)}
         /> : isNodeAddDialogOpen ? <NodeAddDialog
-          open name={editorName} setName={setEditorName} link={editorLink} setLink={setEditorLink}
+          open title={editingNode ? "编辑节点" : undefined} name={editorName} setName={setEditorName} link={editorLink} setLink={setEditorLink}
           replace={replaceIpEnabled} setReplace={setReplaceIpEnabled} replaceId={replaceIpId} setReplaceId={setReplaceIpId}
           ips={ipEntries} openIpLibrary={openIpLibrary} groups={nodeGroups} newGroup={editorNewGroup} setNewGroup={setEditorNewGroup} openCreateGroup={() => setCreateGroupOpen(true)}
-          selectedGroups={editorGroups} setSelectedGroups={setEditorGroups} subscriptions={subscriptions} selectedSubscriptions={editorSubscriptionIds} setSelectedSubscriptions={setEditorSubscriptionIds}
+          selectedGroups={editorGroups} setSelectedGroups={setEditorGroups} subscriptions={subscriptions} selectedSubscriptions={editorSubscriptionIds} setSelectedSubscriptions={setEditorSubscriptionIds} showSubscriptions={!editingNode}
           saving={isSavingEditor} onSave={() => void saveEditor()} onClose={() => setEditorMode(null)}
         /> : <Dialog open={!!editorMode} onOpenChange={(open) => { if (!open) setEditorMode(null); }}>
           <DialogContent className={cn("max-w-2xl", (fallbackEditorMode === "template-add" || fallbackEditorMode === "template-edit" || fallbackEditorMode === "template-import") && "max-w-[calc(100vw-4rem)]") }>
@@ -838,6 +1034,7 @@ export default function SubscriptionCenterPage() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+        <input ref={nodeBackupInputRef} className="hidden" type="file" accept="application/json,.json" onChange={(event) => void importNodeBackup(event.target.files?.[0])} />
       </div>
     </DashboardLayout>
   );

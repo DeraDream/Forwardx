@@ -19,6 +19,7 @@ type Rule = {
 };
 type Props = {
   value: string;
+  view?: "groups" | "rules";
   onChange: (value: string) => void;
   onError: (message: string) => void;
   onDirtyChange: (dirty: boolean) => void;
@@ -79,7 +80,7 @@ function parse(value: string) {
   );
   return { root, groups, rules };
 }
-export function EgernVisualEditor({ value, onChange, onError, onDirtyChange }: Props) {
+export function EgernVisualEditor({ value, view = "groups", onChange, onError, onDirtyChange }: Props) {
   const [root, setRoot] = useState<Record<string, unknown>>({});
   const [groups, setGroups] = useState<Group[]>([]);
   const [rules, setRules] = useState<Rule[]>([]);
@@ -143,6 +144,11 @@ export function EgernVisualEditor({ value, onChange, onError, onDirtyChange }: P
     setRules((items) => items.filter((rule) => rule.policy !== name));
     setExpanded((items) => items.filter((position) => position !== index).map((position) => position > index ? position - 1 : position));
   };
+  if (view === "rules") return <section className="min-h-0 flex-1 overflow-auto p-3" onChangeCapture={markDirty}>
+    <div className="mb-3 flex items-center justify-between"><div><strong className="text-sm">Egern 流量规则 · {rules.length}</strong><p className="mt-0.5 text-xs text-muted-foreground">按文件顺序匹配；规则不再按策略组分块显示。</p></div><Button size="sm" onClick={() => { markDirty(); setRules((items) => [...items, { type: "domain_suffix", match: "", policy: "DIRECT" }]); }}><Plus className="mr-1 size-4" />添加规则</Button></div>
+    <div className="overflow-hidden rounded-xl border border-border"><div className="grid grid-cols-[34px_130px_minmax(150px,1fr)_minmax(110px,.6fr)_36px] gap-2 border-b border-border bg-muted/40 px-3 py-2 text-[10px] text-muted-foreground"><span>#</span><span>类型</span><span>匹配内容</span><span>策略</span><span /></div>{rules.map((rule, index) => <div key={index} className="grid grid-cols-[34px_130px_minmax(150px,1fr)_minmax(110px,.6fr)_36px] items-center gap-2 border-b border-border/60 px-3 py-2 last:border-b-0"><span className="font-mono text-[11px] text-muted-foreground">{index + 1}</span><Select value={rule.type} onValueChange={(type) => { markDirty(); setRules((items) => items.map((item, position) => position === index ? { ...item, type } : item)); }}><SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger><SelectContent>{ruleTypes.map((type) => <SelectItem key={type} value={type}>{type}</SelectItem>)}</SelectContent></Select>{rule.type === "default" ? <span className="text-xs text-muted-foreground">匹配全部流量</span> : <Input className="h-8 font-mono text-xs" value={rule.match || ""} onChange={(event) => setRules((items) => items.map((item, position) => position === index ? { ...item, match: event.target.value } : item))} />}<Input className="h-8 text-xs" value={rule.policy} onChange={(event) => setRules((items) => items.map((item, position) => position === index ? { ...item, policy: event.target.value } : item))} /><Button variant="ghost" size="icon" className="size-8 text-destructive" onClick={() => { markDirty(); setRules((items) => items.filter((_, position) => position !== index)); }}><Trash2 className="size-4" /></Button></div>)}</div>
+    <div className="mt-3 flex justify-end"><Button onClick={sync}>应用规则更改</Button></div>
+  </section>;
   return (
     <section className="min-h-0 flex-1 overflow-auto p-3" onChangeCapture={markDirty}>
       <div className="mb-3 flex items-center justify-between">
