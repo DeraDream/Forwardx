@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.4.15] - 2026-10-28
+
+### Improved
+
+- 模板编辑器统一策略组、规则集、流量规则、代码页签顺序；Clash、Egern、Loon 均支持规则集可视化与实时预览。
+- RULE-SET 规则以独立颜色显示，匹配规则集改为受限下拉选择；可从规则列表跳转、展开并高亮对应规则集。
+- 规则集编辑完善 Clash provider 缓存路径、Egern 原规则顺序与未知字段、Loon Remote Rule 额外参数的保留。Agent 保持 `2.2.231`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.4.14] - 2026-10-27
 
 ### Fixed

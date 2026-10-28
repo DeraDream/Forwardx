@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
+  ArrowUpRight,
   ChevronDown,
   ChevronUp,
   Check,
@@ -8,9 +9,12 @@ import {
   Code2,
   Copy,
   Eye,
+  FolderTree,
   GripVertical,
+  Network,
   Plus,
   RefreshCw,
+  Route,
   Search,
   Save,
   Trash2,
@@ -40,6 +44,7 @@ import {
 import { toast } from "sonner";
 import { EgernVisualEditor } from "@/components/subscriptions/EgernVisualEditor";
 import { LoonVisualEditor } from "@/components/subscriptions/LoonVisualEditor";
+import { RuleSetVisualEditor } from "@/components/subscriptions/RuleSetVisualEditor";
 
 type Group = {
   name: string;
@@ -319,12 +324,14 @@ function RuleVisualWorkspace({
   onRulesChange,
   onAdd,
   onEdit,
+  onOpenRuleSet,
 }: {
   groups: Group[];
   rules: Rule[];
   onRulesChange: (next: Rule[]) => void;
   onAdd: (target?: string) => void;
   onEdit: (index: number) => void;
+  onOpenRuleSet: (name: string) => void;
 }) {
   const [filter, setFilter] = useState<"all" | "direct" | "reject" | "orphan">("all");
   const [query, setQuery] = useState("");
@@ -354,7 +361,7 @@ function RuleVisualWorkspace({
     return <div key={index} className="grid grid-cols-12 items-center gap-2 border-b border-border/60 px-3 py-2.5 last:border-b-0 hover:bg-muted/35">
       <span className="col-span-1 font-mono text-[11px] text-muted-foreground">{String(index + 1).padStart(2, "0")}</span>
       <div className="col-span-3 flex min-w-0 flex-wrap items-center gap-1.5"><span className={`rounded border px-1.5 py-0.5 font-mono text-[10px] font-semibold ${ruleTagClass(rule.type)}`}>{rule.type}</span>{rule.noResolve && <span className="rounded border border-amber-500/30 bg-amber-500/10 px-1 py-0.5 text-[10px] text-amber-700 dark:text-amber-300">no-resolve</span>}</div>
-      <code className="col-span-3 truncate rounded bg-muted/70 px-1.5 py-1 text-[11px] text-foreground">{rule.type === "MATCH" ? "* (兜底匹配)" : rule.value}</code>
+      <div className="col-span-3 flex min-w-0 items-center gap-1 rounded bg-muted/70 px-1.5 py-1"><code className="min-w-0 flex-1 truncate text-[11px] text-foreground">{rule.type === "MATCH" ? "* (兜底匹配)" : rule.value}</code>{rule.type === "RULE-SET" && rule.value && <Button variant="ghost" size="icon" className="size-5 shrink-0 text-cyan-700 hover:bg-cyan-500/10 hover:text-cyan-700 dark:text-cyan-300 dark:hover:text-cyan-300" aria-label={`打开规则集 ${rule.value}`} title={`打开规则集 ${rule.value}`} onClick={() => onOpenRuleSet(rule.value)}><ArrowUpRight className="size-3.5" /></Button>}</div>
       <div className="col-span-3"><span className={`inline-flex max-w-full items-center gap-1 rounded px-2 py-1 font-mono text-[11px] font-semibold ${direct ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300" : reject ? "bg-rose-500/15 text-rose-700 dark:text-rose-300" : "bg-primary/15 text-primary"}`}><span>{direct ? "➜" : reject ? "⊘" : "🚀"}</span><span className="truncate">{rule.target || "未指定"}</span></span></div>
       <div className="col-span-2 flex items-center justify-end gap-1"><Switch aria-label={`启用规则 ${index + 1}`} checked={rule.enabled} onCheckedChange={(enabled) => onRulesChange(rules.map((item, position) => position === index ? { ...item, enabled } : item))} /><Button variant="ghost" size="icon" className="size-7" aria-label="编辑规则" onClick={() => onEdit(index)}><Code2 className="size-3.5" /></Button><Button variant="ghost" size="icon" className="size-7 text-destructive hover:bg-destructive/10 hover:text-destructive" aria-label="删除规则" onClick={() => onRulesChange(rules.filter((_, position) => position !== index))}><Trash2 className="size-3.5" /></Button></div>
     </div>;
@@ -373,6 +380,8 @@ function unquote(value: string) {
   return value.trim().replace(/^(?:"|')|(?:"|')$/g, "");
 }
 function ruleTagClass(type: string) {
+  if (type === "RULE-SET")
+    return "border-cyan-500/40 bg-cyan-500/15 text-cyan-700 dark:text-cyan-300";
   if (type.includes("CIDR") || type.includes("ASN"))
     return "border-indigo-500/30 bg-indigo-500/10 text-indigo-700 dark:text-indigo-300";
   if (type === "GEOIP" || type === "GEOSITE")
@@ -665,7 +674,9 @@ export function TemplateVisualEditorDialog({
   const [expanded, setExpanded] = useState<number[]>([]);
   const [expandedRules, setExpandedRules] = useState<number[]>([]);
   const [openGroupTypeIndex, setOpenGroupTypeIndex] = useState<number | null>(null);
-  const [mode, setMode] = useState<"visual" | "code" | "rules">("visual");
+  const [mode, setMode] = useState<"visual" | "code" | "rules" | "ruleSets">("visual");
+  const [ruleSetFocus, setRuleSetFocus] = useState<string | null>(null);
+  const [ruleSetFocusNonce, setRuleSetFocusNonce] = useState(0);
   const [copied, setCopied] = useState(false);
   const [ruleEditor, setRuleEditor] = useState<{
     index: number | null;
@@ -870,9 +881,23 @@ export function TemplateVisualEditorDialog({
         className={`border-b-2 px-1 py-2 text-sm transition-colors ${mode === "visual" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
         onClick={() => setMode("visual")}
       >
-        <Eye className="mr-1 inline h-3.5 w-3.5" />
-        可视化编辑
+        <Network className="mr-1 inline h-3.5 w-3.5" />
+        策略组
       </button>
+      {templateKind !== "unknown" && <button
+        className={`border-b-2 px-1 py-2 text-sm transition-colors ${mode === "ruleSets" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+        onClick={() => setMode("ruleSets")}
+      >
+        <FolderTree className="mr-1 inline h-3.5 w-3.5" />
+        规则集
+      </button>}
+      {templateKind !== "unknown" && <button
+        className={`border-b-2 px-1 py-2 text-sm transition-colors ${mode === "rules" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+        onClick={() => setMode("rules")}
+      >
+        <Route className="mr-1 inline h-3.5 w-3.5" />
+        流量规则 {templateKind === "clash" && <span className="ml-1 rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px]">{rules.length}</span>}
+      </button>}
       <button
         className={`border-b-2 px-1 py-2 text-sm transition-colors ${mode === "code" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
         onClick={() => setMode("code")}
@@ -880,13 +905,6 @@ export function TemplateVisualEditorDialog({
         <Code2 className="mr-1 inline h-3.5 w-3.5" />
         {templateKind === "loon" ? "INI 代码" : "YAML 代码"}
       </button>
-      {templateKind !== "unknown" && <button
-        className={`border-b-2 px-1 py-2 text-sm transition-colors ${mode === "rules" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
-        onClick={() => setMode("rules")}
-      >
-        <GripVertical className="mr-1 inline h-3.5 w-3.5" />
-        可视化规则 {templateKind === "clash" && <span className="ml-1 rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px]">{rules.length}</span>}
-      </button>}
     </div>
   );
   const allGroupsExpanded = groups.length > 0 && expanded.length === groups.length;
@@ -895,7 +913,10 @@ export function TemplateVisualEditorDialog({
   const saveRuleEditor = () => {
     if (!ruleEditor) return;
     const type = ruleEditor.type;
-    if (type !== "MATCH" && !ruleEditor.value.trim()) {
+    const value = type === "RULE-SET" && !ruleEditor.value.trim()
+      ? ruleProviderNames[0] || ""
+      : ruleEditor.value.trim();
+    if (type !== "MATCH" && !value) {
       toast.error("请输入匹配内容");
       return;
     }
@@ -924,7 +945,7 @@ export function TemplateVisualEditorDialog({
     }
     if (
       type === "RULE-SET" &&
-      !ruleProviderNames.includes(ruleEditor.value.trim())
+      !ruleProviderNames.includes(value)
     ) {
       toast.error("请选择当前模板 rule-providers 中已有的规则集");
       return;
@@ -949,7 +970,7 @@ export function TemplateVisualEditorDialog({
     }
     const next: Rule = {
       type,
-      value: type === "MATCH" ? "" : ruleEditor.value.trim(),
+      value: type === "MATCH" ? "" : value,
       target: ruleEditor.target,
       enabled: true,
       noResolve: ruleEditor.noResolve,
@@ -1024,6 +1045,28 @@ export function TemplateVisualEditorDialog({
                   <CodeSurface value={templateKind === "clash" ? (codePreview || "# 暂无代理组配置") : source} language={codeLanguage} readOnly />
                 </section>
               </div>
+            ) : mode === "ruleSets" && templateKind !== "unknown" ? (
+              <div className="grid min-h-0 flex-1 overflow-hidden bg-muted/20 lg:grid-cols-[minmax(420px,1fr)_minmax(420px,1fr)]">
+                <RuleSetVisualEditor
+                  kind={templateKind}
+                  value={source}
+                  focusName={ruleSetFocus}
+                  focusNonce={ruleSetFocusNonce}
+                  onChange={setSource}
+                  onDirtyChange={setExternalVisualDirty}
+                  onError={(message) => { if (message) toast.error(message); }}
+                />
+                <section className="hidden min-h-0 flex-col overflow-hidden border-l border-border bg-background lg:flex">
+                  <header className="flex items-center justify-between border-b border-border bg-muted/30 px-4 py-3">
+                    <div>
+                      <p className="text-sm font-semibold text-foreground"><i className="mr-2 inline-block size-2 rounded-full bg-cyan-400" />实时 {codeFormatLabel} 预览 <span className="ml-1 font-mono text-[11px] font-normal text-muted-foreground">· 双向同步</span></p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">规则集修改会立即写入模板代码；最终保存由右上角“保存模板”完成。</p>
+                    </div>
+                    <span className={`font-mono text-[11px] ${validation.valid ? "text-emerald-600 dark:text-emerald-400" : "text-destructive"}`}>{validation.valid ? "格式合规" : "待修复"}</span>
+                  </header>
+                  <CodeSurface value={source} language={codeLanguage} readOnly />
+                </section>
+              </div>
             ) : mode === "rules" && templateKind === "clash" ? (
               <RuleVisualWorkspace
                 groups={groups}
@@ -1034,10 +1077,12 @@ export function TemplateVisualEditorDialog({
                   const rule = rules[index];
                   if (rule) setRuleEditor({ index, target: rule.target, type: rule.type, value: rule.value, noResolve: Boolean(rule.noResolve) });
                 }}
+                onOpenRuleSet={(name) => { setRuleSetFocus(name); setRuleSetFocusNonce((nonce) => nonce + 1); setMode("ruleSets"); }}
               />
             ) : mode === "rules" ? (
-              <section className="flex min-h-0 flex-1 flex-col overflow-hidden bg-muted/20 p-4">
-                <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+              <div className="grid min-h-0 flex-1 overflow-hidden bg-muted/20 lg:grid-cols-[minmax(420px,1fr)_minmax(420px,1fr)]">
+                <section className="flex min-h-0 flex-col overflow-hidden p-4">
+                  <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border bg-card shadow-sm">
                   <header className="border-b border-border bg-muted/30 px-4 py-3">
                     <p className="text-sm font-semibold text-foreground">可视化规则 <span className="ml-1 rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] text-primary">{codeFormatLabel}</span></p>
                     <p className="mt-0.5 text-xs text-muted-foreground">按策略组展开、修改或新增规则；点击“应用更改”后写回模板代码。</p>
@@ -1047,7 +1092,18 @@ export function TemplateVisualEditorDialog({
                     {templateKind === "egern" ? <EgernVisualEditor value={source} onChange={setSource} onDirtyChange={setExternalVisualDirty} onError={(message) => { if (message) toast.error(message); }} /> : <LoonVisualEditor value={source} onChange={setSource} onDirtyChange={setExternalVisualDirty} onError={(message) => { if (message) toast.error(message); }} />}
                   </div>
                 </div>
-              </section>
+                </section>
+                <section className="hidden min-h-0 flex-col overflow-hidden border-l border-border bg-background lg:flex">
+                  <header className="flex items-center justify-between border-b border-border bg-muted/30 px-4 py-3">
+                    <div>
+                      <p className="text-sm font-semibold text-foreground"><i className="mr-2 inline-block size-2 rounded-full bg-cyan-400" />实时 {codeFormatLabel} 预览 <span className="ml-1 font-mono text-[11px] font-normal text-muted-foreground">· 双向同步</span></p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">左侧可视化规则修改会实时反映在此处；最终保存由右上角“保存模板”完成。</p>
+                    </div>
+                    <span className={`font-mono text-[11px] ${validation.valid ? "text-emerald-600 dark:text-emerald-400" : "text-destructive"}`}>{validation.valid ? "格式合规" : "待修复"}</span>
+                  </header>
+                  <CodeSurface value={source} language={codeLanguage} readOnly />
+                </section>
+              </div>
             ) : (
               <div className="grid min-h-0 flex-1 gap-4 overflow-hidden bg-muted/20 p-4 lg:grid-cols-[minmax(0,1.04fr)_minmax(420px,.96fr)]">
                 <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-card shadow-sm">
@@ -1444,7 +1500,7 @@ export function TemplateVisualEditorDialog({
               </section>
               <div className="grid gap-5 md:grid-cols-[1.05fr_.95fr]">
                 <section className="grid content-start gap-3 rounded-xl border border-border bg-card p-4"><div><p className="text-sm font-semibold text-foreground">路由目标</p><p className="mt-0.5 text-xs text-muted-foreground">命中后将流量发送到此目标</p></div><div className="grid grid-cols-2 gap-2"><button type="button" onClick={() => setRuleEditor({ ...ruleEditor, target: "DIRECT" })} className={`rounded-lg border p-3 text-left transition-colors ${ruleEditor.target === "DIRECT" ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" : "border-border bg-background hover:border-emerald-500/40"}`}><span className="block text-xs font-semibold">→ DIRECT</span><span className="mt-1 block text-[10px] text-muted-foreground">直连访问</span></button><button type="button" onClick={() => setRuleEditor({ ...ruleEditor, target: "REJECT" })} className={`rounded-lg border p-3 text-left transition-colors ${ruleEditor.target === "REJECT" ? "border-rose-500/50 bg-rose-500/10 text-rose-700 dark:text-rose-300" : "border-border bg-background hover:border-rose-500/40"}`}><span className="block text-xs font-semibold">⊘ REJECT</span><span className="mt-1 block text-[10px] text-muted-foreground">拒绝连接</span></button></div><label className="grid gap-1.5 text-xs font-medium text-foreground">代理策略组 <span className="text-[10px] font-normal text-muted-foreground">选择策略组会覆盖上方内置动作</span><TemplateSelect value={ruleTargetOptions.includes(ruleEditor.target) ? ruleEditor.target : "DIRECT"} options={ruleTargetOptions} onValueChange={(target) => setRuleEditor({ ...ruleEditor, target })} /></label></section>
-                <section className="grid content-start gap-3 rounded-xl border border-border bg-card p-4"><div><p className="text-sm font-semibold text-foreground">规则参数</p><p className="mt-0.5 text-xs text-muted-foreground">{ruleEditor.type === "MATCH" ? "MATCH 将兜底匹配尚未命中的流量。" : "输入此类型对应的匹配内容。"}</p></div>{ruleEditor.type !== "MATCH" ? <Input autoFocus value={ruleEditor.value} onChange={(event) => setRuleEditor({ ...ruleEditor, value: event.target.value })} placeholder={ruleEditor.type.includes("CIDR") ? "例如 1.2.3.0/24" : ruleEditor.type === "RULE-SET" ? "选择已有 rule-provider 名称" : "请输入匹配内容"} className="h-11 border-border bg-background font-mono text-sm text-foreground placeholder:text-muted-foreground focus-visible:ring-primary" /> : <div className="rounded-lg border border-primary/25 bg-primary/5 px-3 py-3 font-mono text-xs text-primary">MATCH（无需填写匹配值）</div>}{["IP-CIDR", "IP-CIDR6", "IP-SUFFIX", "IP-ASN", "GEOIP"].includes(ruleEditor.type) && <label className="flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/30 px-3 py-2.5 text-xs"><span><b className="block text-foreground">no-resolve</b><small className="mt-0.5 block text-muted-foreground">跳过此规则前的 DNS 解析。</small></span><Switch checked={ruleEditor.noResolve} onCheckedChange={(noResolve) => setRuleEditor({ ...ruleEditor, noResolve })} /></label>}</section>
+                <section className="grid content-start gap-3 rounded-xl border border-border bg-card p-4"><div><p className="text-sm font-semibold text-foreground">规则参数</p><p className="mt-0.5 text-xs text-muted-foreground">{ruleEditor.type === "MATCH" ? "MATCH 将兜底匹配尚未命中的流量。" : ruleEditor.type === "RULE-SET" ? "仅可选择当前模板中已定义的规则集。" : "输入此类型对应的匹配内容。"}</p></div>{ruleEditor.type === "RULE-SET" ? ruleProviderNames.length ? <TemplateSelect value={ruleProviderNames.includes(ruleEditor.value) ? ruleEditor.value : ruleProviderNames[0]} options={ruleProviderNames} mono onValueChange={(value) => setRuleEditor({ ...ruleEditor, value })} /> : <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-3 text-xs text-amber-800 dark:text-amber-300">暂无可引用规则集，请先到“规则集”页创建 rule-provider。</div> : ruleEditor.type !== "MATCH" ? <Input autoFocus value={ruleEditor.value} onChange={(event) => setRuleEditor({ ...ruleEditor, value: event.target.value })} placeholder={ruleEditor.type.includes("CIDR") ? "例如 1.2.3.0/24" : "请输入匹配内容"} className="h-11 border-border bg-background font-mono text-sm text-foreground placeholder:text-muted-foreground focus-visible:ring-primary" /> : <div className="rounded-lg border border-primary/25 bg-primary/5 px-3 py-3 font-mono text-xs text-primary">MATCH（无需填写匹配值）</div>}{["IP-CIDR", "IP-CIDR6", "IP-SUFFIX", "IP-ASN", "GEOIP"].includes(ruleEditor.type) && <label className="flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/30 px-3 py-2.5 text-xs"><span><b className="block text-foreground">no-resolve</b><small className="mt-0.5 block text-muted-foreground">跳过此规则前的 DNS 解析。</small></span><Switch checked={ruleEditor.noResolve} onCheckedChange={(noResolve) => setRuleEditor({ ...ruleEditor, noResolve })} /></label>}</section>
               </div>
               <section className="rounded-xl border border-primary/25 bg-primary/5 px-4 py-3"><div className="mb-1 text-[11px] font-medium text-primary">生成预览</div><code className="block break-all font-mono text-sm text-foreground">{ruleEditor.type}{ruleEditor.type === "MATCH" ? "" : `,${ruleEditor.value || "匹配内容"}`},{ruleEditor.target}{ruleEditor.noResolve ? ",no-resolve" : ""}</code></section>
             </div>
