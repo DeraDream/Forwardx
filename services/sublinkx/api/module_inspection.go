@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -124,7 +125,10 @@ func countLoonSection(lines []string) int {
 	return count
 }
 
-func inspectLoonModule(content string) (*ModuleInspection, bool) {
+var egernArgumentPlaceholder = regexp.MustCompile(`\{\{\{[A-Za-z_][A-Za-z0-9_]*\}\}\}`)
+var surgeScriptType = regexp.MustCompile(`(?i)(?:^|[,\s])type\s*=`)
+
+func inspectLoonModule(content string) (*ModuleInspection, bool, error) {
 	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
 	metadata := map[string]string{}
 	sections := map[string]int{}
@@ -158,7 +162,7 @@ func inspectLoonModule(content string) (*ModuleInspection, bool) {
 			if trimmedLine != "" && !strings.HasPrefix(trimmedLine, "#") && !strings.HasPrefix(trimmedLine, ";") {
 				switch current {
 				case "script":
-					if strings.Contains(strings.ToLower(trimmedLine), "type=") || strings.Contains(strings.ToLower(trimmedLine), "type =") {
+					if surgeScriptType.MatchString(trimmedLine) || (strings.Contains(trimmedLine, "=") && !strings.HasPrefix(strings.ToLower(trimmedLine), "http-") && !strings.HasPrefix(strings.ToLower(trimmedLine), "cron ") && strings.Contains(strings.ToLower(trimmedLine), "script-path")) {
 						surge = true
 						break
 					}
@@ -171,10 +175,10 @@ func inspectLoonModule(content string) (*ModuleInspection, bool) {
 		}
 	}
 	if invalid != "" && !surge {
-		return nil, false
+		return nil, true, errors.New(invalid)
 	}
 	if !seenSignal {
-		return nil, false
+		return nil, false, nil
 	}
 	var tags []string
 	for _, tag := range strings.Split(metadata["tag"], ",") {
@@ -188,14 +192,18 @@ func inspectLoonModule(content string) (*ModuleInspection, bool) {
 	}
 	result := &ModuleInspection{Kind: kind, Name: metadata["name"], Description: metadata["desc"], Author: metadata["author"], Version: metadata["version"], Icon: metadata["icon"], Tags: tags, Sections: map[string]int{}, Content: content}
 	if result.Name == "" {
-		result.Name = "Loon Plugin"
+		if surge {
+			result.Name = "Surge Module"
+		} else {
+			result.Name = "Loon Plugin"
+		}
 	}
-	for source, target := range map[string]string{"general": "General", "rule": "Rule", "rewrite": "Rewrite", "url rewrite": "URL Rewrite", "host": "Host", "script": "Script", "mitm": "MITM", "argument": "Argument"} {
+	for source, target := range map[string]string{"general": "General", "rule": "Rule", "rewrite": "Rewrite", "url rewrite": "URL Rewrite", "host": "Host", "script": "Script", "mitm": "MITM", "argument": "Argument", "map local": "Map Local", "header rewrite": "Header Rewrite", "body rewrite": "Body Rewrite", "url redirect": "URL Redirect"} {
 		if sections[source] > 0 {
 			result.Sections[target] += sections[source]
 		}
 	}
-	return result, true
+	return result, true, nil
 }
 
 func yamlEntryCount(value any) int {
@@ -213,8 +221,15 @@ func yamlEntryCount(value any) int {
 
 func inspectEgernModule(content string) (*ModuleInspection, error) {
 	var root map[string]any
-	if err := yaml.Unmarshal([]byte(content), &root); err != nil || len(root) == 0 {
-		return nil, errors.New("不是有效的 Egern YAML Module")
+	// Egern substitutes {{{ARGUMENT}}} placeholders before YAML parsing. An
+	// unquoted placeholder is intentionally not legal YAML until substitution.
+	// Use a neutral scalar only for inspection, and return the original source.
+	inspectionContent := egernArgumentPlaceholder.ReplaceAllString(content, "0")
+	if err := yaml.Unmarshal([]byte(inspectionContent), &root); err != nil {
+		return nil, fmt.Errorf("Egern 模块 YAML 解析失败：%w", err)
+	}
+	if len(root) == 0 {
+		return nil, errors.New("Egern 模块内容为空或不是 YAML 对象")
 	}
 	// These are the native module directive families. Aliases cover module
 	// versions that use the singular form while keeping the output canonical.
@@ -251,8 +266,13 @@ func inspectEgernModule(content string) (*ModuleInspection, error) {
 }
 
 func inspectModule(content string) (*ModuleInspection, error) {
-	if result, ok := inspectLoonModule(content); ok {
-		return result, nil
+	content = strings.TrimPrefix(content, "\ufeff")
+	trimmed := strings.TrimSpace(content)
+	if strings.HasPrefix(strings.ToLower(trimmed), "<!doctype html") || strings.HasPrefix(strings.ToLower(trimmed), "<html") {
+		return nil, errors.New("模块地址返回了 HTML 网页而非模块源码，请检查链接是否为原始文件地址")
+	}
+	if result, recognized, err := inspectLoonModule(content); recognized {
+		return result, err
 	}
 	return inspectEgernModule(content)
 }
