@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"time"
@@ -40,7 +41,7 @@ func publicModuleTransport() *http.Transport {
 	return &http.Transport{
 		Proxy: nil,
 		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
-			host, _, err := net.SplitHostPort(address)
+			host, port, err := net.SplitHostPort(address)
 			if err != nil {
 				return nil, err
 			}
@@ -52,11 +53,20 @@ func publicModuleTransport() *http.Transport {
 				return nil, errors.New("模块地址无法解析")
 			}
 			for _, item := range ips {
-				if item.IP.IsLoopback() || item.IP.IsPrivate() || item.IP.IsLinkLocalUnicast() || item.IP.IsLinkLocalMulticast() || item.IP.IsUnspecified() || item.IP.IsMulticast() {
+				ip, ok := netip.AddrFromSlice(item.IP)
+				if !ok || !isPublicTemplateAddress(ip.Unmap()) {
 					return nil, errors.New("模块地址不能指向本地或私有网络")
 				}
 			}
-			return dialer.DialContext(ctx, network, address)
+			var dialErr error
+			for _, item := range ips {
+				conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(item.IP.String(), port))
+				if err == nil {
+					return conn, nil
+				}
+				dialErr = err
+			}
+			return nil, dialErr
 		},
 	}
 }
@@ -83,6 +93,10 @@ func fetchModuleSource(ctx context.Context, rawURL string) (string, error) {
 	request.Header.Set("Accept", "text/plain, application/yaml, text/yaml, */*;q=0.1")
 	response, err := client.Do(request)
 	if err != nil {
+		var dnsErr *net.DNSError
+		if errors.As(err, &dnsErr) {
+			return "", fmt.Errorf("模块域名 %s 解析失败，请检查服务器 DNS 或模块地址是否仍有效：%w", dnsErr.Name, err)
+		}
 		return "", fmt.Errorf("拉取模块失败：%w", err)
 	}
 	defer response.Body.Close()
@@ -117,6 +131,7 @@ func inspectLoonModule(content string) (*ModuleInspection, bool) {
 	current := ""
 	seenSignal := false
 	invalid := ""
+	surge := false
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "#!") {
@@ -129,6 +144,10 @@ func inspectLoonModule(content string) (*ModuleInspection, bool) {
 		}
 		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
 			current = strings.ToLower(strings.TrimSpace(trimmed[1 : len(trimmed)-1]))
+			if current == "map local" || current == "header rewrite" || current == "body rewrite" || current == "url redirect" {
+				surge = true
+				seenSignal = true
+			}
 			if current == "general" || current == "rule" || current == "rewrite" || current == "url rewrite" || current == "host" || current == "script" || current == "mitm" || current == "argument" {
 				seenSignal = true
 			}
@@ -139,6 +158,10 @@ func inspectLoonModule(content string) (*ModuleInspection, bool) {
 			if trimmedLine != "" && !strings.HasPrefix(trimmedLine, "#") && !strings.HasPrefix(trimmedLine, ";") {
 				switch current {
 				case "script":
+					if strings.Contains(strings.ToLower(trimmedLine), "type=") || strings.Contains(strings.ToLower(trimmedLine), "type =") {
+						surge = true
+						break
+					}
 					if !strings.Contains(strings.ToLower(trimmedLine), "script-path") || !strings.HasPrefix(strings.ToLower(trimmedLine), "http-request") && !strings.HasPrefix(strings.ToLower(trimmedLine), "http-response") && !strings.HasPrefix(strings.ToLower(trimmedLine), "cron") && !strings.HasPrefix(strings.ToLower(trimmedLine), "generic") && !strings.HasPrefix(strings.ToLower(trimmedLine), "network-changed") {
 						invalid = "Loon [Script] 中存在缺少脚本类型或 script-path 的条目"
 					}
@@ -147,7 +170,7 @@ func inspectLoonModule(content string) (*ModuleInspection, bool) {
 			sections[current] += countLoonSection([]string{line})
 		}
 	}
-	if invalid != "" {
+	if invalid != "" && !surge {
 		return nil, false
 	}
 	if !seenSignal {
@@ -159,7 +182,11 @@ func inspectLoonModule(content string) (*ModuleInspection, bool) {
 			tags = append(tags, tag)
 		}
 	}
-	result := &ModuleInspection{Kind: "loon", Name: metadata["name"], Description: metadata["desc"], Author: metadata["author"], Version: metadata["version"], Icon: metadata["icon"], Tags: tags, Sections: map[string]int{}, Content: content}
+	kind := "loon"
+	if surge {
+		kind = "surge"
+	}
+	result := &ModuleInspection{Kind: kind, Name: metadata["name"], Description: metadata["desc"], Author: metadata["author"], Version: metadata["version"], Icon: metadata["icon"], Tags: tags, Sections: map[string]int{}, Content: content}
 	if result.Name == "" {
 		result.Name = "Loon Plugin"
 	}

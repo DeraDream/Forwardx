@@ -17,6 +17,7 @@ func withVisualTemplateTestDir(t *testing.T) {
 	visualTemplateDir = t.TempDir()
 	visualTemplateDirErr = nil
 	visualTemplateDirOnce = sync.Once{}
+	visualTemplateDirOnce.Do(func() {})
 	t.Cleanup(func() {
 		visualTemplateDir, visualTemplateDirErr = oldDir, oldErr
 		visualTemplateDirOnce = sync.Once{}

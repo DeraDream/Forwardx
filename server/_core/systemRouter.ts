@@ -9,6 +9,7 @@ import fs from "fs";
 import net from "net";
 import path from "path";
 import { clearPanelLogs, formatPanelLogsForExport, getPanelLogPage } from "./panelLogger";
+import { exportSublinkBackup, importSublinkBackup } from "../sublinkService";
 import { approveMigrationRequest, createMigrationCode, getCurrentMigrationCode, rejectMigrationRequest } from "../migrationCodes";
 import { PANEL_MIGRATION_SCOPES } from "../../shared/panelMigration";
 import {
@@ -2686,20 +2687,23 @@ export const systemRouter = router({
       const settings = await db.getAllSettings();
       const snapshot = await exportMigrationSnapshot(settings.panelPublicUrl || undefined);
       const backupSnapshot = pruneMigrationSnapshotForPanelBackup(snapshot);
+      backupSnapshot.sublinkBackup = await exportSublinkBackup();
       const backup = encryptMigrationSnapshot(backupSnapshot, input.password);
+      const content = JSON.stringify(backup, null, 2);
+      if (Buffer.byteLength(content, "utf8") > 128 * 1024 * 1024) throw new Error("加密备份超过 128 MB，无法导入，请缩减备份数据");
       const timestamp = new Date(snapshot.exportedAt).toISOString().slice(0, 19).replace(/[:T]/g, "-");
       console.info(`[Backup] Exported encrypted panel backup users=${backupSnapshot.tables.users?.length || 0} hosts=${backupSnapshot.tables.hosts?.length || 0}`);
       return {
         filename: `forwardx-panel-backup-v${APP_VERSION}-${timestamp}.fwxbak`,
         mimeType: "application/json;charset=utf-8",
-        content: JSON.stringify(backup, null, 2),
+        content,
         summary: summarizeMigrationSnapshot(backupSnapshot),
       };
     }),
 
   importPanelBackup: adminProcedure
     .input(z.object({
-      content: z.string().min(1, "请选择备份文件").max(50 * 1024 * 1024, "备份文件过大"),
+      content: z.string().min(1, "请选择备份文件").max(128 * 1024 * 1024, "备份文件过大"),
       password: z.string().min(1, "请输入备份密码").max(256),
       targetPanelUrl: z.string().trim().max(256).optional(),
       confirmed: z.literal(true),
@@ -2735,6 +2739,20 @@ export const systemRouter = router({
         },
       });
 
+      if (snapshot.sublinkBackup) {
+        try {
+          await importSublinkBackup(snapshot.sublinkBackup);
+          result.subscriptionBackup = "restored";
+        } catch (error) {
+          result.subscriptionBackup = "failed";
+          result.partial = true;
+          result.warnings.push(`订阅数据恢复失败：${error instanceof Error ? error.message : String(error)}；可重新导入备份重试。`);
+        }
+      } else {
+        result.subscriptionBackup = "not-included";
+        result.warnings.push("此备份不包含订阅数据，现有订阅数据未修改。");
+      }
+
       let reachedHosts = 0;
       for (const hostId of importedHostIds) {
         requestHostTcping(hostId);
@@ -2750,6 +2768,8 @@ export const systemRouter = router({
       };
 
       try {
+        // A failed subscription restore must remain retryable.
+        if (result.subscriptionBackup === "failed") return result;
         // Store the summary first; the fingerprint is the commit marker.
         await db.setSetting("lastPanelBackupImportResult", JSON.stringify(result));
         await db.setSetting("lastPanelBackupImportFingerprint", fingerprint);

@@ -1305,6 +1305,7 @@ function BackupRestoreSection({ panelUrl }: { panelUrl: string }) {
       const reusedRows = Number(result.reusedRows || 0);
       const skippedRows = Number(result.skippedRows || 0);
       const validation = result.agentValidation;
+      const subscriptionText = result.subscriptionBackup === "restored" ? " 订阅数据已恢复，订阅服务正在重启。" : result.subscriptionBackup === "failed" ? " 订阅数据恢复失败，请查看警告并重新导入。" : " 此备份不包含订阅数据，现有订阅数据未修改。";
       const validationText = validation?.requestedHosts
         ? ` 已请求 ${validation.requestedHosts} 台 Agent 重新检查连接和 Mimic 环境，${validation.pendingHosts || 0} 台离线主机将在重新连接后上报。`
         : "";
@@ -1331,7 +1332,7 @@ function BackupRestoreSection({ panelUrl }: { panelUrl: string }) {
           : "备份恢复完成",
         detail: result.alreadyImported
           ? "该备份文件已经导入过，本次未再次写入数据。"
-          : `其余可用数据已经导入：新增 ${insertedRows} 条，更新 ${updatedRows} 条，复用 ${reusedRows} 条，跳过 ${skippedRows} 条。${validationText}`,
+          : `其余可用数据已经导入：新增 ${insertedRows} 条，更新 ${updatedRows} 条，复用 ${reusedRows} 条，跳过 ${skippedRows} 条。${validationText}${subscriptionText}`,
         status: "success",
       });
       if (result.alreadyImported) {
@@ -1510,7 +1511,7 @@ function BackupRestoreSection({ panelUrl }: { panelUrl: string }) {
 
   const handleBackupFileChange = async (file: File | undefined) => {
     if (!file) return;
-    if (file.size > 50 * 1024 * 1024) {
+    if (file.size > 128 * 1024 * 1024) {
       toast.error("备份文件过大");
       return;
     }
@@ -2089,7 +2090,7 @@ function BackupRestoreSection({ panelUrl }: { panelUrl: string }) {
               加密数据导出
             </CardTitle>
             <CardDescription>
-              导出一份离线备份文件，文件内容会使用你设置的备份密码加密。
+              导出面板数据及订阅中心的节点、订阅和模板；备份文件使用你设置的密码加密。
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -2131,7 +2132,7 @@ function BackupRestoreSection({ panelUrl }: { panelUrl: string }) {
               离线导入恢复
             </CardTitle>
             <CardDescription>
-              旧面板离线时，可通过加密备份文件恢复并接管旧主机。
+              通过加密备份文件恢复面板和订阅数据。Agent 仍需能够访问其配置的面板地址。
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -2166,7 +2167,7 @@ function BackupRestoreSection({ panelUrl }: { panelUrl: string }) {
               确认导入备份
             </DialogTitle>
             <DialogDescription>
-              导入后会接管备份内已有主机，旧面板的主机、规则、隧道和转发组会迁移到当前面板。
+              导入面板数据时将恢复主机、规则、隧道和转发组；若备份包含订阅数据，会整体替换当前订阅中心的数据和模板，无法合并。
             </DialogDescription>
           </DialogHeader>
           <Alert>

@@ -58,12 +58,21 @@ func BackupExport(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"msg": "数据库未初始化"})
 		return
 	}
-	if err := models.DB.Exec("PRAGMA wal_checkpoint(TRUNCATE)").Error; err != nil {
+	// VACUUM INTO produces a consistent SQLite snapshot even while the live
+	// database receives writes; copying the main file after a checkpoint does not.
+	snapshotDir, err := os.MkdirTemp("", "sublink-export-")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"msg": "无法准备订阅数据库备份"})
+		return
+	}
+	defer os.RemoveAll(snapshotDir)
+	snapshotPath := filepath.Join(snapshotDir, "sublink.db")
+	if err := models.DB.Exec("VACUUM INTO ?", snapshotPath).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"msg": "无法生成一致的数据库备份"})
 		return
 	}
 
-	archive, err := buildBackupArchive()
+	archive, err := buildBackupArchiveFromDatabase(snapshotPath)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"msg": "生成备份失败"})
 		return
@@ -132,7 +141,10 @@ func BackupImport(c *gin.Context) {
 		return
 	}
 	if err := restoreBackup(tempDir); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"msg": "恢复失败，请检查文件权限"})
+		// restoreBackup closes the live database before changing files, even if
+		// a subsequent operation fails. Restart to reopen the rolled-back DB.
+		c.JSON(http.StatusInternalServerError, gin.H{"msg": "恢复失败，请检查文件权限；订阅服务正在重启"})
+		scheduleProcessRestart()
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"code": "00000", "data": gin.H{"port": config.Port, "restart_delay_ms": 4500}, "msg": "恢复成功，服务正在重启"})
@@ -164,11 +176,15 @@ func validateBackupPassword(password string) error {
 }
 
 func buildBackupArchive() ([]byte, error) {
+	return buildBackupArchiveFromDatabase("./db/sublink.db")
+}
+
+func buildBackupArchiveFromDatabase(databasePath string) ([]byte, error) {
 	var raw bytes.Buffer
 	zw := gzip.NewWriter(&raw)
 	tw := tar.NewWriter(zw)
 	manifest := backupManifest{Version: 1, CreatedAt: time.Now().UTC().Format(time.RFC3339), Files: []string{"db/sublink.db", "db/config.yaml"}}
-	if err := addTarFile(tw, "db/sublink.db", "./db/sublink.db"); err != nil {
+	if err := addTarFile(tw, "db/sublink.db", databasePath); err != nil {
 		return nil, err
 	}
 	if err := addTarFile(tw, "db/config.yaml", "./db/config.yaml"); err != nil {

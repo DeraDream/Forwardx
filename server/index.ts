@@ -134,6 +134,9 @@ async function startServer() {
 
   // Payment webhooks need the original request body for signature verification.
   app.use(paymentCallbackRouter);
+  // Encrypted backups can include the subscription archive. Keep the larger
+  // request limit restricted to this authenticated import procedure.
+  app.use("/api/trpc/system.importPanelBackup", express.json({ limit: "130mb" }));
   // Plugin archives are accepted as base64 JSON and can expand beyond the 5 MB binary limit.
   app.use(express.json({ limit: "10mb" }));
   app.use(express.urlencoded({ limit: "1mb", extended: true }));

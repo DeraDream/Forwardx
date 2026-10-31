@@ -125,7 +125,7 @@ const trpcFetch = (input: RequestInfo | URL, init?: RequestInit) => {
 const trpcClient = trpc.createClient({
   links: [
     splitLink({
-      condition: (op) => op.type === "query" && criticalQueryPaths.has(op.path),
+      condition: (op) => (op.type === "query" && criticalQueryPaths.has(op.path)) || op.path === "system.importPanelBackup",
       true: httpLink({
         url: "/api/trpc",
         transformer: superjson,

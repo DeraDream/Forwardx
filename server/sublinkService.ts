@@ -12,6 +12,8 @@ const SUBLINK_HOST = "127.0.0.1";
 const SUBLINK_PORT = 8000;
 const SUBLINK_USERNAME = "admin";
 let sublinkProcess: ChildProcess | null = null;
+let sublinkStopping = false;
+let sublinkRestartTimer: ReturnType<typeof setTimeout> | null = null;
 
 function sublinkJwtSecret() {
   return createHmac("sha256", ENV.cookieSecret).update("forwardx-sublink-jwt-v1").digest("base64url");
@@ -82,6 +84,8 @@ export function installSublinkProxy(app: Express) {
 }
 
 export function startSublinkService(serverDir: string) {
+  if (sublinkProcess) return;
+  sublinkStopping = false;
   const architecture = process.arch === "arm64" ? "arm64" : "amd64";
   // Release bundles carry both Linux architectures below dist/. Docker copies
   // the same assets beside dist/. The legacy filename is retained as a final
@@ -112,10 +116,50 @@ export function startSublinkService(serverDir: string) {
   sublinkProcess.on("exit", (code, signal) => {
     sublinkProcess = null;
     console.warn(`[SublinkX] exited code=${code ?? "null"} signal=${signal ?? "none"}`);
+    if (!sublinkStopping) {
+      sublinkRestartTimer = setTimeout(() => { sublinkRestartTimer = null; startSublinkService(serverDir); }, 1000);
+      sublinkRestartTimer.unref();
+    }
   });
 }
 
+const MAX_SUBLINK_BACKUP_BYTES = 32 * 1024 * 1024;
+
+async function sublinkBackupRequest(endpoint: "export" | "import", form: FormData): Promise<globalThis.Response> {
+  const response = await fetch(`http://${SUBLINK_HOST}:${SUBLINK_PORT}/api/v1/backup/${endpoint}`, {
+    method: "POST", headers: { Authorization: `Bearer ${issueSublinkToken()}` }, body: form,
+    signal: AbortSignal.timeout(120_000),
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({})) as { msg?: string };
+    throw new Error(data.msg || `订阅备份服务返回 HTTP ${response.status}`);
+  }
+  return response;
+}
+
+/** The inner archive is encrypted together with the complete panel snapshot. */
+export async function exportSublinkBackup(): Promise<string> {
+  const response = await sublinkBackupRequest("export", new FormData());
+  const declaredLength = Number(response.headers.get("content-length") || 0);
+  if (declaredLength > MAX_SUBLINK_BACKUP_BYTES) throw new Error("订阅备份超过 32 MB，请缩减订阅数据后重试");
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (!bytes.length || bytes.length > MAX_SUBLINK_BACKUP_BYTES) throw new Error("订阅备份为空或超过 32 MB");
+  return bytes.toString("base64");
+}
+
+export async function importSublinkBackup(encoded: string): Promise<void> {
+  if (encoded.length > Math.ceil(MAX_SUBLINK_BACKUP_BYTES / 3) * 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) throw new Error("订阅备份数据无效或超过 32 MB");
+  const bytes = Buffer.from(encoded, "base64");
+  if (!bytes.length || bytes.length > MAX_SUBLINK_BACKUP_BYTES) throw new Error("订阅备份数据无效或超过 32 MB");
+  const form = new FormData();
+  form.set("file", new Blob([bytes]), "sublink-backup.sublink-backup");
+  await sublinkBackupRequest("import", form);
+}
+
 export function stopSublinkService() {
+  sublinkStopping = true;
+  if (sublinkRestartTimer) clearTimeout(sublinkRestartTimer);
+  sublinkRestartTimer = null;
   sublinkProcess?.kill("SIGTERM");
   sublinkProcess = null;
 }

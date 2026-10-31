@@ -58,6 +58,8 @@ export interface MigrationSnapshot {
   sourcePanelUrl?: string;
   dataScope?: PanelMigrationScope;
   takeoverToken?: string;
+  /** Base64-encoded SublinkX archive inside the encrypted panel backup. */
+  sublinkBackup?: string;
   tables: Record<string, Record<string, any>[]>;
 }
 
@@ -83,6 +85,7 @@ export interface MigrationImportResult {
   reusedRows: number;
   skippedRows: number;
   alreadyImported?: boolean;
+  subscriptionBackup?: "restored" | "not-included" | "failed";
   agentValidation?: {
     requestedHosts: number;
     reachedHosts: number;

@@ -1023,6 +1023,7 @@ export function TemplateVisualEditorDialog({
                   value={source}
                   onChange={setSource}
                   onDirtyChange={setExternalVisualDirty}
+                  onFocusLine={(line) => setVisualYamlFocus({ line, nonce: Date.now() })}
                   onError={(message) => { if (message) toast.error(message); }}
                 />
                 <section className="hidden min-h-0 flex-col overflow-hidden border-l border-border bg-background lg:flex">
@@ -1030,7 +1031,7 @@ export function TemplateVisualEditorDialog({
                     <div><p className="text-sm font-semibold text-foreground"><i className="mr-2 inline-block size-2 rounded-full bg-primary" />实时 {codeFormatLabel} 预览</p><p className="mt-0.5 text-xs text-muted-foreground">模块配置写入当前模板；最终由右上角“保存模板”提交。</p></div>
                     <span className={`font-mono text-[11px] ${validation.valid ? "text-emerald-600 dark:text-emerald-400" : "text-destructive"}`}>{validation.valid ? "格式合规" : "待修复"}</span>
                   </header>
-                  <CodeSurface value={source} language={codeLanguage} readOnly />
+                  <CodeSurface value={source} language={codeLanguage} readOnly focusLine={visualYamlFocus?.line} focusNonce={visualYamlFocus?.nonce} />
                 </section>
               </div>
             ) : mode === "code" ? (

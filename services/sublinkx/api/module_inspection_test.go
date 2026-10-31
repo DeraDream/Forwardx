@@ -28,6 +28,16 @@ hostname = example.com
 	}
 }
 
+func TestInspectModuleRecognizesSurgeScript(t *testing.T) {
+	result, err := inspectModule("#!name=Surge Example\n[Script]\nDemo = type=http-response,pattern=^https://example.com,script-path=https://example.com/a.js\n[MITM]\nhostname = example.com\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Kind != "surge" || result.Name != "Surge Example" || result.Sections["Script"] != 1 {
+		t.Fatalf("unexpected surge inspection: %#v", result)
+	}
+}
+
 func TestInspectModuleRejectsMalformedLoonScript(t *testing.T) {
 	if _, err := inspectModule("#!name=broken\n[Script]\nhttp-response ^https://example.com\n"); err == nil {
 		t.Fatal("malformed Loon script was accepted")
