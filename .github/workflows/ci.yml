@@ -55,7 +55,19 @@ jobs:
         run: pnpm test:server
 
       - name: Verify subscription backup integration
-        run: GIN_MODE=release FORWARDX_SUBLINK_INTEGRATION=1 node --import tsx --test server/sublinkBackup.integration.test.ts
+        shell: bash
+        run: |
+          set +e
+          GIN_MODE=release FORWARDX_SUBLINK_INTEGRATION=1 node --import tsx --test server/sublinkBackup.integration.test.ts 2>&1 | tee /tmp/sublink-integration.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            details="$(tail -c 6000 /tmp/sublink-integration.log)"
+            details="${details//'%'/'%25'}"
+            details="${details//$'\n'/'%0A'}"
+            details="${details//$'\r'/'%0D'}"
+            echo "::error title=Subscription backup integration failed::$details"
+            exit "$status"
+          fi
 
       - name: Build panel and documentation
         run: |
