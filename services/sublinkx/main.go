@@ -45,11 +45,19 @@ func Templateinit() {
 		log.Println(err)
 		return // 如果出错，直接返回
 	}
-	// 创建template目录
-	_, err = os.Stat("./template")
-	if os.IsNotExist(err) {
-		err = os.Mkdir("./template", 0666)
-		if err != nil {
+	// Directories require execute permission for traversal. Older versions
+	// created this directory as 0666; repair owner access for those installs.
+	if err := os.MkdirAll("./template", 0755); err != nil {
+		log.Println(err)
+		return
+	}
+	info, err := os.Stat("./template")
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	if info.Mode().Perm()&0700 != 0700 {
+		if err := os.Chmod("./template", info.Mode().Perm()|0700); err != nil {
 			log.Println(err)
 			return
 		}
