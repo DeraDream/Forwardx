@@ -49,6 +49,34 @@ rules:
 	return path
 }
 
+func TestEncodeEgernPreservesNativeModuleReferences(t *testing.T) {
+	path := writeEgernTestTemplate(t)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = append(data, []byte("modules:\n  - name: Ads\n    url: https://example.com/ads.yaml\n    enabled: true\n    update_interval: 3600\n")...)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	output, err := EncodeEgern(nil, SqlConfig{Egern: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var profile map[string]interface{}
+	if err := yaml.Unmarshal(output, &profile); err != nil {
+		t.Fatal(err)
+	}
+	modules, ok := profile["modules"].([]interface{})
+	if !ok || len(modules) != 1 {
+		t.Fatalf("modules = %#v", profile["modules"])
+	}
+	module, ok := modules[0].(map[string]interface{})
+	if !ok || module["url"] != "https://example.com/ads.yaml" || module["enabled"] != true || module["update_interval"] != 3600 {
+		t.Fatalf("module reference was not preserved: %#v", modules[0])
+	}
+}
+
 func TestEncodeEgernUsesNativeProxyShape(t *testing.T) {
 	vmessJSON, err := json.Marshal(Vmess{
 		V:    "2",

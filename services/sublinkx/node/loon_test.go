@@ -51,14 +51,14 @@ Proxy = select,__LOON_ALL_NODES__,DIRECT`
 
 func TestEncodeLoonInjectsTemplate(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "loon.conf")
-	if err := os.WriteFile(path, []byte("[General]\ndns-server = system\n[Proxy]\n[Rule]\nFINAL,DIRECT"), 0600); err != nil {
+	if err := os.WriteFile(path, []byte("[General]\ndns-server = system\n[Proxy]\n[Plugin]\nhttps://example.com/plugin.plugin,tag=demo,enable=true\n[Rule]\nFINAL,DIRECT"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	output, err := EncodeLoon([]string{"trojan://password@example.com:443#node"}, SqlConfig{Loon: path})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(output, "[Proxy]\ntrojan://") || !strings.Contains(output, "[Rule]\nFINAL,DIRECT") {
+	if !strings.Contains(output, "[Proxy]\ntrojan://") || !strings.Contains(output, "[Plugin]\nhttps://example.com/plugin.plugin,tag=demo,enable=true") || !strings.Contains(output, "[Rule]\nFINAL,DIRECT") {
 		t.Fatalf("unexpected rendered Loon template: %q", output)
 	}
 }

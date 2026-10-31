@@ -94,7 +94,7 @@ func detectVisualTemplateType(filename, content string) string {
 	if strings.EqualFold(filepath.Ext(filename), ".conf") || strings.Contains(content, "[Proxy Group]") {
 		return "loon"
 	}
-	if strings.Contains(content, "policy_groups:") {
+	if strings.Contains(content, "policy_groups:") || strings.Contains(content, "modules:") {
 		return "egern"
 	}
 	return "clash"

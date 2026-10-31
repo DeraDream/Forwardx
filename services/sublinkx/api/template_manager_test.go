@@ -13,13 +13,13 @@ import (
 
 func withVisualTemplateTestDir(t *testing.T) {
 	t.Helper()
-	oldDir, oldErr, oldOnce := visualTemplateDir, visualTemplateDirErr, visualTemplateDirOnce
+	oldDir, oldErr := visualTemplateDir, visualTemplateDirErr
 	visualTemplateDir = t.TempDir()
 	visualTemplateDirErr = nil
 	visualTemplateDirOnce = sync.Once{}
-	visualTemplateDirOnce.Do(func() {})
 	t.Cleanup(func() {
-		visualTemplateDir, visualTemplateDirErr, visualTemplateDirOnce = oldDir, oldErr, oldOnce
+		visualTemplateDir, visualTemplateDirErr = oldDir, oldErr
+		visualTemplateDirOnce = sync.Once{}
 	})
 }
 
@@ -45,6 +45,7 @@ func TestVisualTemplateHandlersSupportIndependentFormats(t *testing.T) {
 		file, kind, content string
 	}{
 		{"egern.yaml", "egern", "policy_groups: []\nrules:\n  - default:\n      policy: DIRECT\n"},
+		{"egern-modules.yaml", "egern", "modules:\n  - url: https://example.com/module.yaml\n"},
 		{"loon.conf", "loon", "[Proxy Group]\nPROXY = select,DIRECT\n\n[Rule]\nFINAL,DIRECT\n"},
 		{"clash.yaml", "clash", "proxy-groups: []\nrules:\n  - MATCH,DIRECT\n"},
 	}

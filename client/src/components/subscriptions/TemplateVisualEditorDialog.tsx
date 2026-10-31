@@ -12,6 +12,7 @@ import {
   FolderTree,
   GripVertical,
   Network,
+  PackagePlus,
   Plus,
   RefreshCw,
   Route,
@@ -45,6 +46,7 @@ import { toast } from "sonner";
 import { EgernVisualEditor } from "@/components/subscriptions/EgernVisualEditor";
 import { LoonVisualEditor } from "@/components/subscriptions/LoonVisualEditor";
 import { RuleSetVisualEditor } from "@/components/subscriptions/RuleSetVisualEditor";
+import { ModuleVisualEditor } from "@/components/subscriptions/ModuleVisualEditor";
 
 type Group = {
   name: string;
@@ -158,12 +160,12 @@ type TemplateKind = CodeLanguage | "unknown";
 
 function detectTemplateKind(value: string): TemplateKind {
   const source = value.replace(/\r/g, "");
-  if (/^\s*\[(?:Proxy Group|Rule|General|Proxy)\]\s*$/im.test(source)) return "loon";
+  if (/^\s*\[(?:Proxy Group|Rule|General|Proxy|Plugin|Rewrite|Url Rewrite|Script|MITM)\]\s*$/im.test(source)) return "loon";
   const document = parseYamlDocument(source, { prettyErrors: false, strict: false });
   const root = document.toJS();
   if (!root || Array.isArray(root) || typeof root !== "object") return "unknown";
   const keys = new Set(Object.keys(root as Record<string, unknown>));
-  if (keys.has("policy_groups") || keys.has("policy_groups_order")) return "egern";
+  if (keys.has("policy_groups") || keys.has("policy_groups_order") || keys.has("modules")) return "egern";
   if (
     keys.has("proxy-groups") ||
     keys.has("proxies") ||
@@ -196,6 +198,7 @@ function validateTemplate(kind: TemplateKind, value: string) {
     if (fields.rules !== undefined && !Array.isArray(fields.rules)) return { valid: false, message: "Clash 的 rules 必须是数组" };
   }
   if (kind === "egern" && fields.policy_groups !== undefined && !Array.isArray(fields.policy_groups)) return { valid: false, message: "Egern 的 policy_groups 必须是数组" };
+  if (kind === "egern" && fields.modules !== undefined && !Array.isArray(fields.modules)) return { valid: false, message: "Egern 的 modules 必须是数组" };
   return { valid: true, message: kind === "unknown" ? "YAML 语法有效；尚未识别为 Clash、Egern 或 Loon" : `${kind === "clash" ? "Clash" : "Egern"} YAML 语法有效` };
 }
 
@@ -674,7 +677,7 @@ export function TemplateVisualEditorDialog({
   const [expanded, setExpanded] = useState<number[]>([]);
   const [expandedRules, setExpandedRules] = useState<number[]>([]);
   const [openGroupTypeIndex, setOpenGroupTypeIndex] = useState<number | null>(null);
-  const [mode, setMode] = useState<"visual" | "code" | "rules" | "ruleSets">("visual");
+  const [mode, setMode] = useState<"visual" | "code" | "rules" | "ruleSets" | "modules">("visual");
   const [ruleSetFocus, setRuleSetFocus] = useState<string | null>(null);
   const [ruleSetFocusNonce, setRuleSetFocusNonce] = useState(0);
   const [copied, setCopied] = useState(false);
@@ -898,6 +901,13 @@ export function TemplateVisualEditorDialog({
         <Route className="mr-1 inline h-3.5 w-3.5" />
         流量规则 {templateKind === "clash" && <span className="ml-1 rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px]">{rules.length}</span>}
       </button>}
+      {(templateKind === "egern" || templateKind === "loon") && <button
+        className={`border-b-2 px-1 py-2 text-sm transition-colors ${mode === "modules" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+        onClick={() => setMode("modules")}
+      >
+        <PackagePlus className="mr-1 inline h-3.5 w-3.5" />
+        模块
+      </button>}
       <button
         className={`border-b-2 px-1 py-2 text-sm transition-colors ${mode === "code" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
         onClick={() => setMode("code")}
@@ -1006,7 +1016,24 @@ export function TemplateVisualEditorDialog({
           </DialogHeader>
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
             <div className="flex items-center justify-between border-b border-border bg-muted/15 px-6 py-2.5"><div className="flex gap-6">{editorTabs}</div><div className="hidden items-center gap-5 font-mono text-[11px] text-muted-foreground md:flex"><span className={`inline-flex items-center gap-2 ${validation.valid ? "text-emerald-600 dark:text-emerald-400" : "text-destructive"}`}><i className={`size-2 rounded-full ${validation.valid ? "bg-emerald-500" : "bg-destructive"}`} />{validation.valid ? "语法校验通过" : validation.message}</span><span>UTF-8</span></div></div>
-            {mode === "code" ? (
+            {mode === "modules" && (templateKind === "egern" || templateKind === "loon") ? (
+              <div className="grid min-h-0 flex-1 overflow-hidden bg-muted/20 lg:grid-cols-[minmax(420px,1fr)_minmax(420px,.95fr)]">
+                <ModuleVisualEditor
+                  kind={templateKind}
+                  value={source}
+                  onChange={setSource}
+                  onDirtyChange={setExternalVisualDirty}
+                  onError={(message) => { if (message) toast.error(message); }}
+                />
+                <section className="hidden min-h-0 flex-col overflow-hidden border-l border-border bg-background lg:flex">
+                  <header className="flex items-center justify-between border-b border-border bg-muted/30 px-4 py-3">
+                    <div><p className="text-sm font-semibold text-foreground"><i className="mr-2 inline-block size-2 rounded-full bg-primary" />实时 {codeFormatLabel} 预览</p><p className="mt-0.5 text-xs text-muted-foreground">模块配置写入当前模板；最终由右上角“保存模板”提交。</p></div>
+                    <span className={`font-mono text-[11px] ${validation.valid ? "text-emerald-600 dark:text-emerald-400" : "text-destructive"}`}>{validation.valid ? "格式合规" : "待修复"}</span>
+                  </header>
+                  <CodeSurface value={source} language={codeLanguage} readOnly />
+                </section>
+              </div>
+            ) : mode === "code" ? (
               <div className="grid min-h-0 flex-1 gap-4 overflow-hidden bg-muted/20 p-4 lg:grid-cols-[minmax(0,1.05fr)_minmax(420px,.95fr)]">
                 <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-background shadow-sm">
                   <header className="flex items-center justify-between border-b border-border bg-muted/30 px-4 py-3 text-sm font-semibold text-foreground">

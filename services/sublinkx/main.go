@@ -165,6 +165,7 @@ func Run(port int) {
 	routers.Total(r)
 	routers.Templates(r)
 	routers.TemplateManager(r)
+	routers.Modules(r)
 	routers.Telegram(r)
 	routers.Backup(r)
 	routers.Version(r, version)
