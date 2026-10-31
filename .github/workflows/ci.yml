@@ -43,13 +43,22 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Verify panel
+      - name: Check versions and types
         run: |
           pnpm check:versions
           pnpm exec tsc --noEmit
-          node --import tsx --test server/agentCrypto.test.ts
-          pnpm test:server
-          GIN_MODE=release FORWARDX_SUBLINK_INTEGRATION=1 node --import tsx --test server/sublinkBackup.integration.test.ts
+
+      - name: Verify Agent encryption
+        run: node --import tsx --test server/agentCrypto.test.ts
+
+      - name: Run panel tests
+        run: pnpm test:server
+
+      - name: Verify subscription backup integration
+        run: GIN_MODE=release FORWARDX_SUBLINK_INTEGRATION=1 node --import tsx --test server/sublinkBackup.integration.test.ts
+
+      - name: Build panel and documentation
+        run: |
           pnpm build
           pnpm docs:build
 
