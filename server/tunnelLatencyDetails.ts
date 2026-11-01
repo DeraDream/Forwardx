@@ -24,10 +24,11 @@ export function timestampMs(value: unknown) {
 
 function normalizedDetailPathKey(value: unknown) {
   const key = String(value || "").trim().toLowerCase();
-  return key === "primary" || /^(?:exit|relay)-\d+$/.test(key) ? key : null;
+  return key === "primary" || /^(?:exit|relay)-\d+$/.test(key) || /^relay-branch-\d+-\d+$/.test(key) ? key : null;
 }
 
 function detailPathRank(key: string) {
+  if (/^relay-branch-\d+-\d+$/.test(key)) return -1;
   if (key === "primary") return 0;
   const match = key.match(/^(relay|exit)-(\d+)$/);
   if (!match) return Number.MAX_SAFE_INTEGER;
@@ -142,20 +143,24 @@ export function tunnelDetailsMatchTopology(input: {
 
   if (isTunnelRelayFailover(tunnel, hops)) {
     const relayHostIds = uniqueHostIds(tunnelRelayCandidates(hops).map((hop: any) => hop?.hostId));
-    const exitHostId = positiveInteger(hops[hops.length - 1]?.hostId);
-    if (relayHostIds.length < 2 || exitHostId <= 0) return false;
+    const primaryExitHostId = positiveInteger(hops[hops.length - 1]?.hostId);
+    const extraExitHostIds = tunnel?.loadBalanceEnabled && exitGroupUsesMultipleExits(tunnel?.loadBalanceStrategy)
+      ? uniqueHostIds((input.exitNodes || []).filter((node) => node?.isEnabled !== false && node?.isEnabled !== 0 && node?.isEnabled !== "0" && positiveInteger(node?.listenPort) > 0).map((node) => node?.hostId))
+      : [];
+    const exitHostIds = uniqueHostIds([primaryExitHostId, ...extraExitHostIds]);
+    if (relayHostIds.length < 2 || !exitHostIds.length) return false;
     const allowedEdges = new Set<string>();
     for (const relayHostId of relayHostIds) {
       for (const entryHostId of entryHostIds) allowedEdges.add(`${entryHostId}->${relayHostId}`);
-      allowedEdges.add(`${relayHostId}->${exitHostId}`);
+      for (const exitHostId of exitHostIds) allowedEdges.add(`${relayHostId}->${exitHostId}`);
     }
     if (!details.every(([from, to]) => allowedEdges.has(`${from}->${to}`))) return false;
     const usedRelays = relayHostIds.filter((relayHostId) => (
-      detailEdgeSet.has(`${relayHostId}->${exitHostId}`)
+      exitHostIds.some((exitHostId) => detailEdgeSet.has(`${relayHostId}->${exitHostId}`))
       || entryHostIds.some((entryHostId) => detailEdgeSet.has(`${entryHostId}->${relayHostId}`))
     ));
     return usedRelays.length > 0 && usedRelays.every((relayHostId) => (
-      detailEdgeSet.has(`${relayHostId}->${exitHostId}`)
+      exitHostIds.some((exitHostId) => detailEdgeSet.has(`${relayHostId}->${exitHostId}`))
       && entryHostIds.some((entryHostId) => detailEdgeSet.has(`${entryHostId}->${relayHostId}`))
     ));
   }
@@ -163,24 +168,26 @@ export function tunnelDetailsMatchTopology(input: {
   const firstNextHostId = hopHostIds[1];
   const allowedEdges = new Set<string>();
   const requiredEdges = new Set<string>();
+  const extraExitHostIds = tunnel?.loadBalanceEnabled && exitGroupUsesMultipleExits(tunnel?.loadBalanceStrategy)
+    ? uniqueHostIds((input.exitNodes || []).filter((node) => node?.isEnabled !== false && node?.isEnabled !== 0 && node?.isEnabled !== "0" && positiveInteger(node?.listenPort) > 0).map((node) => node?.hostId))
+    : [];
+  const exitHostIds = uniqueHostIds([hopHostIds[hopHostIds.length - 1], ...extraExitHostIds]);
   for (const entryHostId of entryHostIds) {
     const edge = `${entryHostId}->${firstNextHostId}`;
     allowedEdges.add(edge);
-    requiredEdges.add(edge);
+    if (hopHostIds.length > 2 || !extraExitHostIds.length) requiredEdges.add(edge);
+    if (hopHostIds.length === 2) for (const exitHostId of exitHostIds) allowedEdges.add(`${entryHostId}->${exitHostId}`);
   }
   for (let index = 1; index < hopHostIds.length - 1; index += 1) {
     const edge = `${hopHostIds[index]}->${hopHostIds[index + 1]}`;
     allowedEdges.add(edge);
-    requiredEdges.add(edge);
+    if (index < hopHostIds.length - 2 || !extraExitHostIds.length) requiredEdges.add(edge);
   }
-  if (tunnel?.loadBalanceEnabled && exitGroupUsesMultipleExits(tunnel?.loadBalanceStrategy) && hopHostIds.length === 2) {
-    const extraExitHostIds = uniqueHostIds((input.exitNodes || [])
-      .filter((node) => node?.isEnabled !== false && positiveInteger(node?.listenPort) > 0)
-      .map((node) => node?.hostId));
-    for (const entryHostId of entryHostIds) {
-      for (const exitHostId of extraExitHostIds) allowedEdges.add(`${entryHostId}->${exitHostId}`);
-    }
-  }
-  return details.every(([from, to]) => allowedEdges.has(`${from}->${to}`))
+  const lastSource = hopHostIds[hopHostIds.length - 2];
+  if (hopHostIds.length > 2) for (const exitHostId of exitHostIds) allowedEdges.add(`${lastSource}->${exitHostId}`);
+  const hasRequiredExit = !extraExitHostIds.length || (hopHostIds.length === 2
+    ? entryHostIds.every((entry) => exitHostIds.some((exit) => detailEdgeSet.has(`${entry}->${exit}`)))
+    : exitHostIds.some((exit) => detailEdgeSet.has(`${lastSource}->${exit}`)));
+  return hasRequiredExit && details.every(([from, to]) => allowedEdges.has(`${from}->${to}`))
     && Array.from(requiredEdges).every((edge) => detailEdgeSet.has(edge));
 }

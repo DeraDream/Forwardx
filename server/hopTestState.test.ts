@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createTunnelHopBatch, recordTunnelHopTestResult, registerTunnelHopTest } from "./tunnelHopTestState";
+import { clearTunnelHopBatch, createTunnelHopBatch, recordTunnelHopTestResult, registerTunnelHopTest } from "./tunnelHopTestState";
 import { adjustHopTestDetailsForLatencyMode, createHopTestBatch, recordHopTestResult, registerHopTest } from "./hopTestState";
 
 test("diagnostic raw remaining-path latency is converted into physical per-hop latency", () => {
@@ -262,4 +262,34 @@ test("multi-entry tunnel fails when a shared hop fails", () => {
   assert.ok(aggregate);
   assert.equal(aggregate.success, false);
   assert.equal(aggregate.latencyMs, null);
+});
+
+test("a newer tunnel batch rejects late results from the previous test", () => {
+  const old = createTunnelHopBatch(8001);
+  registerTunnelHopTest(old, 800101);
+  const current = createTunnelHopBatch(8001);
+  registerTunnelHopTest(current, 800102);
+  const result = { success: true, latencyMs: 12, message: null, hopLabel: "1/1" };
+  assert.equal(recordTunnelHopTestResult(800101, result), null);
+  assert.equal(recordTunnelHopTestResult(800102, result)?.latencyMs, 12);
+});
+
+test("branched manual batches keep common and alternate exits separate", () => {
+  const batch = createTunnelHopBatch(8003);
+  for (const id of [800301, 800302, 800303, 800304]) registerTunnelHopTest(batch, id);
+  const sample = (latencyMs: number | null, groupKey?: string) => ({ success: latencyMs !== null, latencyMs, message: null, hopLabel: "hop", groupKey });
+  assert.equal(recordTunnelHopTestResult(800301, sample(5, "tunnel-entry-branches"), { latencyMode: "branched" }), null);
+  assert.equal(recordTunnelHopTestResult(800302, sample(10), { latencyMode: "branched" }), null);
+  assert.equal(recordTunnelHopTestResult(800303, sample(null, "tunnel-exit-branches"), { latencyMode: "branched" }), null);
+  const result = recordTunnelHopTestResult(800304, sample(20, "tunnel-exit-branches"), { latencyMode: "branched" });
+  assert.equal(result?.success, true);
+  assert.equal(result?.latencyMs, 35);
+  assert.match(result?.message || "", /部分路径不可用/);
+});
+
+test("invalidating a tunnel batch rejects results after topology changes", () => {
+  const batch = createTunnelHopBatch(8002);
+  registerTunnelHopTest(batch, 800201);
+  clearTunnelHopBatch(8002);
+  assert.equal(recordTunnelHopTestResult(800201, { success: true, latencyMs: 5, message: null, hopLabel: "1/1" }), null);
 });

@@ -2,6 +2,9 @@ import { Router, Request, Response } from "express";
 import * as db from "./db";
 import { buildMetaAgentSelfTestPayload, buildRuleAgentSelfTestPayload, parseSelfTestMeta } from "./agentRouteUtils";
 import { recordTunnelHopTestResult } from "./tunnelHopTestState";
+import { aggregateTunnelBranchTest } from "./tunnelBranchLatency";
+import { withBranchedTunnelTest } from "./tunnelBranchTopology";
+import { branchedAutoPathKey } from "./tunnelBranchPlan";
 import { recordHopTestResult } from "./hopTestState";
 import { appendPanelLog } from "./_core/panelLogger";
 import { getAgentHostIdentityFromRequest } from "./agentAuth";
@@ -87,7 +90,10 @@ async function loadFreshTunnelAutoDetails(tunnel: any, latestLatency: any) {
     tunnelId,
     Number(latestLatency?.id || 0),
   ).catch(() => []) as any[];
-  const pathKey = selectTunnelLatencyDetailPathKey(latestLatency, batchSeries);
+  const selectedPathKey = selectTunnelLatencyDetailPathKey(latestLatency, batchSeries);
+  const branchPathKey = branchedAutoPathKey(tunnel, hops, exitNodes, selectedPathKey);
+  const relayBranchPathKey = /^relay-branch-\d+-\d+$/.test(selectedPathKey) ? selectedPathKey : null;
+  const pathKey = branchPathKey || relayBranchPathKey || selectedPathKey;
   let rawDetails: Array<{
     hopIndex: number;
     hopCount: number;
@@ -109,7 +115,7 @@ async function loadFreshTunnelAutoDetails(tunnel: any, latestLatency: any) {
     rawDetails = getTunnelAutoHopDetails({
       tunnelId,
       hopCount,
-      generation: topologyKey,
+      generation: branchPathKey || relayBranchPathKey ? `${topologyKey}:entries:${entryHostIds.join(",")}` : topologyKey,
       pathKey,
       referenceAt,
     });
@@ -312,6 +318,8 @@ agentRouter.post("/api/agent/selftest-result", async (req: Request, res: Respons
       }
     }
     if (meta?.kind === "tunnel-hop" && typeof meta.tunnelId === "number") {
+      const tunnelMeta = meta;
+      const processTunnelHop = async () => {
       const hopLabel = String((meta as any).hopLabel || "hop");
       const routeLabel = typeof (meta as any).routeLabel === "string" ? (meta as any).routeLabel : null;
       const groupKey = typeof (meta as any).groupKey === "string" ? (meta as any).groupKey : null;
@@ -352,6 +360,18 @@ agentRouter.post("/api/agent/selftest-result", async (req: Request, res: Respons
           message: aggregateMessage,
         });
         const recordedAt = new Date();
+        if (latencyMode === "branched") {
+          for (const branch of aggregateTunnelBranchTest(aggregate.details).branches) {
+            await db.insertTunnelLatencyStat({
+              tunnelId: aggregate.tunnelId,
+              latencyMs: branch.latencyMs,
+              isTimeout: !branch.success,
+              seriesKey: branch.key,
+              seriesLabel: tunnelSeriesLabel(branch.label, branch.key),
+              recordedAt,
+            }, { preserveMessage: true, updateTunnel: false });
+          }
+        }
         if (latencyMode === "max") {
           let branchIndex = 0;
           for (const detail of aggregate.details || []) {
@@ -383,6 +403,10 @@ agentRouter.post("/api/agent/selftest-result", async (req: Request, res: Respons
           console.warn(`[TunnelTest] tunnel=${aggregate.tunnelId} multi-hop failed: ${aggregate.message}`);
         }
       }
+      };
+      if (tunnelMeta.latencyMode === "branched") {
+        if (!await withBranchedTunnelTest(tunnelMeta, processTunnelHop)) console.warn(`[TunnelTest] tunnel=${tunnelMeta.tunnelId} ignored stale branched test=${testId}`);
+      } else await processTunnelHop();
     }
     if (meta?.kind === "forward-via-tunnel" && typeof meta.tunnelId === "number") {
       const tunnel = await db.getTunnelById(meta.tunnelId);

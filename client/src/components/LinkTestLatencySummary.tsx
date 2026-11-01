@@ -416,7 +416,8 @@ function buildProbeSegments(input: {
   nodeMeta?: Record<string, LinkTestNodeMeta | undefined>;
   plannedSegments?: LinkTestPlannedSegment[];
 }) {
-  const visibleDetails = (input.parsed.details || []).filter((detail) => detail.pending || detail.success || detail.message || hasLatencyValue(detail));
+  const visibleDetails = (input.parsed.details || []).filter((detail) => detail.pending || detail.success || detail.message || hasLatencyValue(detail)
+    || (input.parsed.kind === "tunnel-branched-summary" && detail.success === false && !!(detail.routeLabel || detail.hopLabel)));
 
   const detailSegments = (allowLabelAliases = true) => visibleDetails.map((detail, index): ProbeSegment => {
     const endpoints = parseRouteEndpoints(detail, index);
@@ -1099,6 +1100,28 @@ export function LinkTestProbeView({
       </div>
     );
   };
+  if ((parsed.kind === "tunnel-branched-pending" || parsed.kind === "tunnel-branched-summary") && (parsed.details || []).length > 0) {
+    const sections = [
+      { key: "tunnel-entry-branches", label: "入口分支" },
+      { key: "shared", label: "公共段" },
+      { key: "tunnel-exit-branches", label: "出口分支" },
+    ];
+    return <div className={cn("min-w-0 space-y-3", className)}>
+      {sections.map((section) => {
+        const rows = parsed.details.filter((detail) => section.key === "shared" ? !detail.groupKey
+          : section.key === "tunnel-entry-branches" ? detail.groupKey === section.key || String(detail.groupKey || "").startsWith("relay-entry-")
+          : detail.groupKey === section.key || String(detail.groupKey || "").startsWith("relay-exit-"));
+        if (!rows.length) return null;
+        return <div key={section.key} className="space-y-1.5"><div className="text-xs font-medium text-muted-foreground">{section.label}</div>{rows.map((detail, index) => {
+          const pending = detail.pending === true || isTesting;
+          const succeeded = !pending && detail.success && hasUsableLatencyValue(detail.latencyMs);
+          const status = pending ? "探测中" : succeeded ? `${detail.latencyMs} ms` : "失败";
+          return <div key={`${section.key}-${index}`} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border/60 bg-card/50 px-3 py-2 text-xs"><span className="min-w-0 break-words">{detail.routeLabel || detail.hopLabel || "未知链路"}</span><span className={pending ? "text-muted-foreground" : succeeded ? "text-emerald-600 dark:text-emerald-400" : "text-destructive"}>{status}</span>{!pending && !succeeded && detail.message && <span className="w-full break-words text-muted-foreground">{detail.message}</span>}</div>;
+        })}</div>;
+      })}
+      <div className="border-t border-border/60 pt-2 text-xs text-muted-foreground">{isTesting ? "等待各分支结果" : isSuccess && hasUsableLatencyValue(parsed.totalLatencyMs) ? `可用出口最大路径延迟：${parsed.totalLatencyMs} ms` : "暂无可用完整路径"} · 逐段 TCP 探测估算，不代表代理端到端可用</div>
+    </div>;
+  }
   return (
     <div className={cn("min-w-0 space-y-3", className)}>
       {mobileStacked ? (

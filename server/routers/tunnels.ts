@@ -7,7 +7,7 @@ import { pushAgentRefresh } from "../agentEvents";
 import { pushTunnelEndpointRefresh, requireHostAccess } from "./helpers";
 import { requireTunnelProtocolEnabled } from "../forwardProtocolSettings";
 import * as hopRepo from "../repositories/tunnelRepository";
-import { createTunnelHopBatch, registerTunnelHopTest } from "../tunnelHopTestState";
+import { clearTunnelHopBatch, createTunnelHopBatch, registerTunnelHopTest } from "../tunnelHopTestState";
 import { clearTunnelRuntimeStatus } from "../tunnelRuntimeStatus";
 import { createQueryCache } from "../queryCache";
 import { isPortAllowedByPolicy, portPolicyErrorMessage, portPolicyFrom } from "../portPolicy";
@@ -26,6 +26,7 @@ import { isAgentVersionAtLeast } from "../agentRouteUtils";
 import {
   AGENT_FORWARDX_RELAY_FAILOVER_VERSION,
   normalizeTunnelRelayMode,
+  isTunnelRelayFailover,
   tunnelRelayFailoverSupported,
 } from "../../shared/tunnelRelay";
 import { normalizeExitGroupStrategy } from "../../shared/exitStrategy";
@@ -37,6 +38,8 @@ import {
   selectTunnelHopDialAddress,
 } from "../tunnelAddressSelection";
 import { planManualTunnelTestRefresh } from "../tunnelRuntimePlan";
+import { planDirectTunnelBranchProbes, planRelayTunnelBranchProbes, planTunnelBranchProbes } from "../tunnelBranchPlan";
+import { tunnelProbeTopologyKey } from "../probeTopology";
 import {
   filterTunnelFieldsForUser,
   getLinkAccessScope,
@@ -1572,6 +1575,7 @@ export const tunnelsRouter = router({
           }
         }
         if (keyChanged) {
+          clearTunnelHopBatch(id);
           await db.resetForwardRulesByTunnel(id);
           await hopRepo.clearTunnelTestSnapshot(id, { clearHistory: topologyChanged });
         }
@@ -1649,6 +1653,7 @@ export const tunnelsRouter = router({
         if (!tunnel) throw new Error("Tunnel not found");
         if (ctx.user.role !== "admin" && tunnel.userId !== ctx.user.id) throw new Error("No permission to test this tunnel");
         await requireTunnelProtocolEnabled(tunnel);
+        clearTunnelHopBatch(Number(tunnel.id));
         const entry = await db.getHostById(tunnel.entryHostId);
         const exit = await db.getHostById(tunnel.exitHostId);
         if (!entry) throw new Error("Entry Agent not found");
@@ -1730,6 +1735,56 @@ export const tunnelsRouter = router({
           await db.insertTunnelLatencyStat({ tunnelId: tunnel.id, latencyMs: null, isTimeout: true }, { message });
           appendPanelLog("error", `[TunnelTest] tunnel=${tunnel.id} invalid test target. exitHost=${exit.id} target=${target || "-"} port=${targetPort || "-"}`);
           return { success: false, latencyMs: null, message };
+        }
+        const activeExtraExitEndpoints = dbBool(tunnel.loadBalanceEnabled) && normalizeExitGroupStrategy(tunnel.loadBalanceStrategy) !== "none"
+          ? (tunnelExtraExitNodes || []).filter((node: any) => dbBool(node.isEnabled, true) && Number(node.hostId) > 0 && Number(node.listenPort) > 0).sort((a: any, b: any) => Number(a.seq || 0) - Number(b.seq || 0))
+          : [];
+        const branchHops = Array.isArray(tunnelHops) && tunnelHops.length >= 2 ? tunnelHops : [
+          { hostId: Number(tunnel.entryHostId), listenPort: 0 },
+          { hostId: Number(tunnel.exitHostId), listenPort: targetPort, connectHost: tunnel.connectHost },
+        ];
+        if (activeExtraExitEndpoints.length > 0 && (branchHops.length >= 3 || hasEntryGroupTest)) {
+          const topologyKey = tunnelProbeTopologyKey(tunnel, tunnelHops || [], tunnelExtraExitNodes || []);
+          const resolveEndpoint = async (node: any) => {
+            const hostId = Number(node.hostId || 0);
+            const endpointHost = await db.getHostById(hostId);
+            return { hostId, address: selectTunnelHopDialAddress(node, endpointHost, tunnel) || "", port: Number(node.listenPort || 0), name: String((endpointHost as any)?.name || `主机${hostId}`) };
+          };
+          const resolvedHops = await Promise.all(branchHops.map(resolveEndpoint));
+          const nextHost = await db.getHostById(Number((branchHops[1] as any).hostId));
+          resolvedHops[1].address = selectEntryGroupTunnelTestAddress(tunnel, branchHops[1], nextHost) || resolvedHops[1].address;
+          const entries = await Promise.all(entryTestHostIds.map(async (hostId) => ({ hostId, name: String((await db.getHostById(hostId) as any)?.name || `主机${hostId}`) })));
+          const endpoints = [resolvedHops[resolvedHops.length - 1], ...await Promise.all(activeExtraExitEndpoints.map(resolveEndpoint))];
+          let planned;
+          try {
+            planned = isTunnelRelayFailover(tunnel, branchHops)
+              ? planRelayTunnelBranchProbes(entries, resolvedHops.slice(1, -1), endpoints)
+              : resolvedHops.length === 2 ? planDirectTunnelBranchProbes(entries, endpoints) : planTunnelBranchProbes(entries, resolvedHops, endpoints);
+          }
+          catch (error) {
+            const message = error instanceof Error ? error.message : "多出口逐跳拓扑无效";
+            await db.updateTunnelTestResult(tunnel.id, { status: "failed", latencyMs: null, message });
+            return { success: false, latencyMs: null, message };
+          }
+          const batchId = createTunnelHopBatch(Number(tunnel.id));
+          const pendingDetails: any[] = [];
+          const testHostIds = new Set<number>();
+          for (const item of planned) {
+            const payload = { kind: "tunnel-hop", tunnelId: tunnel.id, targetIp: item.target.address, targetPort: item.target.port,
+              wireGuardPeerId: isForwardXWireGuardV2(tunnel) ? String(item.target.hostId) : undefined,
+              hopLabel: item.hopLabel, routeLabel: item.routeLabel, groupKey: item.groupKey, groupLabel: item.groupLabel,
+              batchId, latencyMode: "branched", topologyKey, entryHostIds: entryTestHostIds };
+            pendingDetails.push({ success: false, latencyMs: null, message: null, hopLabel: item.hopLabel, routeLabel: item.routeLabel,
+              groupKey: item.groupKey, groupLabel: item.groupLabel, method: "tcp", pending: true });
+            const testId = await db.createForwardTest({ ruleId: 0, hostId: item.fromHostId, userId: tunnel.userId, message: JSON.stringify(payload) } as any);
+            registerTunnelHopTest(batchId, Number(testId));
+            testHostIds.add(item.fromHostId);
+          }
+          const message = structuredLinkTestMessage({ kind: "tunnel-branched-pending", tunnelId: tunnel.id, batchId,
+            message: `多出口逐跳探测中：${entries.length} 个入口、${endpoints.length} 个出口，共 ${planned.length} 段`, details: pendingDetails, totalLatencyMs: null });
+          await db.updateTunnelTestResult(tunnel.id, { status: "pending", latencyMs: null, message });
+          for (const hostId of testHostIds) pushAgentRefresh(hostId, "tunnel-branched-selftest", { urgent: true });
+          return { success: false, latencyMs: null, message, pending: true };
         }
         if (!hasEntryGroupTest && Array.isArray(tunnelHops) && tunnelHops.length >= 3) {
           const batchId = createTunnelHopBatch(Number(tunnel.id));

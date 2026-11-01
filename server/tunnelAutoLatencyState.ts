@@ -197,6 +197,7 @@ export function getTunnelAutoHopDetails(input: {
   pathKey?: string | null;
   referenceAt?: number | Date | null;
   maxAgeMs?: number;
+  maxSkewMs?: number;
 }) {
   const tunnelId = Number(input.tunnelId);
   const hopCount = Number(input.hopCount);
@@ -213,12 +214,13 @@ export function getTunnelAutoHopDetails(input: {
     ? input.referenceAt.getTime()
     : Number(input.referenceAt || 0);
   const maxAgeMs = Math.max(1_000, Number(input.maxAgeMs || AUTO_HOP_TTL_MS));
+  const maxSkewMs = Math.max(1_000, Number(input.maxSkewMs || 30_000));
   const details: TunnelAutoHopDetail[] = [];
   for (let hopIndex = 0; hopIndex < hopCount; hopIndex += 1) {
     const result = refreshed.get(hopIndex);
     if (!result || result.hopCount !== hopCount || result.generation !== generation) return null;
     if (now - result.recordedAt > maxAgeMs) return null;
-    if (referenceAt > 0 && Math.abs(result.recordedAt - referenceAt) > 30_000) return null;
+    if (referenceAt > 0 && Math.abs(result.recordedAt - referenceAt) > maxSkewMs) return null;
     const detail: TunnelAutoHopDetail = {
       hopIndex: result.hopIndex,
       hopCount: result.hopCount,

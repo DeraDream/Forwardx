@@ -5,6 +5,8 @@ import { parseSelfTestMeta } from "./agentRouteUtils";
 import { getEmailConfig, sendMail } from "./email";
 import { sendTelegramMessage } from "./telegramBot";
 import { recordTunnelHopTestResult } from "./tunnelHopTestState";
+import { withBranchedTunnelTest } from "./tunnelBranchTopology";
+import { aggregateTunnelBranchTest } from "./tunnelBranchLatency";
 import { recordHopTestResult } from "./hopTestState";
 import { primeHostStatusNotifier, sweepOfflineHostsAndNotify } from "./hostStatusNotifier";
 import { normalizeLinkProbeMethod } from "@shared/latencyProbe";
@@ -147,7 +149,7 @@ async function runExpirationCheck() {
   }
 }
 
-async function settleTimedOutTunnelTests(timedOutTests: TimedOutForwardTest[], defaultTimeoutSeconds: number) {
+export async function settleTimedOutTunnelTests(timedOutTests: TimedOutForwardTest[], defaultTimeoutSeconds: number) {
   const settledTunnelIds = new Set<number>();
 
   const settleTunnel = async (tunnelId: number, message: string, logSuffix: string, timeoutSeconds: number) => {
@@ -162,6 +164,7 @@ async function settleTimedOutTunnelTests(timedOutTests: TimedOutForwardTest[], d
     aggregate: NonNullable<ReturnType<typeof recordTunnelHopTestResult>>,
     message: string,
     logSuffix: string,
+    recordedAt = new Date(),
   ) => {
     const tunnelId = Number(aggregate.tunnelId);
     if (!Number.isFinite(tunnelId) || tunnelId <= 0 || settledTunnelIds.has(tunnelId)) return;
@@ -176,6 +179,7 @@ async function settleTimedOutTunnelTests(timedOutTests: TimedOutForwardTest[], d
       tunnelId,
       latencyMs: aggregate.success ? aggregate.latencyMs : null,
       isTimeout: !aggregate.success,
+      recordedAt,
     }, { message });
     appendPanelLog(
       aggregate.success ? "info" : "warn",
@@ -201,6 +205,8 @@ async function settleTimedOutTunnelTests(timedOutTests: TimedOutForwardTest[], d
     }
 
     if (meta.kind === "tunnel-hop") {
+      const tunnelMeta = meta;
+      const settleHop = async () => {
       const hopLabel = String((meta as any).hopLabel || "hop");
       const routeLabel = typeof (meta as any).routeLabel === "string" ? (meta as any).routeLabel : null;
       const groupKey = typeof (meta as any).groupKey === "string" ? (meta as any).groupKey : null;
@@ -230,10 +236,20 @@ async function settleTimedOutTunnelTests(timedOutTests: TimedOutForwardTest[], d
           details: aggregate.details,
           totalLatencyMs: aggregate.latencyMs,
         });
-        await settleTunnelAggregate(aggregate, aggregateMessage, `test=${test.id} aggregate=true`);
+        const recordedAt = new Date();
+        if (latencyMode === "branched") {
+          for (const branch of aggregateTunnelBranchTest(aggregate.details).branches) {
+            await db.insertTunnelLatencyStat({ tunnelId: aggregate.tunnelId, latencyMs: branch.latencyMs, isTimeout: !branch.success,
+              seriesKey: branch.key, seriesLabel: String(branch.label || branch.key).slice(0, 96), recordedAt }, { preserveMessage: true, updateTunnel: false });
+          }
+        }
+        await settleTunnelAggregate(aggregate, aggregateMessage, `test=${test.id} aggregate=true`, recordedAt);
       } else {
         appendPanelLog("warn", `[TunnelTest] tunnel=${meta.tunnelId} branch timeout test=${test.id} host=${test.hostId} hop=${hopLabel}`);
       }
+      };
+      if (tunnelMeta.latencyMode === "branched") await withBranchedTunnelTest(tunnelMeta, settleHop);
+      else await settleHop();
     }
 
     if (meta.kind === "forward-chain") {

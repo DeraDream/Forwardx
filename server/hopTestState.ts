@@ -1,3 +1,5 @@
+import { aggregateTunnelBranchTest } from "./tunnelBranchLatency";
+
 export type HopTestResult = {
   success: boolean;
   latencyMs: number | null;
@@ -24,7 +26,7 @@ export type HopTestAggregate = {
   details: HopTestResult[];
 };
 
-export type HopTestLatencyMode = "sum" | "max" | "multi-source" | "remaining-path" | "multi-source-remaining-path";
+export type HopTestLatencyMode = "sum" | "max" | "multi-source" | "remaining-path" | "multi-source-remaining-path" | "branched";
 
 const batches = new Map<string, HopTestBatch>();
 const testToBatch = new Map<number, string>();
@@ -51,6 +53,13 @@ export function createHopTestBatch(prefix: string, ownerId: number) {
     byTestId: new Map<number, HopTestResult | null>(),
   });
   return batchId;
+}
+
+export function discardHopTestBatch(batchId: string) {
+  const batch = batches.get(batchId);
+  if (!batch) return;
+  for (const testId of batch.byTestId.keys()) testToBatch.delete(testId);
+  batches.delete(batchId);
 }
 
 export function registerHopTest(batchId: string, testId: number) {
@@ -189,6 +198,15 @@ export function recordHopTestResult(
   if (!completed) return null;
 
   const rawDetails = values.filter((value): value is HopTestResult => value !== null);
+  if (options.latencyMode === "branched") {
+    const branched = aggregateTunnelBranchTest(rawDetails);
+    const exitAvailable = branched.branches.filter((branch) => branch.success).length;
+    const message = branched.success
+      ? `${options.successPrefix}，可用出口最大路径延迟 ${branched.latencyMs}ms（${exitAvailable}/${branched.branches.length} 个出口可用${branched.partial ? "，部分路径不可用" : ""}）`
+      : `${options.failurePrefix}：公共段、入口或出口不可用`;
+    batches.delete(batchId);
+    return { ownerId: batch.ownerId, success: branched.success, latencyMs: branched.latencyMs, message, details: rawDetails };
+  }
   const multiSourceRemainingPath = options.latencyMode === "multi-source-remaining-path";
   const effectiveSuccessMode = multiSourceRemainingPath ? "multi-source" : options.successMode;
   const rawSuccessfulDetails = rawDetails.filter((value) => value.success);

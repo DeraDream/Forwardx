@@ -20,6 +20,7 @@ import {
 } from "./dbRuntime";
 import { countAll, quoteIdentifier } from "./dbCompat";
 import { getAllSettings, setSetting } from "./repositories/settingsRepository";
+import { remapTopologyAnnotationSetting } from "./topologyAnnotations";
 import { clearHostAgentUpgradeRequest, getHosts, HOST_ONLINE_TTL_MS, requestHostAgentUpgrade } from "./db";
 import { pushAgentPanelMigration, pushAgentUpgrade } from "./agentEvents";
 import { assertSafeOutboundUrl } from "./ssrf";
@@ -1494,6 +1495,11 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
         "lastPanelBackupImportResult",
       ]);
       if (skippedKeys.has(key)) return null;
+      if (key.startsWith("topologyAnnotations:")) {
+        const mapped = remapTopologyAnnotationSetting(key, source.value == null ? null : String(source.value), (id) => mapId(maps, "users", id), (id) => mapId(maps, "hosts", id));
+        if (!mapped) return null;
+        return { row: { ...mapped, updatedAt: source.updatedAt || nowDate() }, existingWhere: { key: mapped.key } };
+      }
       return { row: { key, value: source.value ?? null, updatedAt: source.updatedAt || nowDate() }, existingWhere: { key } };
     }
 

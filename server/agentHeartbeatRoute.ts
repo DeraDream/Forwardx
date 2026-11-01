@@ -3386,6 +3386,45 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           if (!currentHostIsEntry && (hostIdx < 0 || hostIdx >= hops.length - 1)) return null;
           const routeHostIdx = currentHostIsEntry ? 0 : hostIdx;
           const relayFailover = isTunnelRelayFailover(tunnel, hops);
+          const relayExtraExits = relayFailover && runtimeBool(tunnel.loadBalanceEnabled) && normalizeExitGroupStrategy(tunnel.loadBalanceStrategy) !== "none"
+            ? (tunnelExitNodesByTunnelId.get(Number(tunnel.id)) || []).filter((node: any) => runtimeBool(node.isEnabled, true) && Number(node.hostId) > 0 && Number(node.listenPort) > 0).sort((a: any, b: any) => Number(a.seq || 0) - Number(b.seq || 0))
+            : [];
+          if (relayExtraExits.length > 0) {
+            const relayId = currentHostIsEntry ? 0 : Number(hops[hostIdx]?.hostId || 0);
+            const destinations = currentHostIsEntry ? tunnelRelayCandidates(hops) : [hops[hops.length - 1], ...relayExtraExits];
+            const probes = await Promise.all(destinations.map(async (nextHop: any) => {
+              const targetIp = !currentHostIsEntry && nextHop !== hops[hops.length - 1] ? await getExtraExitDialAddress(nextHop, tunnel) : await getHopDialAddress(nextHop, tunnel);
+              const targetPort = Number(nextHop.listenPort || 0), targetHostId = Number(nextHop.hostId || 0);
+              if (!targetIp || !targetPort || !targetHostId) return null;
+              const seriesKey = currentHostIsEntry ? `relay-branch-entry-${targetHostId}` : `relay-branch-exit-${relayId}-${targetHostId}`;
+              return { tunnelId: tunnel.id, targetIp, targetPort, protocol: "tcp", hopIndex: currentHostIsEntry ? 0 : 1, hopCount: 2,
+                seriesKey, seriesLabel: currentHostIsEntry ? `中转 ${targetHostId}` : `中转 ${relayId} / 出口 ${targetHostId}`,
+                probeKey: `tunnel:${Number(tunnel.id)}:host:${Number(host.id)}:${seriesKey}:${String(targetIp).toLowerCase()}:${targetPort}`,
+                topologyKey, wireGuardPeerId: isForwardXWireGuardV2(tunnel) ? String(targetHostId) : undefined };
+            }));
+            return probes.filter(Boolean);
+          }
+          const branchExitNodes = !relayFailover && runtimeBool(tunnel.loadBalanceEnabled) && normalizeExitGroupStrategy(tunnel.loadBalanceStrategy) !== "none"
+            ? (tunnelExitNodesByTunnelId.get(Number(tunnel.id)) || []).filter((node: any) => runtimeBool(node.isEnabled, true) && Number(node.hostId) > 0 && Number(node.listenPort) > 0).sort((a: any, b: any) => Number(a.seq || 0) - Number(b.seq || 0))
+            : [];
+          if (branchExitNodes.length > 0) {
+            const isFinalHop = routeHostIdx === hops.length - 2;
+            const destinations = isFinalHop ? [hops[hops.length - 1], ...branchExitNodes] : [hops[routeHostIdx + 1]];
+            const probes = await Promise.all(destinations.map(async (nextHop: any) => {
+              const targetIp = isFinalHop && nextHop !== hops[hops.length - 1]
+                ? await getExtraExitDialAddress(nextHop, tunnel)
+                : await getHopDialAddress(nextHop, tunnel);
+              const targetPort = Number(nextHop.listenPort || 0);
+              const targetHostId = Number(nextHop.hostId || 0);
+              if (!targetIp || !targetPort || !targetHostId) return null;
+              const seriesKey = isFinalHop ? `branch-exit-${targetHostId}` : "branch-common";
+              return { tunnelId: tunnel.id, targetIp, targetPort, protocol: "tcp", hopIndex: routeHostIdx, hopCount: hops.length - 1,
+                seriesKey, seriesLabel: isFinalHop ? `出口 ${targetHostId}` : "公共段",
+                probeKey: `tunnel:${Number(tunnel.id)}:host:${Number(host.id)}:hop:${routeHostIdx}/${hops.length - 1}:${seriesKey}:${String(targetIp).toLowerCase()}:${targetPort}`,
+                topologyKey, wireGuardPeerId: isForwardXWireGuardV2(tunnel) ? String(targetHostId) : undefined };
+            }));
+            return probes.filter(Boolean);
+          }
           const probeTargets = relayFailover && currentHostIsEntry
             ? tunnelRelayCandidates(hops).map((hop: any, index: number) => ({ hop, index: index + 1 }))
             : [{ hop: relayFailover ? hops[hops.length - 1] : hops[routeHostIdx + 1], index: routeHostIdx + 1 }];

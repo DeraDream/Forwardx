@@ -278,6 +278,22 @@ test("standard multi-hop probe validation accepts every configured entry for the
   }, context), false);
 });
 
+test("multi-hop multi-exit probes require matching generation, branch and source", async () => {
+  const tunnel = { id: 91005, isEnabled: true, loadBalanceEnabled: true, loadBalanceStrategy: "round_robin" };
+  const hops = [{ hostId: 10, listenPort: 10010 }, { hostId: 20, listenPort: 10020 }, { hostId: 30, listenPort: 10030 }];
+  const exitNodes = [{ hostId: 40, listenPort: 10040, seq: 1, isEnabled: true }];
+  const context = { hops, exitNodes, entryHostIds: new Set([10, 11]), topologyKey: "new-generation" };
+  const common = { tunnelId: tunnel.id, hopIndex: 0, hopCount: 2, targetPort: 10020, topologyKey: "new-generation", seriesKey: "branch-common" };
+  const alternate = { ...common, hopIndex: 1, targetPort: 10040, seriesKey: "branch-exit-40" };
+  assert.equal(await validateTunnelProbeSource(11, tunnel, common, context), true);
+  assert.equal(await validateTunnelProbeSource(20, tunnel, alternate, context), true);
+  assert.equal(await validateTunnelProbeSource(10, tunnel, alternate, context), false);
+  assert.equal(await validateTunnelProbeSource(20, tunnel, { ...alternate, targetPort: 10030 }, context), false);
+  assert.equal(await validateTunnelProbeSource(20, tunnel, { ...alternate, topologyKey: "old-generation" }, context), false);
+  assert.equal(await validateTunnelProbeSource(20, tunnel, { ...alternate, topologyKey: undefined }, context), false);
+  assert.equal(tunnelProbeTargetHostId(tunnel, hops, exitNodes, alternate, alternate.seriesKey), 40);
+});
+
 test("direct multi-exit probes map each series to its actual exit host", () => {
   const tunnel = {
     entryHostId: 10,

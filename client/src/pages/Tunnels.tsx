@@ -58,6 +58,8 @@ import { applyLatencyPeakCut, clipLatencyForChart, getLatencyStabilityStats, get
 import { useUrlTab } from "@/hooks/useUrlTab";
 import { addHostNodeMeta, hostAddressCandidates, hostDisplayName } from "@/lib/linkTestNodeMeta";
 import { buildLinkAvailabilityIndex, type LinkAvailabilityResult } from "@/lib/linkAvailability";
+import { isFreshTunnelLatency } from "@/lib/tunnelLatencyFreshness";
+import { linkQualitySampleTime } from "@/lib/linkQuality";
 import { MAX_NGINX_PEM_FILES, MAX_NGINX_PEM_UPLOAD_BYTES, parseNginxPemFiles } from "@/lib/nginxPemFiles";
 import { pollingInterval } from "@/lib/polling";
 import { hasQuerySnapshotAfter } from "@/lib/manualTestCache";
@@ -549,14 +551,19 @@ function tunnelLatestStatLatencyMs(tunnel: any) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Number(value) : null;
 }
 
+function isTunnelMultiExit(tunnel: any) {
+  return tunnel?.loadBalanceEnabled === true || tunnel?.loadBalanceEnabled === 1 || tunnel?.loadBalanceEnabled === "1";
+}
+
 function tunnelSeriesLatencyEntries(tunnel: any) {
   if (!Array.isArray(tunnel?.latestLatencySeries)) return [];
   return tunnel.latestLatencySeries
     .map((item: any) => ({
       key: normalizeTunnelLatencySeriesKey(item?.seriesKey),
       label: tunnelLatencySeriesDisplayName(normalizeTunnelLatencySeriesKey(item?.seriesKey), item?.seriesLabel),
-      latencyMs: typeof item?.latencyMs === "number" && Number.isFinite(item.latencyMs) ? Number(item.latencyMs) : null,
-      isTimeout: !!item?.isTimeout,
+      latencyMs: (!isTunnelMultiExit(tunnel) || isFreshTunnelLatency(item?.recordedAt)) && typeof item?.latencyMs === "number" && Number.isFinite(item.latencyMs) ? Number(item.latencyMs) : null,
+      isTimeout: (!isTunnelMultiExit(tunnel) || isFreshTunnelLatency(item?.recordedAt)) && !!item?.isTimeout,
+      stale: isTunnelMultiExit(tunnel) && !isFreshTunnelLatency(item?.recordedAt),
     }))
     .filter((item: any) => item.key !== "total");
 }
@@ -566,6 +573,12 @@ function hasStructuredTunnelTestMessage(parsed: ReturnType<typeof parseLinkTestM
 }
 
 function tunnelDisplayLatencyMs(tunnel: any) {
+  if (isTunnelMultiExit(tunnel)) {
+    const latestFresh = isFreshTunnelLatency(tunnel?.latestLatencyAt);
+    const manualFresh = isFreshTunnelLatency(tunnel?.lastTestAt);
+    if (latestFresh && (!manualFresh || linkQualitySampleTime(tunnel.latestLatencyAt) >= linkQualitySampleTime(tunnel.lastTestAt))) return tunnelLatestStatLatencyMs(tunnel);
+    if (!manualFresh) return null;
+  }
   const parsed = parseLinkTestMessage(tunnel?.lastTestMessage);
   const structuredMessage = hasStructuredTunnelTestMessage(parsed);
   const manualFallback = tunnelManualTestLatencyMs(tunnel);
@@ -588,19 +601,23 @@ function tunnelDisplayLatencyList(tunnel: any) {
   if (entries.length === 0) {
     const value = tunnelDisplayLatencyMs(tunnel);
     return typeof value === "number" && Number.isFinite(value)
-      ? [{ label: "总延迟", latencyMs: value, isTimeout: false, key: "total" }]
+      ? [{ label: isTunnelMultiExit(tunnel) ? "逐段估算" : "总延迟", latencyMs: value, isTimeout: false, stale: false, key: "total" }]
       : tunnelLatencyIsTimeout(tunnel)
-        ? [{ label: "总延迟", latencyMs: null, isTimeout: true, key: "total" }]
+        ? [{ label: isTunnelMultiExit(tunnel) ? "逐段估算" : "总延迟", latencyMs: null, isTimeout: true, stale: false, key: "total" }]
         : [];
   }
   const total = tunnel?.latestLatencyMs;
+  const totalFresh = !isTunnelMultiExit(tunnel) || isFreshTunnelLatency(tunnel?.latestLatencyAt);
   const totalEntry = typeof total === "number" && Number.isFinite(total)
-    ? [{ label: "总延迟", latencyMs: Number(total), isTimeout: !!tunnel?.latestLatencyIsTimeout, key: "total" }]
+    ? [{ label: isTunnelMultiExit(tunnel) ? "逐段估算" : "总延迟", latencyMs: totalFresh ? Number(total) : null, isTimeout: totalFresh && !!tunnel?.latestLatencyIsTimeout, stale: !totalFresh, key: "total" }]
     : [];
   return [...totalEntry, ...entries];
 }
 
 function tunnelLatencyIsTimeout(tunnel: any) {
+  if (isTunnelMultiExit(tunnel) && !isFreshTunnelLatency(tunnel?.latestLatencyAt) && !isFreshTunnelLatency(tunnel?.lastTestAt)) return false;
+  if (isTunnelMultiExit(tunnel) && isFreshTunnelLatency(tunnel?.latestLatencyAt)
+    && (!isFreshTunnelLatency(tunnel?.lastTestAt) || linkQualitySampleTime(tunnel.latestLatencyAt) >= linkQualitySampleTime(tunnel.lastTestAt))) return tunnel?.latestLatencyIsTimeout === true;
   const value = tunnelDisplayLatencyMs(tunnel);
   const hasLatency = typeof value === "number" && Number.isFinite(value) && value >= 0;
   if (hasLatency) return false;
@@ -1794,13 +1811,14 @@ function TunnelSelfTestDialog({
           <div className="space-y-1.5">
             {exitRows.map((row, index) => {
               const detailRecord = detailForExitRow(row);
-              const detail = detailRecord?.detail;
+              const detail = displayTesting || isFreshTunnelLatency(tunnel?.lastTestAt) ? detailRecord?.detail : null;
               const latest = latestForExitRow(index);
-              const latestLatency = typeof latest?.latencyMs === "number" && Number.isFinite(latest.latencyMs) ? Number(latest.latencyMs) : null;
-              const latestTimeout = latest?.isTimeout === true;
+              const latestStale = !!latest && !isFreshTunnelLatency(latest?.recordedAt);
+              const latestLatency = !latestStale && typeof latest?.latencyMs === "number" && Number.isFinite(latest.latencyMs) ? Number(latest.latencyMs) : null;
+              const latestTimeout = !latestStale && latest?.isTimeout === true;
               const pending = detail?.pending === true || displayTesting;
               const failed = !pending && (detail ? detail.success === false : latestTimeout);
-              const success = pending || !failed;
+              const success = !pending && (detail ? detail.success === true : latestLatency !== null && !latestTimeout);
               const latency = typeof detail?.latencyMs === "number" && Number.isFinite(detail.latencyMs)
                 ? `${detail.latencyMs}ms`
                 : pending
@@ -1811,14 +1829,14 @@ function TunnelSelfTestDialog({
                       ? `${latestLatency}ms`
                       : latestTimeout
                         ? "失败"
-                        : "--";
+                        : latestStale ? "结果已过期" : "未测试";
               const displayAddress = exitDisplayAddressFor(row.hostId, row.connectHost);
               const addressText = [displayAddress, row.listenPort ? `:${row.listenPort}` : ""].filter(Boolean).join("") || "默认连接地址";
               return (
                 <div key={`${row.role}-${row.hostId}`} className="rounded border border-border/60 bg-background/70 px-2 py-1.5">
                   <div className="flex min-w-0 items-center justify-between gap-3">
                     <span className="min-w-0 truncate font-medium">{row.label}</span>
-                    <span className={success ? "shrink-0 text-emerald-600 dark:text-emerald-400" : "shrink-0 text-destructive"}>{latency}</span>
+                    <span className={success ? "shrink-0 text-emerald-600 dark:text-emerald-400" : failed ? "shrink-0 text-destructive" : "shrink-0 text-muted-foreground"}>{latency}</span>
                   </div>
                   <div className="mt-1 flex min-w-0 items-center justify-between gap-3 text-[11px] text-muted-foreground">
                     <span>{row.role}</span>
@@ -1956,6 +1974,9 @@ function TunnelSelfTestDialog({
   }, [open, displayTesting, isFailed, isSuccess, status, tunnel?.lastTestAt, parsedMessage.message, tunnelId]);
 
   const plannedSegmentCount = linkTestNodeData.plannedSegments?.length || 0;
+  const isBranchedMultiExit = !!tunnel?.loadBalanceEnabled
+    && Array.isArray(tunnel?.loadBalanceExits) && tunnel.loadBalanceExits.length > 0
+    && (getTunnelHopIds(tunnel).length >= 3 || enabledHostGroupMembers((entryGroups || []).find((group: any) => Number(group?.id || 0) === Number(tunnel?.entryGroupId || 0))).length > 1);
   const probeDialogSizeClass = plannedSegmentCount >= 3 ? "sm:max-w-4xl" : plannedSegmentCount >= 2 ? "sm:max-w-3xl" : "sm:max-w-xl";
 
   return (
@@ -1969,6 +1990,11 @@ function TunnelSelfTestDialog({
           <DialogDescription>{tunnelName}</DialogDescription>
         </DialogHeader>
 
+        {isBranchedMultiExit && (
+          <div role="status" className="rounded-md border border-border/60 bg-muted/30 p-3 text-xs text-muted-foreground">
+            入口、中转及出口分别探测；未上报或过期的分支不能视为正常。旧版 Agent 可能需要更新才能上报新分支数据。结果主要检查隧道端口，不代表代理端到端可用。
+          </div>
+        )}
         <LinkTestProbeView
           parsed={parsedMessage}
           fallbackLatencyMs={latencyMs}
@@ -3871,6 +3897,7 @@ function TunnelsContent() {
               isTimeout={item.isTimeout}
               icon="none"
               timeoutText="超时"
+              emptyText={item.stale ? "已过期" : "暂无数据"}
               className={compact ? "shrink-0 text-[10px]" : "shrink-0"}
             />
           </div>

@@ -450,3 +450,27 @@ test("a tunnel rule keeps the current tunnel segment when it reconciles with the
   assert.equal(html.match(/41 ms/g)?.length, 1);
   assert.doesNotMatch(html, /等待探测|探测中/);
 });
+
+test("branched pending view keeps parallel relays and exits separate", () => {
+  const parsed = parseLinkTestMessage(JSON.stringify({ kind: "tunnel-branched-pending", details: [
+    { pending: true, routeLabel: "入口 -> 中转甲", groupKey: "relay-entry-20" },
+    { pending: true, routeLabel: "入口 -> 中转乙", groupKey: "relay-entry-21" },
+    { pending: true, routeLabel: "中转甲 -> 出口甲", groupKey: "relay-exit-20-30" },
+    { pending: true, routeLabel: "中转乙 -> 出口乙", groupKey: "relay-exit-21-40" },
+  ] }));
+  const html = renderToStaticMarkup(<LinkTestProbeView parsed={parsed} isSuccess={false} isTesting />);
+  assert.match(html, /入口分支/); assert.match(html, /出口分支/);
+  assert.match(html, /中转甲/); assert.match(html, /中转乙/); assert.match(html, /出口甲/); assert.match(html, /出口乙/);
+  assert.doesNotMatch(html, /暂无可用完整路径/);
+});
+
+test("multi-hop branch details include each measured exit", () => {
+  const parsed = parseLinkTestMessage(JSON.stringify({ kind: "tunnel-branched-summary", totalLatencyMs: 35, details: [
+    { success: true, latencyMs: 5, routeLabel: "入口 -> 中转", groupKey: "tunnel-entry-branches" },
+    { success: true, latencyMs: 20, routeLabel: "中转 -> 出口甲", groupKey: "tunnel-exit-branches" },
+    { success: false, latencyMs: null, routeLabel: "中转 -> 出口乙", groupKey: "tunnel-exit-branches" },
+  ] }));
+  const html = renderToStaticMarkup(<LinkTestProbeView parsed={parsed} isSuccess isTesting={false} plannedSegments={[{ from: "入口", to: "中转" }, { from: "中转", to: "出口甲" }]} />);
+  assert.match(html, /出口甲/);
+  assert.match(html, /出口乙/);
+});

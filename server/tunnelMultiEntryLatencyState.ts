@@ -315,6 +315,7 @@ export function getTunnelMultiEntryHopDetails(input: {
   pathKey?: string | null;
   referenceAt?: number | Date | null;
   maxAgeMs?: number;
+  maxSkewMs?: number;
 }) {
   const tunnelId = Number(input.tunnelId);
   const hopCount = Number(input.hopCount);
@@ -336,9 +337,10 @@ export function getTunnelMultiEntryHopDetails(input: {
     ? input.referenceAt.getTime()
     : Number(input.referenceAt || 0);
   const maxAgeMs = Math.max(1_000, Number(input.maxAgeMs || MULTI_ENTRY_PROBE_TTL_MS));
+  const maxSkewMs = Math.max(1_000, Number(input.maxSkewMs || 30_000));
   const isFresh = (recordedAt: number) => (
     now - recordedAt <= maxAgeMs
-    && (referenceAt <= 0 || Math.abs(recordedAt - referenceAt) <= 30_000)
+    && (referenceAt <= 0 || Math.abs(recordedAt - referenceAt) <= maxSkewMs)
   );
   const sharedFirstSource = state.sharedHops.get(1)?.fromHostId || null;
   const details: TunnelMultiEntryHopDetail[] = [];

@@ -1,4 +1,11 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
+import { topologyPathEdgeIds } from "./networkTopologyPaths";
+import { topologyRuleHref } from "./topologyRuleLink";
+import { improveTopologyOrder } from "./topologyLayout";
+import { topologyTunnelVariants } from "./topologyTunnelVariants";
+import { isTunnelRelayFailover } from "@shared/tunnelRelay";
+import { exitGroupUsesMultipleExits } from "@shared/exitStrategy";
 import {
   Activity,
   ArrowRight,
@@ -87,6 +94,12 @@ function hostAddress(host: any) {
   return String(host?.entryIp || host?.ipv4 || host?.ip || "").trim();
 }
 
+function hostOnline(host: any): boolean | null {
+  if (host?.isOnline === true || host?.isOnline === 1 || host?.isOnline === "1" || host?.isOnline === "true") return true;
+  if (host?.isOnline === false || host?.isOnline === 0 || host?.isOnline === "0" || host?.isOnline === "false") return false;
+  return null;
+}
+
 function enabledMember(member: any) {
   return member?.isEnabled !== false && Number(member?.isEnabled ?? 1) !== 0;
 }
@@ -137,21 +150,43 @@ function groupPhysicalVariants(group: any, groupById: Map<number, any>, tunnelBy
 
   // 端口转发、转发组、入口组、出口组的成员是并列候选，不应画成串联链路。
   return members
-    .map((member: any) => uniqNumbers(expandMemberHostIds(member, tunnelById)))
+    .flatMap((member: any) => {
+      if (String(member?.memberType || "host") === "tunnel") {
+        const tunnel = tunnelById.get(Number(member?.tunnelId || 0));
+        return tunnel ? visibleTunnelVariants(tunnel, groupById) : [];
+      }
+      return [uniqNumbers(expandMemberHostIds(member, tunnelById))];
+    })
     .filter((ids: number[]) => ids.length > 0);
 }
 
+function visibleTunnelVariants(tunnel: any, groupById: Map<number, any>) {
+  const hops = getTunnelHopIds(tunnel);
+  const entryGroup = groupById.get(Number(tunnel?.entryGroupId || 0)) || tunnel?.entryGroup;
+  const entries = (Array.isArray(entryGroup?.members) ? entryGroup.members : [])
+    .filter((member: any) => enabledMember(member) && String(member?.memberType || "host") === "host")
+    .map((member: any) => Number(member.hostId || 0));
+  const exits = [Number(hops[hops.length - 1] || 0)];
+  if (enabledMember(tunnel?.loadBalanceEnabled) && tunnel?.loadBalanceEnabled != null && exitGroupUsesMultipleExits(tunnel?.loadBalanceStrategy)) {
+    for (const exit of Array.isArray(tunnel?.loadBalanceExits) ? tunnel.loadBalanceExits : []) {
+      if (enabledMember(exit)) exits.push(Number(exit.hostId || 0));
+    }
+  }
+  const hopObjects = hops.map((hostId: number) => ({ hostId }));
+  return topologyTunnelVariants({ hops, entries, exits, relayFailover: isTunnelRelayFailover(tunnel, hopObjects) });
+}
+
 function directRuleVariants(rule: any, groupById: Map<number, any>, tunnelById: Map<number, any>) {
-  const group = Number(rule?.forwardGroupId || 0) > 0 ? groupById.get(Number(rule.forwardGroupId)) : null;
-  if (group) {
-    const variants = groupPhysicalVariants(group, groupById, tunnelById);
-    if (variants.length > 0) return variants;
+  const groupId = Number(rule?.forwardGroupId || 0);
+  if (groupId > 0) {
+    const group = groupById.get(groupId);
+    return group ? groupPhysicalVariants(group, groupById, tunnelById) : [];
   }
 
-  const tunnel = Number(rule?.tunnelId || 0) > 0 ? tunnelById.get(Number(rule.tunnelId)) : null;
-  if (tunnel) {
-    const ids = uniqNumbers(getTunnelHopIds(tunnel));
-    if (ids.length > 0) return [ids];
+  const tunnelId = Number(rule?.tunnelId || 0);
+  if (tunnelId > 0) {
+    const tunnel = tunnelById.get(tunnelId);
+    return tunnel ? visibleTunnelVariants(tunnel, groupById) : [];
   }
 
   const hostId = Number(rule?.hostId || 0);
@@ -195,7 +230,7 @@ function buildPhysicalPaths(
       label: String(host?.name || "主机 #" + hostId),
       subtitle: hostAddress(host),
       detail,
-      online: host?.isOnline !== false,
+      online: hostOnline(host),
       qualityTarget: qualityTarget || null,
     };
   };
@@ -214,7 +249,7 @@ function buildPhysicalPaths(
           label: String(landingHost?.name || landing.name || "落地主机 #" + landingHostId),
           subtitle: hostAddress(landingHost) || String(landing.endpoint || ""),
           detail: landing.port ? "落地 SS · " + String(landing.port) : "落地 SS",
-          online: landingHost?.isOnline !== false,
+          online: hostOnline(landingHost),
         };
       }
       return {
@@ -238,7 +273,7 @@ function buildPhysicalPaths(
         label: String(matchedHost.name || "主机 #" + hostId),
         subtitle: hostAddress(matchedHost),
         detail: targetPort > 0 ? "最终目标 · " + String(targetPort) : "最终目标",
-        online: matchedHost?.isOnline !== false,
+        online: hostOnline(matchedHost),
       };
     }
 
@@ -386,10 +421,11 @@ function buildPhysicalPaths(
         label: String(landingHost?.name || "落地主机 #" + landingHostId),
         subtitle: hostAddress(landingHost),
         detail: "落地 SS",
-        online: landingHost?.isOnline !== false,
+        online: hostOnline(landingHost),
       };
 
       const haystack = [
+        chain?.name,
         entry.label,
         entry.subtitle,
         ...relays.flatMap((node) => [node.label, node.subtitle]),
@@ -593,6 +629,8 @@ function buildGraph(paths: PhysicalPath[]) {
     });
   }
 
+  improveTopologyOrder(columns, edges, directOnlySinkIds);
+
   const xGap = 238;
   const yGap = 82;
   const xOffset = 32;
@@ -672,6 +710,16 @@ function NetworkTopologyContent() {
   const [category, setCategory] = useState<TopologyCategory>("all");
   const [search, setSearch] = useState("");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [selectedPathId, setSelectedPathId] = useState<string | null>(null);
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  const [annotation, setAnnotation] = useState<{ name: string; address: string; target: string; targetNodeId: string | null; note: string }>({ name: "", address: "", target: "", targetNodeId: null, note: "" });
+  const [editingAnnotationId, setEditingAnnotationId] = useState<string | null>(null);
+  // null means the first available entry; "all" explicitly shows the full graph.
+  const [entryFilter, setEntryFilter] = useState<string | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
+  const [showMinimap, setShowMinimap] = useState(false);
   const [qualityTarget, setQualityTarget] = useState<LinkQualityTarget | null>(null);
 
   const hostsQuery = trpc.hosts.options.useQuery(undefined, {
@@ -699,6 +747,11 @@ function NetworkTopologyContent() {
     staleTime: 20_000,
     refetchOnWindowFocus: false,
   });
+  const annotationsQuery = trpc.topologyAnnotations.list.useQuery();
+  const saveAnnotations = trpc.topologyAnnotations.save.useMutation({
+    onSuccess: async () => { await annotationsQuery.refetch(); toast.success("外部标注已保存"); },
+    onError: (error) => { toast.error(error.message || "外部标注保存失败"); void annotationsQuery.refetch(); },
+  });
   const fullChainsQuery = trpc.fullChains.list.useQuery(undefined, {
     refetchInterval: pollingInterval("slow"),
     staleTime: 20_000,
@@ -719,11 +772,59 @@ function NetworkTopologyContent() {
     [rulesQuery.data, hostsQuery.data, tunnelsQuery.data, groupsQuery.data, landingQuery.data, fullChainsQuery.data, category, search],
   );
 
-  const graph = useMemo(() => buildGraph(paths), [paths]);
+  const entryGroups = useMemo(() => {
+    const groups = new Map<string, { entry: PhysicalNode; paths: PhysicalPath[] }>();
+    for (const path of paths) {
+      const group = groups.get(path.entry.id) || { entry: path.entry, paths: [] };
+      group.paths.push(path);
+      groups.set(path.entry.id, group);
+    }
+    return Array.from(groups.values()).sort((a, b) => a.entry.label.localeCompare(b.entry.label, "zh-CN"));
+  }, [paths]);
+  const activeEntry = entryFilter === "all" || entryGroups.some((group) => group.entry.id === entryFilter)
+    ? entryFilter
+    : entryGroups[0]?.entry.id || "all";
+  const visiblePaths = useMemo(
+    () => activeEntry === "all" ? paths : paths.filter((path) => path.entry.id === activeEntry),
+    [paths, activeEntry],
+  );
+  const graph = useMemo(() => buildGraph(visiblePaths), [visiblePaths]);
+  // Manual connections are an overlay, not input to graph construction or counts.
+  const visibleAnnotations = (annotationsQuery.data || []).filter((item) => item.targetNodeId && graph.positions.has(item.targetNodeId));
+  const annotationWidth = visibleAnnotations.length ? 220 : 0;
+  const canvasWidth = graph.width + annotationWidth;
+  const canvasHeight = Math.max(graph.height, 62 + visibleAnnotations.length * 82);
+  const selectedPath = visiblePaths.find((path) => path.id === selectedPathId) || null;
+  const selectedRule = selectedPath?.id.startsWith("rule:")
+    ? (rulesQuery.data || []).find((rule: any) => Number(rule.id) === Number(selectedPath.id.split(":")[1])) as any
+    : null;
+  const highlightedNodes = new Set(selectedPath ? [selectedPath.entry, ...selectedPath.relays, selectedPath.landing].map((node) => node.id) : []);
+  const highlightedEdges = new Set(selectedPath ? topologyPathEdgeIds([selectedPath.entry, ...selectedPath.relays, selectedPath.landing].map((node) => node.id)) : []);
   const selectedNode = selectedNodeId
     ? graph.nodes.find((node) => node.id === selectedNodeId) || null
     : null;
+  const selectedEdge = graph.edges.find((edge) => edge.id === selectedEdgeId) || null;
+  const nodePaths = selectedNode ? paths.filter((path) => [path.entry, ...path.relays, path.landing].some((node) => node.id === selectedNode.id)) : [];
+  const edgePaths = selectedEdge ? paths.filter((path) => topologyPathEdgeIds([path.entry, ...path.relays, path.landing].map((node) => node.id)).includes(selectedEdge.id)) : [];
+  const nodeRoles = selectedNode ? [
+    nodePaths.some((path) => path.entry.id === selectedNode.id) && "入口",
+    nodePaths.some((path) => path.relays.some((node) => node.id === selectedNode.id)) && "中转",
+    nodePaths.some((path) => path.landing.id === selectedNode.id) && "目标",
+  ].filter(Boolean).join("、") : "";
   const isLoading = rulesQuery.isLoading || hostsQuery.isLoading || tunnelsQuery.isLoading || groupsQuery.isLoading || landingQuery.isLoading || fullChainsQuery.isLoading;
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (isLoading || !canvas || graph.nodes.length === 0) return;
+    const width = Math.max(1, canvas.clientWidth);
+    const height = Math.max(240, Math.min(window.innerHeight * 0.65, 600));
+    // Keep labels readable by default; users can still choose a full overview.
+    const minimumReadableZoom = window.innerWidth < 640 ? 0.6 : 0.7;
+    const nextZoom = Math.min(1, Math.max(minimumReadableZoom, Math.min(width / canvasWidth, height / canvasHeight)));
+    setZoom(nextZoom);
+    const frame = requestAnimationFrame(() => canvas.scrollTo({ left: 0, top: Math.max(0, (canvasHeight * nextZoom - height) / 2) }));
+    return () => cancelAnimationFrame(frame);
+  }, [activeEntry, annotationWidth, canvasHeight, canvasWidth, category, graph.nodes.length, isLoading]);
 
   const handleRefresh = async () => {
     await Promise.all([
@@ -733,11 +834,21 @@ function NetworkTopologyContent() {
       groupsQuery.refetch(),
       landingQuery.refetch(),
       fullChainsQuery.refetch(),
+      annotationsQuery.refetch(),
     ]);
   };
 
-  const relayCount = graph.uniqueRelayCount;
-  const landingCount = graph.uniqueLandingCount;
+  const focusNode = (nodeId: string) => {
+    const position = graph.positions.get(nodeId);
+    const canvas = canvasRef.current;
+    if (!position || !canvas) return;
+    canvas.scrollTo({ left: Math.max(0, (annotationWidth + position.x + position.width / 2) * zoom - canvas.clientWidth / 2),
+      top: Math.max(0, (position.y + position.height / 2) * zoom - canvas.clientHeight / 2), behavior: "smooth" });
+  };
+  // Roles are counted per configured path; one host may occupy multiple roles.
+  const entryCount = new Set(paths.map((path) => path.entry.id)).size;
+  const relayCount = new Set(paths.flatMap((path) => path.relays.map((node) => node.id))).size;
+  const landingCount = new Set(paths.map((path) => path.landing.id)).size;
 
   return (
     <div className="space-y-5">
@@ -745,7 +856,7 @@ function NetworkTopologyContent() {
         <div>
           <h1 className="text-xl font-bold tracking-tight sm:text-2xl">网络拓扑</h1>
           <p className="mt-1 text-xs text-muted-foreground sm:text-sm">
-            入口、中转、落地均按实际资源角色生成：入口来自端口转发/转发链/隧道的真实入口主机，不再使用规则名称代替入口。
+按面板可见配置展示入口、中转及目标；外部专线、未管理转发及复杂嵌套组的部分候选路径可能未包含。
           </p>
         </div>
         <Button variant="outline" size="sm" className="gap-1.5" onClick={() => void handleRefresh()} disabled={isLoading}>
@@ -756,7 +867,7 @@ function NetworkTopologyContent() {
 
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         <Card className="border-border/40 bg-card/60"><CardContent className="p-3"><div className="text-xs text-muted-foreground">链路路径</div><div className="mt-1 text-xl font-semibold">{paths.length}</div></CardContent></Card>
-        <Card className="border-border/40 bg-card/60"><CardContent className="p-3"><div className="text-xs text-muted-foreground">入口</div><div className="mt-1 text-xl font-semibold">{graph.uniqueEntryCount}</div></CardContent></Card>
+        <Card className="border-border/40 bg-card/60"><CardContent className="p-3"><div className="text-xs text-muted-foreground">入口</div><div className="mt-1 text-xl font-semibold">{entryCount}</div></CardContent></Card>
         <Card className="border-border/40 bg-card/60"><CardContent className="p-3"><div className="text-xs text-muted-foreground">中转节点</div><div className="mt-1 text-xl font-semibold">{relayCount}</div></CardContent></Card>
         <Card className="border-border/40 bg-card/60"><CardContent className="p-3"><div className="text-xs text-muted-foreground">落地 / 目标</div><div className="mt-1 text-xl font-semibold">{landingCount}</div></CardContent></Card>
       </div>
@@ -772,6 +883,9 @@ function NetworkTopologyContent() {
               onClick={() => {
                 setCategory(option.value);
                 setSelectedNodeId(null);
+                setSelectedPathId(null);
+                setSelectedEdgeId(null);
+                setEntryFilter(null);
               }}
             >
               {option.label}
@@ -780,9 +894,43 @@ function NetworkTopologyContent() {
         </div>
         <div className="relative w-full sm:w-72">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-          <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索入口、节点或落地" className="h-8 pl-8 text-xs" />
+          <Input value={search} onChange={(event) => { setSearch(event.target.value); setSelectedPathId(null); setSelectedNodeId(null); setSelectedEdgeId(null); setEntryFilter("all"); }} placeholder="搜索规则、入口、节点或落地" className="h-8 pl-8 text-xs" />
         </div>
       </div>
+
+      {[rulesQuery, hostsQuery, tunnelsQuery, groupsQuery, landingQuery, fullChainsQuery].some((query) => query.isError) && (
+        <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-xs text-destructive">部分拓扑数据加载失败，当前图和影响范围可能不完整，请刷新后重试。</div>
+      )}
+
+      {!isLoading && entryGroups.length > 0 && (
+        <Card className="border-border/45 bg-card/45">
+          <CardContent className="space-y-3 p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-medium">按入口查看</span>
+              <Button size="sm" variant={activeEntry === "all" ? "secondary" : "ghost"} onClick={() => { setEntryFilter("all"); setSelectedPathId(null); setSelectedNodeId(null); setSelectedEdgeId(null); }}>全部入口</Button>
+              {entryGroups.map((group) => (
+                <Button key={group.entry.id} size="sm" variant={activeEntry === group.entry.id ? "secondary" : "ghost"} onClick={() => { setEntryFilter(group.entry.id); setSelectedPathId(null); setSelectedNodeId(null); setSelectedEdgeId(null); }}>
+                  {group.entry.label} <span className="ml-1 text-muted-foreground">({group.paths.length})</span>
+                </Button>
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground">默认只展示一个入口；展开路径列表并选择规则，可高亮其完整路径。统计按当前筛选的路径角色计算，同一主机可能兼任多个角色。</p>
+            {entryGroups.filter((group) => activeEntry === "all" || activeEntry === group.entry.id).map((group) => (
+              <details key={group.entry.id} className="rounded-lg border border-border/45 bg-card/50">
+                <summary className="cursor-pointer px-3 py-2 text-sm font-medium">{group.entry.label} · {group.paths.length} 条路径</summary>
+                <div className="max-h-72 space-y-1 overflow-auto border-t border-border/40 p-2">
+                  {group.paths.map((path) => (
+                    <button key={path.id} type="button" onClick={() => { setEntryFilter(group.entry.id); setSelectedPathId(path.id); setSelectedNodeId(null); setSelectedEdgeId(null); canvasRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }); }} className={cn("w-full rounded-md px-2 py-2 text-left text-xs hover:bg-accent", selectedPathId === path.id && "bg-accent ring-1 ring-primary/40")}>
+                      <span className="font-medium">{path.name}</span> <span className="text-muted-foreground">· {categoryLabel(path.category)}</span>
+                      <span className="mt-1 block break-words text-muted-foreground">{[path.entry, ...path.relays, path.landing].map((node) => node.label).join(" → ")}</span>
+                    </button>
+                  ))}
+                </div>
+              </details>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       {isLoading ? (
         <DataSectionLoading label="正在加载网络拓扑" />
@@ -798,8 +946,49 @@ function NetworkTopologyContent() {
         <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_280px]">
           <Card className="overflow-hidden border-border/45 bg-card/45">
             <CardContent className="p-0">
-              <div className="overflow-auto">
-                <div className="relative" style={{ width: graph.width, height: graph.height }}>
+              <div className="flex flex-wrap items-center gap-2 border-b border-border/40 p-2">
+                <span className="mr-auto text-xs text-muted-foreground">{activeEntry === "all" ? "全部入口" : entryGroups.find((group) => group.entry.id === activeEntry)?.entry.label} · {visiblePaths.length} 条路径</span>
+                {selectedPath && <Button size="sm" variant="ghost" onClick={() => setSelectedPathId(null)}>取消高亮</Button>}
+                <Button size="sm" variant="outline" aria-label="缩小拓扑" onClick={() => setZoom((value) => Math.max(0.2, Math.round((value - 0.1) * 10) / 10))}>−</Button>
+                <Button size="sm" variant="ghost" onClick={() => setZoom(1)}>{Math.round(zoom * 100)}%</Button>
+                <Button size="sm" variant="outline" aria-label="放大拓扑" onClick={() => setZoom((value) => Math.min(1.5, Math.round((value + 0.1) * 10) / 10))}>＋</Button>
+                <Button size="sm" variant="outline" onClick={() => setZoom(Math.min(1, Math.max(0.2, (canvasRef.current?.clientWidth || canvasWidth) / canvasWidth)))}>适应宽度</Button>
+                <Button size="sm" variant="outline" onClick={() => { const canvas = canvasRef.current; if (!canvas) return; setZoom(Math.min(1, Math.max(0.2, Math.min(canvas.clientWidth / canvasWidth, Math.max(240, Math.min(window.innerHeight * 0.65, 600)) / canvasHeight)))); canvas.scrollTo({ left: 0, top: 0 }); }}>适应画布</Button>
+                <Button size="sm" variant="outline" onClick={() => setShowMinimap((value) => !value)}>{showMinimap ? "隐藏小地图" : "小地图"}</Button>
+                {selectedNode && <Button size="sm" variant="outline" onClick={() => focusNode(selectedNode.id)}>定位选中节点</Button>}
+              </div>
+              {showMinimap && <div className="border-b border-border/40 p-2"><svg role="img" aria-label="拓扑小地图，点击可移动画布" viewBox={`0 0 ${canvasWidth} ${canvasHeight}`} className="h-28 w-full max-w-[240px] cursor-crosshair rounded border border-border/50 bg-muted/20" onClick={(event) => {
+                const canvas = canvasRef.current, bounds = event.currentTarget.getBoundingClientRect();
+                if (!canvas || !bounds.width || !bounds.height) return;
+                const scale = Math.min(bounds.width / canvasWidth, bounds.height / canvasHeight);
+                const offsetX = (bounds.width - canvasWidth * scale) / 2, offsetY = (bounds.height - canvasHeight * scale) / 2;
+                const x = (event.clientX - bounds.left - offsetX) / scale, y = (event.clientY - bounds.top - offsetY) / scale;
+                canvas.scrollTo({ left: Math.max(0, x * zoom - canvas.clientWidth / 2), top: Math.max(0, y * zoom - canvas.clientHeight / 2), behavior: "smooth" });
+              }}>
+                {graph.edges.map((edge) => { const from = graph.positions.get(edge.from), to = graph.positions.get(edge.to); return from && to ? <line key={edge.id} x1={annotationWidth + from.x + from.width} y1={from.y + from.height / 2} x2={annotationWidth + to.x} y2={to.y + to.height / 2} stroke="currentColor" strokeWidth="3" className="text-muted-foreground" /> : null; })}
+                {graph.nodes.map((node) => { const pos = graph.positions.get(node.id); return pos ? <rect key={node.id} x={annotationWidth + pos.x} y={pos.y} width={pos.width} height={pos.height} rx="6" fill="currentColor" className={selectedNodeId === node.id || highlightedNodes.has(node.id) ? "text-primary" : "text-muted-foreground/50"} /> : null; })}
+              </svg><p className="mt-1 text-[10px] text-muted-foreground">点击小地图移动画布；鼠标可拖动画布，触屏可直接滑动。</p></div>}
+              <div ref={canvasRef} className="max-h-[70vh] cursor-grab overflow-auto active:cursor-grabbing" onPointerDown={(event) => {
+                if (event.pointerType !== "mouse" || event.button !== 0 || (event.target as Element).closest("button, a, [role=button]")) return;
+                const canvas = event.currentTarget; dragRef.current = { x: event.clientX, y: event.clientY, left: canvas.scrollLeft, top: canvas.scrollTop };
+                canvas.setPointerCapture(event.pointerId);
+              }} onPointerMove={(event) => { const drag = dragRef.current; if (!drag) return; event.currentTarget.scrollLeft = drag.left - (event.clientX - drag.x); event.currentTarget.scrollTop = drag.top - (event.clientY - drag.y); }}
+                onPointerUp={() => { dragRef.current = null; }} onPointerCancel={() => { dragRef.current = null; }}>
+                <div style={{ width: canvasWidth * zoom, height: canvasHeight * zoom }}>
+                <div className="relative origin-top-left" style={{ width: canvasWidth, height: canvasHeight, transform: `scale(${zoom})` }}>
+                {visibleAnnotations.length > 0 && <>
+                  <div className="absolute left-4 top-3 text-xs font-medium text-muted-foreground">外部节点（手动）</div>
+                  <svg className="pointer-events-none absolute inset-0" width={canvasWidth} height={canvasHeight} aria-hidden="true">
+                    {visibleAnnotations.map((item, index) => {
+                      const target = graph.positions.get(item.targetNodeId!);
+                      if (!target) return null;
+                      const x1 = 196, y1 = 91 + index * 82, x2 = annotationWidth + target.x, y2 = target.y + target.height / 2;
+                      return <path key={item.id} d={`M ${x1} ${y1} C ${x1 + 25} ${y1}, ${x2 - 25} ${y2}, ${x2} ${y2}`} fill="none" stroke="currentColor" strokeWidth="1.5" strokeDasharray="5 4" className="text-muted-foreground" />;
+                    })}
+                  </svg>
+                  {visibleAnnotations.map((item, index) => <button key={item.id} type="button" title="手动标注，连接未监控" onClick={() => { setSelectedNodeId(item.targetNodeId || null); setSelectedEdgeId(null); setSelectedPathId(null); }} className="absolute left-4 flex h-[58px] w-[180px] flex-col justify-center rounded-lg border border-dashed border-muted-foreground/60 bg-card px-3 text-left text-xs" style={{ top: 62 + index * 82 }}><span className="truncate font-medium">{item.name}</span><span className="mt-1 truncate text-[10px] text-muted-foreground">手动标注 · 未监控</span></button>)}
+                </>}
+                <div className="absolute top-0" style={{ left: annotationWidth, width: graph.width, height: graph.height }}>
                   <div
                     className="absolute left-0 top-0 h-11 border-b border-border/35 bg-muted/10"
                     style={{ width: graph.width }}
@@ -821,7 +1010,7 @@ function NetworkTopologyContent() {
                     落地 / 最终目标
                   </div>
 
-                  <svg className="pointer-events-none absolute inset-0 h-full w-full" width={graph.width} height={graph.height}>
+                  <svg className="absolute inset-0 h-full w-full" width={graph.width} height={graph.height} style={{ pointerEvents: "none" }}>
                     {graph.edges.map((edge) => {
                       const from = graph.positions.get(edge.from);
                       const to = graph.positions.get(edge.to);
@@ -841,15 +1030,16 @@ function NetworkTopologyContent() {
                           ].join(" ")
                         : "M " + x1 + " " + y1 + " C " + (x1 + control) + " " + y1 + ", " + (x2 - control) + " " + y2 + ", " + x2 + " " + y2;
                       return (
-                        <path
-                          key={edge.id}
-                          d={directPath}
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="1.5"
-                          className="text-border"
-                          opacity="0.9"
-                        />
+                        <g key={edge.id}>
+                          <path d={directPath} fill="none" stroke="currentColor"
+                            strokeWidth={selectedEdgeId === edge.id || (selectedPath && highlightedEdges.has(edge.id)) ? 3 : 1.8}
+                            className={selectedEdgeId === edge.id || (selectedPath && highlightedEdges.has(edge.id)) ? "text-primary" : "text-muted-foreground/60"}
+                            opacity={selectedPath && !highlightedEdges.has(edge.id) && selectedEdgeId !== edge.id ? 0.2 : 0.9} />
+                          <path d={directPath} fill="none" stroke="transparent" strokeWidth="18" style={{ pointerEvents: "stroke", cursor: "pointer" }}
+                            role="button" tabIndex={0} aria-label={`查看 ${graph.nodes.find((node) => node.id === edge.from)?.label || edge.from} 到 ${graph.nodes.find((node) => node.id === edge.to)?.label || edge.to} 的关联路径`}
+                            onClick={() => { setSelectedEdgeId(edge.id); setSelectedNodeId(null); }}
+                            onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelectedEdgeId(edge.id); setSelectedNodeId(null); } }} />
+                        </g>
                       );
                     })}
                   </svg>
@@ -862,11 +1052,13 @@ function NetworkTopologyContent() {
                       <button
                         key={node.id}
                         type="button"
-                        onClick={() => setSelectedNodeId(node.id)}
+                        onClick={() => { setSelectedNodeId(node.id); setSelectedEdgeId(null); }}
                         className={cn(
                           "absolute flex flex-col justify-center rounded-lg border px-3 py-2 text-left shadow-sm transition-[border-color,box-shadow,transform] hover:-translate-y-0.5 hover:shadow-md",
                           nodeTone(node),
                           selected && "ring-2 ring-primary/35",
+                          selectedPath && highlightedNodes.has(node.id) && "ring-2 ring-primary/50",
+                          selectedPath && !highlightedNodes.has(node.id) && "opacity-35",
                         )}
                         style={{ left: pos.x, top: pos.y, width: pos.width, height: pos.height }}
                         title={node.label}
@@ -883,12 +1075,33 @@ function NetworkTopologyContent() {
                     );
                   })}
                 </div>
+                </div>
+                </div>
               </div>
             </CardContent>
           </Card>
 
           <Card className="h-fit border-border/45 bg-card/60 xl:sticky xl:top-4">
             <CardContent className="space-y-4 p-4">
+              {selectedEdge && !selectedNode && (
+                <div className="space-y-2 border-b border-border/40 pb-3 text-xs">
+                  <div className="text-sm font-semibold">连线关联</div>
+                  <div className="break-words">{graph.nodes.find((node) => node.id === selectedEdge.from)?.label} → {graph.nodes.find((node) => node.id === selectedEdge.to)?.label}</div>
+                  <p className="text-muted-foreground">当前筛选下 {edgePaths.length} 条配置路径经过此方向。相同主机间可能存在不同端口或规则，连线已合并，不代表单条连接。</p>
+                  <div className="max-h-40 space-y-1 overflow-auto">{edgePaths.map((path) => <button key={path.id} type="button" className="block w-full rounded px-2 py-1 text-left hover:bg-accent" onClick={() => { setEntryFilter(path.entry.id); setSelectedPathId(path.id); setSelectedEdgeId(null); }}>{path.name} · {categoryLabel(path.category)}</button>)}</div>
+                  <p className="text-muted-foreground">连线可用性：未单独验证</p>
+                </div>
+              )}
+              {selectedPath && !selectedNode && !selectedEdge && (
+                <div className="space-y-2 border-b border-border/40 pb-3 text-xs">
+                  <div className="text-sm font-semibold">{selectedPath.name}</div>
+                  <div className="text-muted-foreground">{categoryLabel(selectedPath.category)} · 配置路径</div>
+                  <div className="break-words leading-6">{[selectedPath.entry, ...selectedPath.relays, selectedPath.landing].map((node) => node.label).join(" → ")}</div>
+                  {selectedRule && <div className="space-y-1 text-muted-foreground"><div>规则协议：{String(selectedRule.protocol || "未知").toUpperCase()}</div><div>入口端口：{selectedRule.sourcePort || "未知"}</div><div>规则目标：{selectedRule.targetIp || "未知"}{selectedRule.targetPort ? `:${selectedRule.targetPort}` : ""}</div></div>}
+                  <p className="text-muted-foreground">路径根据面板配置生成，不代表端到端业务已验证。</p>
+                  <a className="text-primary underline" href={selectedRule ? topologyRuleHref(Number(selectedRule.id)) : "/tunnels"}>打开{selectedRule ? "该转发规则" : "链路管理"}</a>
+                </div>
+              )}
               {selectedNode ? (
                 <>
                   <div className="flex items-start gap-2">
@@ -901,35 +1114,89 @@ function NetworkTopologyContent() {
                     </div>
                   </div>
                   <div className="space-y-2 border-t border-border/40 pt-3 text-xs">
-                    <div className="flex justify-between gap-2"><span className="text-muted-foreground">链路角色</span><span>{selectedNode.kind === "entry" ? "入口" : selectedNode.kind === "relay" ? "中转" : "落地 / 最终目标"}</span></div>
+                    <div className="flex justify-between gap-2"><span className="text-muted-foreground">路径角色</span><span>{nodeRoles || "未知"}</span></div>
                     <div className="flex justify-between gap-2"><span className="text-muted-foreground">说明</span><span className="text-right">{selectedNode.detail || "—"}</span></div>
                     {selectedNode.online != null && (
                       <div className="flex justify-between gap-2">
-                        <span className="text-muted-foreground">在线状态</span>
+                        <span className="text-muted-foreground">主机状态（不代表链路正常）</span>
                         <Badge variant="outline" className={cn("h-5 text-[10px]", selectedNode.online ? "border-emerald-500/30 text-emerald-600" : "border-destructive/30 text-destructive")}>
                           {selectedNode.online ? "在线" : "离线"}
                         </Badge>
                       </div>
                     )}
                   </div>
+                  <div className="space-y-2 border-t border-border/40 pt-3 text-xs">
+                    <div className="font-medium">可能受影响的路径：{nodePaths.length}</div>
+                    <p className="text-muted-foreground">仅按当前筛选的配置计算；是否实际中断取决于主备和运行状态。</p>
+                    <div className="max-h-40 space-y-1 overflow-auto">{nodePaths.map((path) => <button key={path.id} type="button" className="block w-full rounded px-2 py-1 text-left hover:bg-accent" onClick={() => { setEntryFilter(path.entry.id); setSelectedPathId(path.id); setSelectedNodeId(null); }}>{path.name} · {categoryLabel(path.category)}</button>)}</div>
+                    <div className="flex flex-wrap gap-2"><a className="text-primary underline" href="/hosts">主机管理</a><a className="text-primary underline" href="/rules">转发规则</a><a className="text-primary underline" href="/tunnels">链路管理</a></div>
+                  </div>
                   {selectedNode.qualityTarget && (
                     <Button variant="outline" className="w-full gap-2" onClick={() => setQualityTarget(selectedNode.qualityTarget || null)}>
                       <Activity className="h-4 w-4" />
-                      查看链路质量
+                      查看关联规则的历史链路质量
                     </Button>
                   )}
                 </>
-              ) : (
+              ) : !selectedPath && !selectedEdge ? (
                 <div className="flex min-h-40 flex-col items-center justify-center text-center">
                   <Layers3 className="h-7 w-7 text-muted-foreground" />
                   <div className="mt-2 text-sm font-medium">选择一个链路节点</div>
-                  <p className="mt-1 text-xs text-muted-foreground">拓扑现在只表达真实方向，不再把规则资源对象混进物理路径。</p>
+                  <p className="mt-1 text-xs text-muted-foreground">选择节点查看详情，或从路径列表选择一条规则。</p>
                 </div>
-              )}
+              ) : null}
             </CardContent>
           </Card>
         </div>
       )}
+
+      <Card className="border-border/45 bg-card/45">
+        <CardContent className="space-y-3 p-4">
+          <div>
+            <h2 className="text-sm font-semibold">外部专线与连接标注</h2>
+            <p className="mt-1 text-xs text-muted-foreground">个人手动记录，仅用于展示，不验证连接、不修改 nft 或下发 Agent；不计入自动拓扑统计。关联主机后，在该主机可见时以虚线显示；未关联或主机未显示时仅显示在列表。</p>
+          </div>
+          {annotationsQuery.isError ? <p className="text-xs text-destructive">标注加载失败，暂不能修改：{annotationsQuery.error.message}</p> : annotationsQuery.isLoading ? <p className="text-xs text-muted-foreground">正在加载标注…</p> : (
+            <>
+              {(annotationsQuery.data || []).map((item) => (
+                <div key={item.id} className="flex flex-wrap items-center gap-2 rounded-lg border border-dashed border-border/70 p-3 text-xs">
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <div className="break-words"><span className="font-medium">{item.name}</span>{item.address && <span className="text-muted-foreground"> ({item.address})</span>} <span className="text-muted-foreground">- - →</span> <span className="font-medium">{item.target}</span></div>
+                    <div className="text-muted-foreground">手动标注 · 未监控{item.targetNodeId ? (graph.positions.has(item.targetNodeId) ? " · 已显示在图中" : " · 关联主机不在当前图中") : " · 未关联主机"}{item.note && ` · ${item.note}`}</div>
+                  </div>
+                  <Button size="sm" variant="ghost" disabled={saveAnnotations.isPending || annotationsQuery.isFetching} onClick={() => { setEditingAnnotationId(item.id); setAnnotation({ name: item.name, address: item.address, target: item.target, targetNodeId: item.targetNodeId || null, note: item.note }); }}>编辑</Button>
+                  <Button size="sm" variant="ghost" disabled={saveAnnotations.isPending || annotationsQuery.isFetching} onClick={() => { if (window.confirm(`删除外部标注“${item.name}”？不会更改实际网络配置。`)) saveAnnotations.mutate({ expected: annotationsQuery.data || [], items: (annotationsQuery.data || []).filter((entry) => entry.id !== item.id) }, { onSuccess: () => { if (editingAnnotationId === item.id) { setEditingAnnotationId(null); setAnnotation({ name: "", address: "", target: "", targetNodeId: null, note: "" }); } } }); }}>删除</Button>
+                </div>
+              ))}
+              <form className="grid gap-2 sm:grid-cols-2" onSubmit={(event) => {
+                event.preventDefault();
+                if (!annotation.name.trim() || !annotation.target.trim() || !annotationsQuery.data) return;
+                let items;
+                if (editingAnnotationId) {
+                  if (!annotationsQuery.data.some((item) => item.id === editingAnnotationId)) { toast.error("标注已被删除，请重新添加"); return; }
+                  items = annotationsQuery.data.map((item) => item.id === editingAnnotationId ? { id: item.id, ...annotation } : item);
+                } else {
+                  const bytes = new Uint8Array(16); crypto.getRandomValues(bytes); bytes[6] = (bytes[6] & 15) | 64; bytes[8] = (bytes[8] & 63) | 128;
+                  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+                  const id = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+                  items = [...annotationsQuery.data, { id, ...annotation }];
+                }
+                saveAnnotations.mutate({ expected: annotationsQuery.data, items }, { onSuccess: () => { setEditingAnnotationId(null); setAnnotation({ name: "", address: "", target: "", targetNodeId: null, note: "" }); } });
+              }}>
+                <Input aria-label="外部节点名称" placeholder="外部节点名称，例如专线 A" maxLength={80} required value={annotation.name} onChange={(event) => setAnnotation({ ...annotation, name: event.target.value })} />
+                <Input aria-label="外部节点地址" placeholder="地址（可选）" maxLength={255} value={annotation.address} onChange={(event) => setAnnotation({ ...annotation, address: event.target.value })} />
+                <select aria-label="关联可见主机" value={annotation.targetNodeId || ""} onChange={(event) => { const id = event.target.value; const host = (hostsQuery.data || []).find((item: any) => `host:${item.id}` === id) as any; setAnnotation({ ...annotation, targetNodeId: id || null, target: host ? String(host.name || `主机 #${host.id}`) : annotation.target }); }} className="h-9 rounded-md border border-input bg-background px-3 text-sm">
+                  <option value="">不关联主机（仅显示在列表）</option>
+                  {(hostsQuery.data || []).map((host: any) => <option key={host.id} value={`host:${host.id}`}>{host.name || `主机 #${host.id}`}</option>)}
+                </select>
+                <Input aria-label="手动标注目标" placeholder="目标名称，例如 QHIX" maxLength={120} required value={annotation.target} onChange={(event) => setAnnotation({ ...annotation, target: event.target.value, targetNodeId: null })} />
+                <Input aria-label="连接备注" placeholder="连接备注（可选）" maxLength={300} value={annotation.note} onChange={(event) => setAnnotation({ ...annotation, note: event.target.value })} />
+                <div className="flex gap-2 sm:col-span-2"><Button type="submit" size="sm" disabled={saveAnnotations.isPending || annotationsQuery.isFetching || (!editingAnnotationId && (annotationsQuery.data?.length || 0) >= 50)}>{editingAnnotationId ? "保存标注" : "添加手动标注"}</Button>{editingAnnotationId && <Button type="button" size="sm" variant="outline" onClick={() => { setEditingAnnotationId(null); setAnnotation({ name: "", address: "", target: "", targetNodeId: null, note: "" }); }}>取消编辑</Button>}</div>
+              </form>
+            </>
+          )}
+        </CardContent>
+      </Card>
 
       <div className="flex flex-wrap gap-x-4 gap-y-2 rounded-lg border border-border/40 bg-muted/15 px-3 py-2 text-[11px] text-muted-foreground">
         <span className="inline-flex items-center gap-1"><Waypoints className="h-3 w-3" />入口</span>

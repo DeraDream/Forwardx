@@ -143,7 +143,9 @@ export type SelfTestMeta =
       batchId?: string;
       groupKey?: string;
       groupLabel?: string;
-      latencyMode?: "sum" | "max" | "multi-source";
+      latencyMode?: "sum" | "max" | "multi-source" | "branched";
+      topologyKey?: string;
+      entryHostIds?: number[];
       wireGuardPeerId?: string;
     }
   | {

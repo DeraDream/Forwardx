@@ -110,6 +110,8 @@ test("automatic tunnel details reject samples from a different probe batch", () 
     ...base,
     referenceAt: details[0].recordedAt + 30_001,
   }), null);
+  assert.ok(getTunnelAutoHopDetails({ ...base, referenceAt: details[0].recordedAt + 60_000, maxSkewMs: 120_000 }));
+  assert.equal(getTunnelAutoHopDetails({ ...base, referenceAt: details[0].recordedAt + 120_001, maxSkewMs: 120_000 }), null);
 });
 
 test("automatic tunnel details remain isolated by relay and exit path keys", () => {

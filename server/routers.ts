@@ -20,6 +20,7 @@ import { setupRouter } from "./routers/setup";
 import { telegramRouter } from "./routers/telegram";
 import { trafficBillingRouter } from "./routers/trafficBilling";
 import { tunnelsRouter } from "./routers/tunnels";
+import { topologyAnnotationsRouter } from "./routers/topologyAnnotations";
 import { usersRouter } from "./routers/users";
 
 export const appRouter = router({
@@ -41,6 +42,7 @@ export const appRouter = router({
   rules: rulesRouter,
   forwardGroups: forwardGroupsRouter,
   tunnels: tunnelsRouter,
+  topologyAnnotations: topologyAnnotationsRouter,
   telegram: telegramRouter,
   trafficBilling: trafficBillingRouter,
   agentTokens: agentTokensRouter,

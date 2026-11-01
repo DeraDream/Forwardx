@@ -1,4 +1,4 @@
-export type TunnelHopLatencyMode = "sum" | "max" | "multi-source";
+export type TunnelHopLatencyMode = "sum" | "max" | "multi-source" | "branched";
 
 export function structuredLinkTestMessage(input: {
   kind: string;
@@ -7,12 +7,14 @@ export function structuredLinkTestMessage(input: {
   totalLatencyMs?: number | null;
   groupId?: number | null;
   tunnelId?: number | null;
+  batchId?: string | null;
   tunnelProbeTimedOut?: boolean;
 }) {
   return JSON.stringify({
     kind: input.kind,
     ...(input.groupId ? { groupId: input.groupId } : {}),
     ...(input.tunnelId ? { tunnelId: input.tunnelId } : {}),
+    ...(input.batchId ? { batchId: input.batchId } : {}),
     ...(input.tunnelProbeTimedOut ? { tunnelProbeTimedOut: true } : {}),
     generatedAt: new Date().toISOString(),
     message: input.message,
@@ -23,10 +25,13 @@ export function structuredLinkTestMessage(input: {
 
 export function tunnelHopLatencyMode(meta: any): TunnelHopLatencyMode {
   const value = String(meta?.latencyMode || "");
-  return value === "max" || value === "multi-source" ? value : "sum";
+  return value === "max" || value === "multi-source" || value === "branched" ? value : "sum";
 }
 
 export function tunnelHopModeText(latencyMode: TunnelHopLatencyMode) {
+  if (latencyMode === "branched") {
+    return { kind: "tunnel-branched-summary", label: "多出口逐跳探测", successPrefix: "多出口逐跳探测完成", failurePrefix: "多出口逐跳探测失败", totalLabel: "可用出口最大路径延迟", seriesLabel: "可用出口最大路径延迟" };
+  }
   if (latencyMode === "max") {
     return {
       kind: "tunnel-load-balance-summary",

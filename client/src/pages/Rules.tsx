@@ -178,6 +178,7 @@ import {
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { toast } from "sonner";
 import { useLocation, useSearch } from "wouter";
+import { topologyRuleFocusId } from "./topologyRuleLink";
 import { TcpingDetailDialog } from "@/components/rules/TcpingDetailDialog";
 import {
   LandingCreateForm,
@@ -2898,6 +2899,14 @@ function RulesContent() {
   const { user } = useAuth();
   const [, setLocation] = useLocation();
   const search = useSearch();
+  const focusRuleId = topologyRuleFocusId(search) || 0;
+  const focusedRuleQuery = trpc.rules.getById.useQuery({ id: focusRuleId }, { enabled: focusRuleId > 0, refetchOnWindowFocus: false });
+  const closeFocusedRule = () => {
+    const params = new URLSearchParams(search);
+    params.delete("focusRule");
+    const query = params.toString();
+    setLocation(`/rules${query ? `?${query}` : ""}`, { replace: true });
+  };
   const isMobile = useIsMobile();
   const utils = trpc.useUtils();
   const [ruleProbeCacheRevision, setRuleProbeCacheRevision] = useState(0);
@@ -2925,14 +2934,14 @@ function RulesContent() {
     const timer = window.setTimeout(() => setSecondaryQueriesReady(true), 300);
     return () => window.clearTimeout(timer);
   }, []);
-  const { data: hosts, isFetched: hostsFetched } = trpc.hosts.options.useQuery(
+  const { data: hosts, isFetched: hostsFetched, isError: hostsError } = trpc.hosts.options.useQuery(
     undefined,
     {
       staleTime: 60000,
       refetchOnWindowFocus: false,
     },
   );
-  const { data: tunnels } = trpc.tunnels.options.useQuery(undefined, {
+  const { data: tunnels, isFetched: tunnelsFetched, isError: tunnelsError } = trpc.tunnels.options.useQuery(undefined, {
     refetchInterval: pollingInterval("normal"),
     staleTime: 10000,
     refetchOnWindowFocus: false,
@@ -9342,6 +9351,21 @@ function RulesContent() {
     );
   };
 
+  const focusedRuleDialog = (
+    <Dialog open={focusRuleId > 0} onOpenChange={(open) => { if (!open) closeFocusedRule(); }}>
+      <DialogContent>
+        <DialogHeader><DialogTitle>规则详情 #{focusRuleId}</DialogTitle><DialogDescription>从网络拓扑定位到的规则；数据以规则管理为准。</DialogDescription></DialogHeader>
+        {focusedRuleQuery.isLoading ? <p className="text-sm text-muted-foreground">正在加载规则…</p> : focusedRuleQuery.isError ? <p className="text-sm text-destructive">规则加载失败，请稍后重试。</p> : !focusedRuleQuery.data ? <p className="text-sm text-muted-foreground">规则不存在或当前账号无权查看。</p> : <div className="space-y-2 text-sm">
+          <div>名称：{focusedRuleQuery.data.name || `规则 #${focusRuleId}`}</div>
+          <div>协议：{String(focusedRuleQuery.data.protocol || "未知").toUpperCase()}</div>
+          <div>源端口：{focusedRuleQuery.data.sourcePort || "未知"}</div>
+          <div className="break-all">目标：{focusedRuleQuery.data.targetIp || "未知"}{focusedRuleQuery.data.targetPort ? `:${focusedRuleQuery.data.targetPort}` : ""}</div>
+        </div>}
+        <DialogFooter><Button variant="outline" onClick={closeFocusedRule}>关闭</Button>{focusedRuleQuery.data && <Button disabled={!hostsFetched || !tunnelsFetched || !forwardGroupsFetched || hostsError || tunnelsError || forwardGroupsError} title={hostsError || tunnelsError || forwardGroupsError ? "关联资源加载失败，请刷新后重试" : undefined} onClick={() => { setRulePageTab(ruleCategory); closeFocusedRule(); openEdit(focusedRuleQuery.data); }}>编辑该规则</Button>}</DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+
   if (rulePageTab === "landing") {
     const landingViewMode =
       displayMode === "table"
@@ -9351,6 +9375,7 @@ function RulesContent() {
           : "card";
     return (
       <div className="space-y-6">
+        {focusedRuleDialog}
         <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
           <div className="min-w-0">
             <h1 className="text-xl sm:text-2xl font-bold tracking-tight">
@@ -9452,6 +9477,7 @@ function RulesContent() {
 
   return (
     <div className="space-y-6">
+      {focusedRuleDialog}
       <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
         <div className="min-w-0">
           <h1 className="text-xl sm:text-2xl font-bold tracking-tight">

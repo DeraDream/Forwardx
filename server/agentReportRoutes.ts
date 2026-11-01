@@ -18,8 +18,8 @@ import {
   type AgentTunnelTcpingResult,
 } from "../shared/agentDtos";
 import { recordForwardGroupAutoHopLatency } from "./forwardGroupAutoLatencyState";
-import { getTunnelAutoHopAggregate, recordTunnelAutoHopLatency } from "./tunnelAutoLatencyState";
-import { getTunnelMultiEntryLatency, recordTunnelMultiEntryLatency } from "./tunnelMultiEntryLatencyState";
+import { getTunnelAutoHopAggregate, getTunnelAutoHopDetails, recordTunnelAutoHopLatency } from "./tunnelAutoLatencyState";
+import { getTunnelMultiEntryHopDetails, getTunnelMultiEntryLatency, recordTunnelMultiEntryLatency } from "./tunnelMultiEntryLatencyState";
 import { completeLookingGlassAgentTask, updateLookingGlassAgentTaskProgress, type LookingGlassMethod } from "./lookingGlassAgentTasks";
 import { completeIperf3AgentTask } from "./iperf3AgentTasks";
 import { completePluginAgentTask } from "./pluginAgentTasks";
@@ -41,6 +41,7 @@ import { clearRuleLatencyQueryCaches } from "./ruleLatencyQueryCache";
 import { agentTcpingReportGate } from "./agentTcpingReportGate";
 import { selectAgentTrafficReportInterval } from "./agentHeartbeatGate";
 import { pruneMapEntries, setBoundedMapValue } from "./boundedCache";
+import { branchedTunnelExitEndpoints, relayBranchedTunnelExitEndpoints } from "./tunnelBranchPlan";
 
 const VERBOSE_AGENT_REPORTS = /^(1|true|yes|on)$/i.test(String(process.env.FORWARDX_VERBOSE_AGENT_REPORTS || ""));
 
@@ -277,6 +278,11 @@ function compactTrafficStats(value: unknown): AgentTrafficStat[] {
   return stats;
 }
 
+function tunnelReportEnabled(value: unknown, fallback = false) {
+  if (value === undefined || value === null || value === "") return fallback;
+  return value === true || value === 1 || (typeof value === "string" && ["1", "true"].includes(value.trim().toLowerCase()));
+}
+
 async function tunnelEntryHostIds(tunnel: any) {
   const ids = new Set<number>();
   const primary = Number(tunnel?.entryHostId || 0);
@@ -284,9 +290,9 @@ async function tunnelEntryHostIds(tunnel: any) {
   const entryGroupId = Number(tunnel?.entryGroupId || 0);
   if (entryGroupId > 0) {
     const group = await db.getForwardGroupById(entryGroupId) as any;
-    if (group?.isEnabled && String(group.groupMode || "") === "entry") {
+    if (tunnelReportEnabled(group?.isEnabled) && String(group.groupMode || "") === "entry") {
       for (const member of group.members || []) {
-        const hostId = member?.isEnabled !== false && member?.memberType === "host" ? Number(member.hostId || 0) : 0;
+        const hostId = tunnelReportEnabled(member?.isEnabled, true) && member?.memberType === "host" ? Number(member.hostId || 0) : 0;
         if (hostId > 0) ids.add(hostId);
       }
     }
@@ -304,6 +310,15 @@ export function tunnelProbeTargetHostId(
   const hopIndex = Number(report.hopIndex);
   const hopCount = Number(report.hopCount);
   if (Number.isInteger(hopIndex) && Number.isInteger(hopCount) && hopCount > 0) {
+    const relayBranchEntry = seriesKey.match(/^relay-branch-entry-(\d+)$/);
+    const relayBranchExit = seriesKey.match(/^relay-branch-exit-(\d+)-(\d+)$/);
+    if (relayBranchEntry) return Number(relayBranchEntry[1]) || null;
+    if (relayBranchExit) return Number(relayBranchExit[2]) || null;
+    const branchMatch = seriesKey.match(/^branch-exit-(\d+)$/);
+    if (branchMatch) {
+      const endpoint = branchedTunnelExitEndpoints(tunnel, hops, exitNodes).find((item) => Number(item.hostId) === Number(branchMatch[1]));
+      return endpoint ? Number(endpoint.hostId) : null;
+    }
     if (isTunnelRelayFailover(tunnel, hops) && /^relay-\d+$/.test(seriesKey)) {
       const relayIndex = Number(seriesKey.slice("relay-".length)) - 1;
       const relay = tunnelRelayCandidates(hops)[relayIndex] as any;
@@ -353,6 +368,38 @@ export async function validateTunnelProbeSource(
   if (topologyKey && topologyKey !== expectedTopologyKey) return false;
   const hopIndex = Number(report.hopIndex);
   const hopCount = Number(report.hopCount);
+  const relayBranchEndpoints = relayBranchedTunnelExitEndpoints(tunnel, hops, exitNodes);
+  if (relayBranchEndpoints.length > 0) {
+    if (!topologyKey || topologyKey !== expectedTopologyKey || hopCount !== 2) return false;
+    const key = String(report.seriesKey || "");
+    const entryMatch = key.match(/^relay-branch-entry-(\d+)$/);
+    const exitMatch = key.match(/^relay-branch-exit-(\d+)-(\d+)$/);
+    const relays = tunnelRelayCandidates(hops) as any[];
+    if (entryMatch && hopIndex === 0) {
+      const relay = relays.find((item) => Number(item.hostId) === Number(entryMatch[1]));
+      const entryIds = context?.entryHostIds || await tunnelEntryHostIds(tunnel);
+      return !!relay && entryIds.has(Number(hostId)) && Number(report.targetPort) === Number(relay.listenPort);
+    }
+    if (exitMatch && hopIndex === 1) {
+      const relay = relays.find((item) => Number(item.hostId) === Number(exitMatch[1]));
+      const endpoint = relayBranchEndpoints.find((item) => Number(item.hostId) === Number(exitMatch[2]));
+      return !!relay && !!endpoint && Number(relay.hostId) === Number(hostId) && Number(report.targetPort) === Number(endpoint.listenPort);
+    }
+    return false;
+  }
+  const branchEndpoints = branchedTunnelExitEndpoints(tunnel, hops, exitNodes);
+  if (branchEndpoints.length > 0) {
+    if (!topologyKey || topologyKey !== expectedTopologyKey || !Number.isInteger(hopIndex) || hopCount !== hops.length - 1 || hopIndex < 0 || hopIndex >= hopCount) return false;
+    if (hopIndex === 0) {
+      const entryHostIds = context?.entryHostIds || await tunnelEntryHostIds(tunnel);
+      if (!entryHostIds.has(Number(hostId))) return false;
+    } else if (Number(hops[hopIndex]?.hostId || 0) !== Number(hostId)) return false;
+    const key = String(report.seriesKey || "");
+    if (hopIndex < hopCount - 1) return key === "branch-common" && Number(report.targetPort) === Number(hops[hopIndex + 1]?.listenPort);
+    const match = key.match(/^branch-exit-(\d+)$/);
+    const endpoint = match ? branchEndpoints.find((item) => Number(item.hostId) === Number(match[1])) : null;
+    return !!endpoint && Number(report.targetPort) === Number(endpoint.listenPort);
+  }
   if (Number.isInteger(hopIndex) && Number.isInteger(hopCount) && hopCount > 0) {
     if (isTunnelRelayFailover(tunnel, hops)) {
       const relayMatch = String(report.seriesKey || "").match(/^relay-(\d+)$/);
@@ -1083,7 +1130,12 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
       const multiEntryGeneration = `${topologyKey}:entries:${orderedEntryHostIds.join(",")}`;
       const relayFailover = isTunnelRelayFailover(tunnel, hops);
       const relayCandidateCount = relayFailover ? tunnelRelayCandidates(hops).length : 0;
+      const branchedEndpoints = branchedTunnelExitEndpoints(tunnel, hops, exitNodes);
+      const relayBranchedEndpoints = relayBranchedTunnelExitEndpoints(tunnel, hops, exitNodes);
       const branchByKey = new Map<string, { key: string; label: string; latencyMs: number | null; isTimeout: boolean; probeCount?: number; probeSuccesses?: number }>();
+      const relayPathSeries: Array<{ key: string; label: string; latencyMs: number | null; isTimeout: boolean; probeCount?: number; probeSuccesses?: number }> = [];
+      let branchUpdated = false;
+      let relayPathsPartial = false;
       for (const report of reports) {
         if (!await validateTunnelProbeSource(Number(host.id), tunnel, report, { hops, exitNodes, entryHostIds, topologyKey })) continue;
         const latencyValue = typeof report.latencyMs === "number" && report.latencyMs > 0 ? report.latencyMs : null;
@@ -1092,6 +1144,43 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
         const hopIndex = Number(report.hopIndex);
         const hopCount = Number(report.hopCount);
         const hasHop = Number.isInteger(hopIndex) && Number.isInteger(hopCount) && hopCount > 0;
+        if (relayBranchedEndpoints.length > 0) {
+          branchUpdated = true;
+          const entryMatch = seriesKey.match(/^relay-branch-entry-(\d+)$/);
+          const exitMatch = seriesKey.match(/^relay-branch-exit-(\d+)-(\d+)$/);
+          const relayId = Number(entryMatch?.[1] || exitMatch?.[1] || 0);
+          const targets = entryMatch ? relayBranchedEndpoints : relayBranchedEndpoints.filter((endpoint) => Number(endpoint.hostId) === Number(exitMatch?.[2] || 0));
+          for (const endpoint of targets) {
+            const pathKey = `relay-branch-${relayId}-${Number(endpoint.hostId)}`;
+            const toHostId = entryMatch ? relayId : Number(endpoint.hostId);
+            if (multiEntry) {
+              recordTunnelMultiEntryLatency({ tunnelId, sourceHostId: Number(host.id), sourceLabel: String((host as any).name || `入口 ${host.id}`), expectedEntryHostIds: orderedEntryHostIds,
+                hopIndex, hopCount, latencyMs: latencyValue, isTimeout, probeCount: report.probeCount, probeSuccesses: report.probeSuccesses, generation: multiEntryGeneration, pathKey, toHostId });
+            } else {
+              recordTunnelAutoHopLatency({ tunnelId, hopIndex, hopCount, latencyMs: latencyValue, isTimeout, probeCount: report.probeCount, probeSuccesses: report.probeSuccesses,
+                generation: multiEntryGeneration, pathKey, fromHostId: Number(host.id), toHostId });
+            }
+          }
+          continue;
+        }
+        if (branchedEndpoints.length > 0) {
+          branchUpdated = true;
+          const targets = seriesKey === "branch-common" ? branchedEndpoints : branchedEndpoints.filter((endpoint) => seriesKey === `branch-exit-${Number(endpoint.hostId)}`);
+          for (const endpoint of targets) {
+            const pathKey = `branch-exit-${Number(endpoint.hostId)}`;
+            const toHostId = seriesKey === "branch-common" ? Number(hops[hopIndex + 1]?.hostId || 0) : Number(endpoint.hostId);
+            if (multiEntry) {
+              recordTunnelMultiEntryLatency({ tunnelId, sourceHostId: Number(host.id), sourceLabel: String((host as any).name || `入口 ${host.id}`),
+                expectedEntryHostIds: orderedEntryHostIds, hopIndex, hopCount, latencyMs: latencyValue, isTimeout,
+                probeCount: report.probeCount, probeSuccesses: report.probeSuccesses, generation: multiEntryGeneration, pathKey, toHostId });
+            } else {
+              recordTunnelAutoHopLatency({ tunnelId, hopIndex, hopCount, latencyMs: latencyValue, isTimeout,
+                probeCount: report.probeCount, probeSuccesses: report.probeSuccesses, generation: multiEntryGeneration, pathKey,
+                fromHostId: Number(host.id), toHostId });
+            }
+          }
+          continue;
+        }
         if (multiEntry) {
           const aggregate = recordTunnelMultiEntryLatency({
             tunnelId,
@@ -1241,7 +1330,87 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
         }
       }
 
-      if (relayFailover) {
+      if ((branchedEndpoints.length > 0 || relayBranchedEndpoints.length > 0) && !branchUpdated) return;
+      if (branchedEndpoints.length > 0) {
+        const hopCount = hops.length - 1;
+        const aggregates = branchedEndpoints.map((endpoint, index) => {
+          const pathKey = `branch-exit-${Number(endpoint.hostId)}`;
+          const details = multiEntry
+            ? getTunnelMultiEntryHopDetails({ tunnelId, expectedEntryHostIds: orderedEntryHostIds, hopCount, generation: multiEntryGeneration, pathKey, referenceAt: Date.now(), maxAgeMs: 120_000, maxSkewMs: 120_000 })
+            : getTunnelAutoHopDetails({ tunnelId, hopCount, generation: multiEntryGeneration, pathKey, referenceAt: Date.now(), maxAgeMs: 120_000, maxSkewMs: 120_000 });
+          const aggregate = !details || details.filter((detail) => detail.hopIndex === 0).length !== orderedEntryHostIds.length || details.filter((detail) => detail.hopIndex > 0).length !== hopCount - 1
+            ? null
+            : multiEntry
+              ? getTunnelMultiEntryLatency({ tunnelId, expectedEntryHostIds: orderedEntryHostIds, hopCount, generation: multiEntryGeneration, pathKey })
+              : getTunnelAutoHopAggregate(tunnelId, hopCount, multiEntryGeneration, pathKey);
+          return { key: index === 0 ? "primary" : `exit-${index + 1}`, label: index === 0 ? "主出口" : `出口 ${index + 1}`, aggregate };
+        });
+        // Publish completed branches separately, but never a total that omits
+        // an exit still waiting for a fresh report.
+        if (aggregates.some((item) => !item.aggregate)) {
+          const recordedAt = new Date();
+          for (const item of aggregates) {
+            const aggregate = item.aggregate;
+            if (!aggregate) continue;
+            await db.insertTunnelLatencyStat({ tunnelId, latencyMs: aggregate.success ? aggregate.latencyMs : null, isTimeout: !aggregate.success,
+              seriesKey: item.key, seriesLabel: `${item.label}（其他出口待上报）`, recordedAt }, { preserveMessage: true, updateTunnel: false });
+          }
+          return;
+        }
+        for (const item of aggregates) {
+          const aggregate = item.aggregate!;
+          branchByKey.set(item.key, { key: item.key, label: "partial" in aggregate && aggregate.partial ? `${item.label}（部分入口不可用）` : item.label, latencyMs: aggregate.success ? aggregate.latencyMs : null,
+            isTimeout: !aggregate.success, probeCount: ("probeCount" in aggregate ? Number(aggregate.probeCount) : 1) || 1,
+            probeSuccesses: "probeSuccesses" in aggregate ? Number(aggregate.probeSuccesses) : (aggregate.success ? 1 : 0) });
+        }
+      }
+      if (relayBranchedEndpoints.length > 0) {
+        const relays = tunnelRelayCandidates(hops) as any[];
+        const byExit = relayBranchedEndpoints.map((endpoint, index) => {
+          const paths = relays.map((relay) => {
+            const pathKey = `relay-branch-${Number(relay.hostId)}-${Number(endpoint.hostId)}`;
+            const details = multiEntry
+              ? getTunnelMultiEntryHopDetails({ tunnelId, expectedEntryHostIds: orderedEntryHostIds, hopCount: 2, generation: multiEntryGeneration, pathKey, referenceAt: Date.now(), maxAgeMs: 120_000, maxSkewMs: 120_000 })
+              : getTunnelAutoHopDetails({ tunnelId, hopCount: 2, generation: multiEntryGeneration, pathKey, referenceAt: Date.now(), maxAgeMs: 120_000, maxSkewMs: 120_000 });
+            if (!details || details.filter((detail) => detail.hopIndex === 0).length !== orderedEntryHostIds.length || details.filter((detail) => detail.hopIndex === 1).length !== 1) return { pathKey, aggregate: null };
+            const aggregate = multiEntry ? getTunnelMultiEntryLatency({ tunnelId, expectedEntryHostIds: orderedEntryHostIds, hopCount: 2, generation: multiEntryGeneration, pathKey })
+              : getTunnelAutoHopAggregate(tunnelId, 2, multiEntryGeneration, pathKey);
+            return { pathKey, aggregate };
+          });
+          return { key: index === 0 ? "primary" : `exit-${index + 1}`, label: index === 0 ? "主出口" : `出口 ${index + 1}`, paths };
+        });
+        if (byExit.some((item) => item.paths.some((path) => !path.aggregate))) {
+          const recordedAt = new Date();
+          for (const item of byExit) {
+            for (const path of item.paths) {
+              const aggregate = path.aggregate;
+              if (!aggregate) continue;
+              await db.insertTunnelLatencyStat({ tunnelId, latencyMs: aggregate.success ? aggregate.latencyMs : null, isTimeout: !aggregate.success,
+                seriesKey: path.pathKey, seriesLabel: `${item.label} / ${path.pathKey}（其他路径待上报）`, recordedAt }, { preserveMessage: true, updateTunnel: false });
+            }
+            if (item.paths.some((path) => !path.aggregate)) continue;
+            const selected = item.paths.flatMap((path) => path.aggregate?.success ? [path.aggregate] : []).sort((a, b) => Number(b.latencyMs || 0) - Number(a.latencyMs || 0))[0];
+            await db.insertTunnelLatencyStat({ tunnelId, latencyMs: selected?.latencyMs ?? null, isTimeout: !selected,
+              seriesKey: item.key, seriesLabel: `${item.label}（其他出口待上报）`, recordedAt }, { preserveMessage: true, updateTunnel: false });
+          }
+          return;
+        }
+        for (const item of byExit) {
+          for (const path of item.paths) {
+            const aggregate = path.aggregate!;
+            relayPathSeries.push({ key: path.pathKey, label: `${item.label} / ${path.pathKey}`, latencyMs: aggregate.success ? aggregate.latencyMs : null,
+              isTimeout: !aggregate.success, probeCount: ("probeCount" in aggregate ? Number(aggregate.probeCount) : 1) || 1,
+              probeSuccesses: "probeSuccesses" in aggregate ? Number(aggregate.probeSuccesses) : (aggregate.success ? 1 : 0) });
+          }
+          const successful = item.paths.flatMap((path) => path.aggregate?.success ? [path.aggregate] : []);
+          const selected = successful.sort((a, b) => Number(b.latencyMs || 0) - Number(a.latencyMs || 0))[0];
+          if (successful.length < item.paths.length) relayPathsPartial = true;
+          branchByKey.set(item.key, { key: item.key, label: successful.length < item.paths.length ? `${item.label}（部分中转不可用）` : item.label,
+            latencyMs: selected?.latencyMs ?? null, isTimeout: !selected, probeCount: selected && "probeCount" in selected ? Number(selected.probeCount) || 1 : 1,
+            probeSuccesses: selected && "probeSuccesses" in selected ? Number(selected.probeSuccesses) : selected ? 1 : 0 });
+        }
+      }
+      if (relayFailover && relayBranchedEndpoints.length === 0) {
         const aggregates = Array.from({ length: relayCandidateCount }, (_, index) => {
           const key = `relay-${index + 1}`;
           return {
@@ -1276,7 +1445,7 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
       const branches = Array.from(branchByKey.values());
       if (branches.length === 0) return;
       const recordedAt = new Date();
-      await mapWithConcurrency(branches, 4, async (branch) => {
+      await mapWithConcurrency([...branches, ...relayPathSeries], 4, async (branch) => {
         await db.insertTunnelLatencyStat({
           tunnelId,
           latencyMs: branch.isTimeout ? null : branch.latencyMs,
@@ -1296,7 +1465,7 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
         probeCount: summary.probeCount ?? 1,
         probeSuccesses: summary.probeSuccesses ?? (summary.unavailable ? 0 : 1),
         seriesKey: "total",
-        seriesLabel: summary.partial ? "可用出口最大延迟" : "最大延迟",
+        seriesLabel: summary.partial ? "可用出口最大延迟" : relayPathsPartial ? "可用中转最大路径延迟" : "最大延迟",
         recordedAt,
       }, { preserveMessage: true });
       if (!summary.unavailable && !tunnel.isRunning) await db.updateTunnelRunningStatus(tunnelId, true);
