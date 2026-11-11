@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.4.23] - 2026-11-11
+
+### Fixed
+
+- 修复订阅创建向导的模板下拉框重复显示默认模板的问题，并按文件名去重。
+- 修复 Egern 模板含有 `proxies:` 配置时被错误归类为 Clash 模板的问题。
+
+Agent 保持 `2.2.231`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.4.22] - 2026-11-01
 
 ### Improved
