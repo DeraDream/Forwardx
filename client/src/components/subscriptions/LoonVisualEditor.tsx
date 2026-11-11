@@ -3,6 +3,7 @@ import { ChevronDown, ChevronUp, GripVertical, Plus, Trash2 } from "lucide-react
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 type Section = { name: string; lines: string[] };
 type Group = {
@@ -78,6 +79,8 @@ export function LoonVisualEditor({ value, view = "groups", onChange, onError, on
   const [groups, setGroups] = useState<Group[]>([]);
   const [rules, setRules] = useState<Rule[]>([]);
   const [expanded, setExpanded] = useState<number[]>([]);
+  const [ruleDraft, setRuleDraft] = useState("DOMAIN-SUFFIX,example.com,DIRECT");
+  const [ruleDialogOpen, setRuleDialogOpen] = useState(false);
   const markDirty = () => onDirtyChange(true);
   useEffect(() => {
     try {
@@ -146,11 +149,11 @@ export function LoonVisualEditor({ value, view = "groups", onChange, onError, on
     setRules((items) => items.filter((rule) => rule.target !== name));
     setExpanded((items) => items.filter((position) => position !== index).map((position) => position > index ? position - 1 : position));
   };
-  if (view === "rules") return <section className="min-h-0 flex-1 overflow-auto p-3" onChangeCapture={markDirty}>
-    <div className="mb-3 flex items-center justify-between"><div><strong className="text-sm">Loon 流量规则 · {rules.length}</strong><p className="mt-0.5 text-xs text-muted-foreground">按 [Rule] 原始顺序匹配；一行对应一条 Loon 规则。</p></div><Button size="sm" onClick={() => { markDirty(); setRules((items) => [...items, { value: "DOMAIN-SUFFIX,example.com,DIRECT", target: "DIRECT" }]); }}><Plus className="mr-1 size-4" />添加规则</Button></div>
+  if (view === "rules") return <><section className="min-h-0 flex-1 overflow-auto p-3" onChangeCapture={markDirty}>
+    <div className="mb-3 flex items-center justify-between"><div><strong className="text-sm">Loon 流量规则 · {rules.length}</strong><p className="mt-0.5 text-xs text-muted-foreground">按 [Rule] 原始顺序匹配；一行对应一条 Loon 规则。</p></div><Button size="sm" onClick={() => { setRuleDraft("DOMAIN-SUFFIX,example.com,DIRECT"); setRuleDialogOpen(true); }}><Plus className="mr-1 size-4" />添加规则</Button></div>
     <div className="overflow-hidden rounded-xl border border-border"><div className="grid grid-cols-[34px_minmax(180px,1fr)_120px_36px] gap-2 border-b border-border bg-muted/40 px-3 py-2 text-[10px] text-muted-foreground"><span>#</span><span>规则内容</span><span>路由目标</span><span /></div>{rules.map((rule, index) => <div key={index} className="grid grid-cols-[34px_minmax(180px,1fr)_120px_36px] items-center gap-2 border-b border-border/60 px-3 py-2 last:border-b-0"><span className="font-mono text-[11px] text-muted-foreground">{index + 1}</span><Input className="h-8 font-mono text-xs" value={rule.value} onChange={(event) => setRules((items) => items.map((item, position) => position === index ? { value: event.target.value, target: targetOf(event.target.value) } : item))} /><span className="truncate rounded bg-primary/10 px-2 py-1 font-mono text-[11px] text-primary">{rule.target || "未指定"}</span><Button variant="ghost" size="icon" className="size-8 text-destructive" onClick={() => { markDirty(); setRules((items) => items.filter((_, position) => position !== index)); }}><Trash2 className="size-4" /></Button></div>)}</div>
     <div className="mt-3 flex justify-end"><Button onClick={() => { onChange(output); onDirtyChange(false); }}>应用规则更改</Button></div>
-  </section>;
+  </section><Dialog open={ruleDialogOpen} onOpenChange={setRuleDialogOpen}><DialogContent onOpenAutoFocus={(event) => event.preventDefault()}><DialogHeader><DialogTitle>添加 Loon 流量规则</DialogTitle></DialogHeader><label className="grid gap-1.5 py-2 text-sm">规则内容<Input value={ruleDraft} onChange={(event) => setRuleDraft(event.target.value)} placeholder="DOMAIN-SUFFIX,example.com,DIRECT" /></label><DialogFooter><Button variant="outline" onClick={() => setRuleDialogOpen(false)}>取消</Button><Button onClick={() => { const value = ruleDraft.trim(); if (value) { markDirty(); setRules((items) => [...items, { value, target: targetOf(value) }]); setRuleDialogOpen(false); } }}>添加规则</Button></DialogFooter></DialogContent></Dialog></>;
   return (
     <section className="min-h-0 flex-1 overflow-auto p-3" onChangeCapture={markDirty}>
       <div className="mb-3 flex items-center justify-between">
