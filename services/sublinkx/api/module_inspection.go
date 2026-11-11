@@ -28,8 +28,10 @@ type ModuleInspection struct {
 	Version     string         `json:"version,omitempty"`
 	Icon        string         `json:"icon,omitempty"`
 	Tags        []string       `json:"tags,omitempty"`
-	Sections    map[string]int `json:"sections"`
-	Content     string         `json:"content"`
+	Sections               map[string]int `json:"sections"`
+	Content                string         `json:"content"`
+	CompatArguments        map[string]any `json:"compat_arguments,omitempty"`
+	CompatArgumentsSchema  map[string]any `json:"compat_arguments_schema,omitempty"`
 }
 
 type moduleInspectRequest struct {
@@ -259,10 +261,12 @@ func inspectEgernModule(content string) (*ModuleInspection, error) {
 	author, _ := root["author"].(string)
 	version, _ := root["version"].(string)
 	icon, _ := root["icon"].(string)
+	compatArguments, _ := root["compat_arguments"].(map[string]any)
+	compatArgumentsSchema, _ := root["compat_arguments_schema"].(map[string]any)
 	if name == "" {
 		name = "Egern Module"
 	}
-	return &ModuleInspection{Kind: "egern", Name: name, Description: description, Author: author, Version: version, Icon: icon, Sections: sections, Content: content}, nil
+	return &ModuleInspection{Kind: "egern", Name: name, Description: description, Author: author, Version: version, Icon: icon, Sections: sections, Content: content, CompatArguments: compatArguments, CompatArgumentsSchema: compatArgumentsSchema}, nil
 }
 
 func inspectModule(content string) (*ModuleInspection, error) {
