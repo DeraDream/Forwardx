@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.4.26] - 2026-11-11
+
+### Fixed
+
+- 修复 Egern / Loon 可视化流量规则、策略组与规则集编辑后未同步到模板，保存时被“未应用更改”拦截并循环弹出放弃修改确认的问题。
+- 优化 iPad/Safari 下 Clash、Egern、Loon 流量规则列表的触摸纵向滚动。
+
+Agent 保持 `2.2.231`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.4.25] - 2026-11-11
 
 ### Improved

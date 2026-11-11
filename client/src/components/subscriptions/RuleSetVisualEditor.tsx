@@ -200,7 +200,7 @@ export function RuleSetVisualEditor({ kind, value, focusName, focusNonce, onChan
   const commit = (next: RuleSet[]) => {
     setItems(next);
     onChange(writeRuleSets(kind, value, next));
-    onDirtyChange(true);
+    onDirtyChange(false);
   };
   const newItem = (): RuleSet => ({ id: `new:${crypto.randomUUID()}`, name: "", source: "", path: "", sourceType: "http", behavior: "classical", format: "yaml", policy: "DIRECT", interval: "86400", enabled: true });
   const save = () => {
