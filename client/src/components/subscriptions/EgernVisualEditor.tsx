@@ -35,6 +35,11 @@ const types = [
   "external",
   "conditional",
 ];
+const defaultLatencyTestURL = "http://www.gstatic.com/generate_204";
+const getLatencyTestURL = (group: Group) =>
+  typeof group.latency_test_url === "string" && group.latency_test_url.trim()
+    ? group.latency_test_url
+    : defaultLatencyTestURL;
 const ruleTypes = [
   "domain",
   "domain_suffix",
@@ -64,12 +69,17 @@ function parse(value: string) {
     const [type, settings] = Object.entries(entry || {})[0] || ["select", {}];
     const normalized = settings && typeof settings === "object" ? settings : {};
     const { policies, ...rest } = normalized;
-    return {
+    const group = {
       name: "",
       type,
       ...rest,
       policies: Array.isArray(policies) ? policies.map(String) : [],
     } as Group;
+    if (group.type === "auto_test") {
+      if (group.urls === null) delete group.urls;
+      group.latency_test_url = getLatencyTestURL(group);
+    }
+    return group;
   });
   const rules = (Array.isArray(root.rules) ? root.rules : []).map(
     (entry: Record<string, Record<string, unknown>>) => {
@@ -146,14 +156,20 @@ export function EgernVisualEditor({ value, view = "groups", onChange, onError, o
       stringify(
         {
           ...root,
-          policy_groups: groups.map(({ type, policies, ...settings }) => ({
-            [type]: {
-              ...settings,
-              ...((Array.isArray(policies) ? policies : []).filter(Boolean).length
-                ? { policies: (Array.isArray(policies) ? policies : []).filter(Boolean) }
-                : {}),
-            },
-          })),
+          policy_groups: groups.map(({ type, policies, ...settings }) => {
+            if (type === "auto_test") {
+              if (settings.urls === null) delete settings.urls;
+              settings.latency_test_url = getLatencyTestURL({ type, policies, ...settings } as Group);
+            }
+            return {
+              [type]: {
+                ...settings,
+                ...((Array.isArray(policies) ? policies : []).filter(Boolean).length
+                  ? { policies: (Array.isArray(policies) ? policies : []).filter(Boolean) }
+                  : {}),
+              },
+            };
+          }),
           rules: rules.map(({ type, ...settings }) => ({ [type]: settings })),
         },
         { lineWidth: 0 },
@@ -196,7 +212,7 @@ export function EgernVisualEditor({ value, view = "groups", onChange, onError, o
     onRulesChange={(next) => { markDirty(); setRules(next); }}
   />;
   return (
-    <section className="min-h-0 flex-1 overflow-auto p-3" onChangeCapture={markDirty}>
+    <section className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3" onChangeCapture={markDirty}>
       <div className="mb-3 flex items-center justify-between">
         <strong className="text-sm">Egern 策略组 · {groups.length}</strong>
         <Button
@@ -258,7 +274,11 @@ export function EgernVisualEditor({ value, view = "groups", onChange, onError, o
                     setGroups((items) =>
                       items.map((item, position) =>
                         position === index
-                          ? { ...item, type }
+                          ? {
+                              ...item,
+                              type,
+                              ...(type === "auto_test" ? { latency_test_url: getLatencyTestURL(item) } : {}),
+                            }
                           : item,
                       ),
                     );
@@ -286,6 +306,21 @@ export function EgernVisualEditor({ value, view = "groups", onChange, onError, o
                   )
                 }
               />
+              {group.type === "auto_test" && (
+                <label className="grid gap-1.5 text-xs font-medium">
+                  测速 URL
+                  <Input
+                    value={getLatencyTestURL(group)}
+                    placeholder={defaultLatencyTestURL}
+                    onChange={(event) => setGroups((items) =>
+                      items.map((item, position) => position === index
+                        ? { ...item, latency_test_url: event.target.value }
+                        : item,
+                      ),
+                    )}
+                  />
+                </label>
+              )}
               <div className="border-t pt-2 text-sm font-semibold">
                 流量规则（{groupRules(group.name).length}）
               </div>

@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.4.32] - 2026-11-12
+
+### Fixed
+
+- 修复面板内实际使用的 Egern 可视化策略组编辑器：`auto_test` 现显示可编辑的测速 URL，默认 Google 204；策略组列表恢复纵向滚动。
+
+Agent 保持 `2.2.231`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.4.31] - 2026-11-12
 
 ### Fixed

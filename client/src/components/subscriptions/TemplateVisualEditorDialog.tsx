@@ -1142,10 +1142,10 @@ export function TemplateVisualEditorDialog({
               </div>
             ) : mode === "visual" && templateKind !== "clash" && templateKind !== "unknown" ? (
               <div className="grid min-h-0 flex-1 overflow-hidden bg-muted/20 lg:grid-cols-[minmax(420px,1fr)_minmax(420px,1fr)]">
-                <section className="min-h-0 overflow-hidden p-4">
-                  <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+                <section className="flex h-full min-h-0 flex-col overflow-hidden p-4">
+                  <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border bg-card shadow-sm">
                     <header className="border-b border-border bg-muted/30 px-4 py-3"><p className="text-sm font-semibold text-foreground">{templateKind === "egern" ? "Egern 策略组" : "Loon 策略组"} <span className="ml-1 rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] text-primary">原生结构</span></p><p className="mt-0.5 text-xs text-muted-foreground">{templateKind === "egern" ? "编辑 policy_groups，并同步引用这些策略的规则。" : "编辑 [Proxy Group]，并同步引用这些策略组的规则。"}</p></header>
-                    <div className="min-h-0 flex-1 overflow-hidden">{templateKind === "egern" ? <EgernVisualEditor view="groups" value={source} onChange={setSource} onDirtyChange={setExternalVisualDirty} onError={(message) => { if (message) toast.error(message); }} /> : <LoonVisualEditor view="groups" value={source} onChange={setSource} onDirtyChange={setExternalVisualDirty} onError={(message) => { if (message) toast.error(message); }} />}</div>
+                    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{templateKind === "egern" ? <EgernVisualEditor view="groups" value={source} onChange={setSource} onDirtyChange={setExternalVisualDirty} onError={(message) => { if (message) toast.error(message); }} /> : <LoonVisualEditor view="groups" value={source} onChange={setSource} onDirtyChange={setExternalVisualDirty} onError={(message) => { if (message) toast.error(message); }} />}</div>
                   </div>
                 </section>
                 <section className="hidden min-h-0 flex-col overflow-hidden border-l border-border bg-background lg:flex">
