@@ -1131,7 +1131,17 @@ function DashboardLayoutContent({
     };
   }, [backgroundUpgrade, upgradeJob, upgradeRefreshScheduled, upgradeStatus?.currentVersion]);
   const upgradeProgress = getLayoutUpgradeProgress(displayUpgradeJob);
-  const isPanelVersionTaskVisible = !!displayUpgradeJob?.status && displayUpgradeJob.status !== "idle";
+  const currentPanelVersion = upgradeStatus?.currentVersion || updateInfo?.currentVersion || "";
+  // A persisted job can outlive the restart that applies it. Once this panel
+  // is already at its target, it is history rather than an actionable update.
+  const isPanelVersionTaskAtCurrentVersion = !!displayUpgradeJob?.targetVersion
+    && !!currentPanelVersion
+    && (displayUpgradeJob.mode === "rollback"
+      ? comparePanelVersions(currentPanelVersion, displayUpgradeJob.targetVersion) <= 0
+      : comparePanelVersions(currentPanelVersion, displayUpgradeJob.targetVersion) >= 0);
+  const isPanelVersionTaskVisible = !!displayUpgradeJob?.status
+    && displayUpgradeJob.status !== "idle"
+    && !isPanelVersionTaskAtCurrentVersion;
   const isPanelRollbackTask = displayUpgradeJob?.mode === "rollback";
   const panelVersionActionLabel = isPanelRollbackTask ? "回退" : "升级";
   const upgradeTargetVersion = isPanelVersionTaskVisible
@@ -1155,13 +1165,17 @@ function DashboardLayoutContent({
   const upgradeRefreshText = upgradeRefreshCountdown !== null
     ? (upgradeRefreshCountdown > 0 ? `${upgradeRefreshCountdown} 秒后自动刷新` : "正在刷新页面")
     : "系统恢复后将自动刷新";
-  const hasPanelUpdate = isAdmin && !!updateInfo?.hasUpdate && !!upgradeTargetVersion;
+  const hasPanelUpdate = isAdmin
+    && !!updateInfo?.hasUpdate
+    && !!upgradeTargetVersion
+    && comparePanelVersions(upgradeTargetVersion, currentPanelVersion) > 0;
   const showUpgradeNotice = isAdmin && (
     (hasPanelUpdate && !isPanelUpdateNoticeDismissed) ||
-    displayUpgradeJob?.status === "running" ||
-    displayUpgradeJob?.status === "success" ||
-    displayUpgradeJob?.status === "waiting_assets" ||
-    displayUpgradeJob?.status === "error"
+    (isPanelVersionTaskVisible && (
+      displayUpgradeJob?.status === "running"
+      || displayUpgradeJob?.status === "waiting_assets"
+      || displayUpgradeJob?.status === "error"
+    ))
   );
   const canDismissPanelUpdateNotice = hasPanelUpdate && !isPanelVersionTaskVisible && !!normalizedUpgradeTargetVersion;
   const dismissPanelUpdateNotice = () => {
@@ -1198,10 +1212,11 @@ function DashboardLayoutContent({
     setAccountMenuOpen(false);
     if (
       hasPanelUpdate ||
-      displayUpgradeJob?.status === "running" ||
-      displayUpgradeJob?.status === "success" ||
-      displayUpgradeJob?.status === "waiting_assets" ||
-      displayUpgradeJob?.status === "error"
+      (isPanelVersionTaskVisible && (
+        displayUpgradeJob?.status === "running"
+        || displayUpgradeJob?.status === "waiting_assets"
+        || displayUpgradeJob?.status === "error"
+      ))
     ) {
       setShowUpgradeDialog(true);
       refetchUpgradeStatus();
