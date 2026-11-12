@@ -1107,6 +1107,14 @@ export function TemplateVisualEditorDialog({
                 }}
                 onOpenRuleSet={(name) => { setRuleSetFocus(name); setRuleSetFocusNonce((nonce) => nonce + 1); setMode("ruleSets"); }}
               />
+            ) : mode === "rules" && templateKind === "egern" ? (
+              <EgernVisualEditor
+                view="rules"
+                value={source}
+                onChange={setSource}
+                onDirtyChange={setExternalVisualDirty}
+                onError={(message) => { if (message) toast.error(message); }}
+              />
             ) : mode === "rules" ? (
               <div className="grid min-h-0 flex-1 overflow-hidden bg-muted/20 lg:grid-cols-[minmax(420px,1fr)_minmax(420px,1fr)]">
                 <section className="flex min-h-0 flex-col overflow-hidden p-4">

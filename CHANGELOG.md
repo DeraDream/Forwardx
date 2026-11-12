@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.4.28] - 2026-11-12
+
+### Fixed
+
+- 修复 Egern 流量规则页错误嵌套双栏工作区，恢复规则列表与 YAML 预览各占一栏的正常布局。
+
+Agent 保持 `2.2.231`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.4.27] - 2026-11-12
 
 ### Improved
