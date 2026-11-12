@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.4.31] - 2026-11-12
+
+### Fixed
+
+- Egern 自动测速策略组补充可编辑的测速 URL，默认使用 Google 204 地址；生成订阅时会清理非法的 `urls: null` 并补全测速地址，避免配置更新失败。
+- 修复 Egern 策略组编辑列表的纵向滚动。
+
+Agent 保持 `2.2.231`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.4.30] - 2026-11-12
 
 ### Fixed

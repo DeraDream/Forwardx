@@ -203,6 +203,9 @@ func TestEncodeEgernInjectsSelectedNodesIntoPolicyGroups(t *testing.T) {
 	if len(autoPolicies) != 1 || autoPolicies[0] != "Node A" {
 		t.Fatalf("auto_test policies = %#v, want [Node A]", autoPolicies)
 	}
+	if autoGroup["latency_test_url"] != DefaultEgernLatencyTestURL {
+		t.Fatalf("auto_test latency_test_url = %#v, want %q", autoGroup["latency_test_url"], DefaultEgernLatencyTestURL)
+	}
 	for _, field := range []string{"type", "urls", "update_interval", "filter"} {
 		if _, exists := autoGroup[field]; exists {
 			t.Fatalf("converted auto_test group retained external-only field %q: %#v", field, autoGroup)

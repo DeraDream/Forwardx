@@ -24,6 +24,7 @@ policy_groups:
   - auto_test:
       name: Auto
       policies: []
+      latency_test_url: http://www.gstatic.com/generate_204
       interval: 600
       tolerance: 100
       timeout: 5

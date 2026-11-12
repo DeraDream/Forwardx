@@ -9,6 +9,7 @@ import (
 )
 
 const DefaultEgernUpdateIntervalMinutes = 1440
+const DefaultEgernLatencyTestURL = "http://www.gstatic.com/generate_204"
 
 // EncodeEgern generates an Egern Profile.yaml independently from the Clash
 // and Surge encoders. Only the existing URI parsers are shared.
@@ -279,6 +280,18 @@ func decodeEgern(proxies []interface{}, proxyNames []string, sqlconfig SqlConfig
 			}
 			if !isEgernLocalPolicyGroupType(groupType) {
 				continue
+			}
+			if groupType == "auto_test" {
+				// Egern requires urls to be a sequence when present. Older visual
+				// templates may serialize an empty value as null, which makes the
+				// entire profile invalid.
+				if urls, exists := settings["urls"]; exists && urls == nil {
+					delete(settings, "urls")
+				}
+				latencyURL, _ := settings["latency_test_url"].(string)
+				if strings.TrimSpace(latencyURL) == "" {
+					settings["latency_test_url"] = DefaultEgernLatencyTestURL
+				}
 			}
 			name, _ := settings["name"].(string)
 			selected := selectedProxyNamesForGroup(name, proxyNames, rules)
