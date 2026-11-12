@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { ChevronDown, ChevronUp, GripVertical, Plus, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronUp, Code2, GripVertical, Plus, Search, Trash2 } from "lucide-react";
 import { parseDocument, stringify } from "yaml";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 type Group = {
@@ -81,12 +82,51 @@ function parse(value: string) {
   );
   return { root, groups, rules };
 }
+const egernRuleTypeGroups = [
+  { label: "域名", types: ["domain", "domain_suffix", "domain_keyword", "domain_regex", "domain_wildcard", "url_regex"] },
+  { label: "IP / 地理", types: ["geoip", "ip_cidr", "ip_cidr6", "asn"] },
+  { label: "网络与高级", types: ["dest_port", "protocol", "user_agent", "rule_set", "default"] },
+];
+const egernRuleDescriptions: Record<string, string> = {
+  domain: "精确域名", domain_suffix: "域名及子域", domain_keyword: "域名关键词", domain_regex: "域名正则", domain_wildcard: "域名通配", url_regex: "URL 正则",
+  geoip: "地区 IP", ip_cidr: "IPv4 网段", ip_cidr6: "IPv6 网段", asn: "自治系统", dest_port: "目标端口", protocol: "协议", user_agent: "用户代理", rule_set: "引用规则集", default: "其余全部流量",
+};
+
+function EgernRuleWorkspace({ groups, rules, onRulesChange }: { groups: Group[]; rules: Rule[]; onRulesChange: (rules: Rule[]) => void }) {
+  const [filter, setFilter] = useState<"all" | "direct" | "reject" | "orphan">("all");
+  const [query, setQuery] = useState("");
+  const [editor, setEditor] = useState<{ index: number | null; rule: Rule } | null>(null);
+  const groupNames = new Set(groups.map((group) => group.name.trim()).filter(Boolean));
+  const policyOptions = ["DIRECT", "REJECT", ...Array.from(groupNames)];
+  const categoryOf = (rule: Rule) => rule.policy === "DIRECT" ? "direct" : rule.policy === "REJECT" ? "reject" : groupNames.has(rule.policy) ? "group" : "orphan";
+  const count = (category: "direct" | "reject" | "orphan") => rules.filter((rule) => categoryOf(rule) === category).length;
+  const visible = rules.map((rule, index) => ({ rule, index, category: categoryOf(rule) })).filter(({ rule, category }) => {
+    const keyword = query.trim().toLowerCase();
+    return (filter === "all" || category === filter) && (!keyword || `${rule.type} ${rule.match || ""} ${rule.policy}`.toLowerCase().includes(keyword));
+  });
+  const save = () => {
+    if (!editor) return;
+    const rule = { ...editor.rule, policy: editor.rule.policy.trim() || "DIRECT" };
+    if (rule.type === "default") delete rule.match;
+    onRulesChange(editor.index === null ? [...rules, rule] : rules.map((item, index) => index === editor.index ? rule : item));
+    setEditor(null);
+  };
+  return <section className="grid min-h-0 flex-1 gap-4 overflow-hidden bg-muted/20 p-4 lg:grid-cols-[minmax(0,1.04fr)_minmax(380px,.96fr)]">
+    <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+      <header className="border-b border-border bg-muted/30 px-4 py-3"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-sm font-semibold">全量分流规则 <span className="ml-1 rounded-full bg-primary/10 px-2 py-0.5 font-mono text-xs text-primary">{rules.length}</span></p><p className="mt-0.5 text-xs text-muted-foreground">按从上到下顺序匹配；命中首条规则即停止。</p></div><Button size="sm" onClick={() => setEditor({ index: null, rule: { type: "domain_suffix", match: "", policy: groups[0]?.name || "DIRECT" } })}><Plus className="mr-1 size-4" />新建规则</Button></div><div className="mt-3 flex flex-wrap gap-2"><Button size="sm" variant={filter === "all" ? "secondary" : "outline"} className="h-7 text-xs" onClick={() => setFilter("all")}>全部全局（{rules.length}）</Button><Button size="sm" variant={filter === "direct" ? "secondary" : "outline"} className="h-7 border-emerald-500/30 text-xs text-emerald-700 dark:text-emerald-300" onClick={() => setFilter("direct")}>DIRECT 直连（{count("direct")}）</Button><Button size="sm" variant={filter === "reject" ? "secondary" : "outline"} className="h-7 border-rose-500/30 text-xs text-rose-700 dark:text-rose-300" onClick={() => setFilter("reject")}>REJECT 拦截（{count("reject")}）</Button>{count("orphan") > 0 && <Button size="sm" variant={filter === "orphan" ? "destructive" : "outline"} className="h-7 text-xs" onClick={() => setFilter("orphan")}>未归属异常（{count("orphan")}）</Button>}<div className="relative min-w-40 flex-1"><Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" /><Input value={query} onChange={(event) => setQuery(event.target.value)} className="h-7 pl-7 text-xs" placeholder="过滤规则类型、匹配值或目标" /></div></div></header>
+      {count("orphan") > 0 && filter !== "direct" && filter !== "reject" && <div className="m-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">检测到 {count("orphan")} 条目标策略组不存在的规则。请重新指定可用策略。</div>}
+      <div className="min-h-0 flex-1 overflow-auto overscroll-contain"><div className="min-w-[650px]"><div className="grid grid-cols-12 gap-2 border-b border-border bg-muted/50 px-3 py-2 text-[10px] font-medium text-muted-foreground"><span className="col-span-1">#</span><span className="col-span-3">规则类型</span><span className="col-span-3">匹配载荷</span><span className="col-span-3">路由目标</span><span className="col-span-2 text-right">操作</span></div>{visible.map(({ rule, index }) => { const direct = rule.policy === "DIRECT"; const reject = rule.policy === "REJECT"; return <div key={index} className="grid grid-cols-12 items-center gap-2 border-b border-border/60 px-3 py-2.5 last:border-b-0 hover:bg-muted/35"><span className="col-span-1 font-mono text-[11px] text-muted-foreground">{String(index + 1).padStart(2, "0")}</span><div className="col-span-3"><span className="rounded border border-primary/30 bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-primary">{rule.type}</span></div><code className="col-span-3 truncate rounded bg-muted/70 px-1.5 py-1 text-[11px]">{rule.type === "default" ? "* (兜底匹配)" : rule.match || "未填写"}</code><div className="col-span-3"><span className={`inline-flex max-w-full rounded px-2 py-1 font-mono text-[11px] font-semibold ${direct ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300" : reject ? "bg-rose-500/15 text-rose-700 dark:text-rose-300" : "bg-primary/15 text-primary"}`}>{direct ? "➜ " : reject ? "⊘ " : ""}{rule.policy || "未指定"}</span></div><div className="col-span-2 flex justify-end gap-1"><Switch aria-label={`启用规则 ${index + 1}`} checked={!rule.disabled} onCheckedChange={(enabled) => onRulesChange(rules.map((item, position) => position === index ? { ...item, disabled: !enabled } : item))} /><Button variant="ghost" size="icon" className="size-7" aria-label="编辑规则" onClick={() => setEditor({ index, rule: { ...rule } })}><Code2 className="size-3.5" /></Button><Button variant="ghost" size="icon" className="size-7 text-destructive hover:text-destructive" aria-label="删除规则" onClick={() => onRulesChange(rules.filter((_, position) => position !== index))}><Trash2 className="size-3.5" /></Button></div></div>; })}{!visible.length && <div className="grid min-h-48 place-items-center text-sm text-muted-foreground">没有匹配的规则</div>}</div></div>
+    </section>
+    <section className="hidden min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-background lg:flex"><header className="border-b border-border bg-muted/30 px-4 py-3"><p className="text-sm font-semibold">Egern 原生规则</p><p className="mt-0.5 text-xs text-muted-foreground">启用状态、类型与目标会即时写入 YAML。</p></header><pre className="min-h-0 flex-1 overflow-auto p-4 font-mono text-xs leading-6 text-muted-foreground">{stringify({ rules: rules.map(({ type, ...settings }) => ({ [type]: settings })) }, { lineWidth: 0 })}</pre></section>
+    <Dialog open={Boolean(editor)} onOpenChange={(open) => !open && setEditor(null)}><DialogContent className="max-h-[calc(100svh-3rem)] overflow-y-auto"><DialogHeader><DialogTitle>{editor?.index === null ? "添加 Egern 流量规则" : "编辑 Egern 流量规则"}</DialogTitle></DialogHeader>{editor && <div className="grid gap-5 py-2"><section><p className="mb-2 text-sm font-semibold">规则类型</p><div className="grid gap-3">{egernRuleTypeGroups.map((group) => <div key={group.label}><p className="mb-1.5 text-[11px] text-muted-foreground">{group.label}</p><div className="flex flex-wrap gap-1.5">{group.types.map((type) => <button type="button" key={type} onClick={() => setEditor({ ...editor, rule: { ...editor.rule, type, ...(type === "default" ? { match: undefined } : {}) } })} className={`rounded-md border px-2 py-1.5 text-left ${editor.rule.type === type ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:border-primary/50"}`}><span className="block font-mono text-[11px] font-semibold">{type}</span><span className="block text-[10px] opacity-75">{egernRuleDescriptions[type]}</span></button>)}</div></div>)}</div></section><section className="grid gap-3 rounded-xl border border-border bg-muted/20 p-3"><label className="grid gap-1.5 text-xs font-medium">路由目标<Select value={policyOptions.includes(editor.rule.policy) ? editor.rule.policy : "__custom"} onValueChange={(policy) => policy !== "__custom" && setEditor({ ...editor, rule: { ...editor.rule, policy } })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{!policyOptions.includes(editor.rule.policy) && <SelectItem value="__custom">{editor.rule.policy || "自定义目标"}</SelectItem>}{policyOptions.map((policy) => <SelectItem key={policy} value={policy}>{policy === "DIRECT" ? "DIRECT（直连）" : policy === "REJECT" ? "REJECT（拒绝）" : policy}</SelectItem>)}</SelectContent></Select></label><Input value={editor.rule.policy} onChange={(event) => setEditor({ ...editor, rule: { ...editor.rule, policy: event.target.value } })} placeholder="或输入策略组名称" /></section>{editor.rule.type !== "default" && <label className="grid gap-1.5 text-xs font-medium">匹配内容<Input value={editor.rule.match || ""} onChange={(event) => setEditor({ ...editor, rule: { ...editor.rule, match: event.target.value } })} placeholder={editor.rule.type === "rule_set" ? "规则集地址或名称" : "请输入匹配内容"} className="font-mono" /></label>}<label className="flex items-center justify-between rounded-lg border border-border px-3 py-2.5 text-xs"><span><b className="block">启用规则</b><small className="text-muted-foreground">关闭后保留在模板中，但不参与匹配。</small></span><Switch checked={!editor.rule.disabled} onCheckedChange={(enabled) => setEditor({ ...editor, rule: { ...editor.rule, disabled: !enabled } })} /></label></div>}<DialogFooter><Button variant="outline" onClick={() => setEditor(null)}>取消</Button><Button onClick={save}>保存规则</Button></DialogFooter></DialogContent></Dialog>
+  </section>;
+}
+
 export function EgernVisualEditor({ value, view = "groups", onChange, onError, onDirtyChange }: Props) {
   const [root, setRoot] = useState<Record<string, unknown>>({});
   const [groups, setGroups] = useState<Group[]>([]);
   const [rules, setRules] = useState<Rule[]>([]);
   const [expanded, setExpanded] = useState<number[]>([]);
-  const [ruleDraft, setRuleDraft] = useState<Rule | null>(null);
   const [rulesDirty, setRulesDirty] = useState(false);
   const markDirty = () => { setRulesDirty(true); onDirtyChange(true); };
   useEffect(() => {
@@ -150,11 +190,11 @@ export function EgernVisualEditor({ value, view = "groups", onChange, onError, o
     setRules((items) => items.filter((rule) => rule.policy !== name));
     setExpanded((items) => items.filter((position) => position !== index).map((position) => position > index ? position - 1 : position));
   };
-  if (view === "rules") return <><section className="min-h-0 flex-1 overflow-y-auto overscroll-contain touch-pan-y p-3 [-webkit-overflow-scrolling:touch]" onChangeCapture={markDirty}>
-    <div className="mb-3 flex items-center justify-between"><div><strong className="text-sm">Egern 流量规则 · {rules.length}</strong><p className="mt-0.5 text-xs text-muted-foreground">按文件顺序匹配；规则不再按策略组分块显示。</p></div><Button size="sm" onClick={() => setRuleDraft({ type: "domain_suffix", match: "", policy: "DIRECT" })}><Plus className="mr-1 size-4" />添加规则</Button></div>
-    <div className="overflow-hidden rounded-xl border border-border"><div className="grid grid-cols-[34px_130px_minmax(150px,1fr)_minmax(110px,.6fr)_36px] gap-2 border-b border-border bg-muted/40 px-3 py-2 text-[10px] text-muted-foreground"><span>#</span><span>类型</span><span>匹配内容</span><span>策略</span><span /></div>{rules.map((rule, index) => <div key={index} className="grid grid-cols-[34px_130px_minmax(150px,1fr)_minmax(110px,.6fr)_36px] items-center gap-2 border-b border-border/60 px-3 py-2 last:border-b-0"><span className="font-mono text-[11px] text-muted-foreground">{index + 1}</span><Select value={rule.type} onValueChange={(type) => { markDirty(); setRules((items) => items.map((item, position) => position === index ? { ...item, type } : item)); }}><SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger><SelectContent>{ruleTypes.map((type) => <SelectItem key={type} value={type}>{type}</SelectItem>)}</SelectContent></Select>{rule.type === "default" ? <span className="text-xs text-muted-foreground">匹配全部流量</span> : <Input className="h-8 font-mono text-xs" value={rule.match || ""} onChange={(event) => setRules((items) => items.map((item, position) => position === index ? { ...item, match: event.target.value } : item))} />}<Input className="h-8 text-xs" value={rule.policy} onChange={(event) => setRules((items) => items.map((item, position) => position === index ? { ...item, policy: event.target.value } : item))} /><Button variant="ghost" size="icon" className="size-8 text-destructive" onClick={() => { markDirty(); setRules((items) => items.filter((_, position) => position !== index)); }}><Trash2 className="size-4" /></Button></div>)}</div>
-    <div className="mt-3 flex justify-end"><Button onClick={sync}>应用规则更改</Button></div>
-  </section><Dialog open={Boolean(ruleDraft)} onOpenChange={(open) => !open && setRuleDraft(null)}><DialogContent onOpenAutoFocus={(event) => event.preventDefault()}><DialogHeader><DialogTitle>添加 Egern 流量规则</DialogTitle></DialogHeader>{ruleDraft && <div className="grid gap-4 py-2"><label className="grid gap-1.5 text-sm">规则类型<Select value={ruleDraft.type} onValueChange={(type) => setRuleDraft({ ...ruleDraft, type })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{ruleTypes.map((type) => <SelectItem key={type} value={type}>{type}</SelectItem>)}</SelectContent></Select></label>{ruleDraft.type !== "default" && <label className="grid gap-1.5 text-sm">匹配内容<Input value={ruleDraft.match || ""} onChange={(event) => setRuleDraft({ ...ruleDraft, match: event.target.value })} /></label>}<label className="grid gap-1.5 text-sm">策略<Input value={ruleDraft.policy} onChange={(event) => setRuleDraft({ ...ruleDraft, policy: event.target.value })} /></label></div>}<DialogFooter><Button variant="outline" onClick={() => setRuleDraft(null)}>取消</Button><Button onClick={() => { if (ruleDraft) { markDirty(); setRules((items) => [...items, ruleDraft]); setRuleDraft(null); } }}>添加规则</Button></DialogFooter></DialogContent></Dialog></>;
+  if (view === "rules") return <EgernRuleWorkspace
+    groups={groups}
+    rules={rules}
+    onRulesChange={(next) => { markDirty(); setRules(next); }}
+  />;
   return (
     <section className="min-h-0 flex-1 overflow-auto p-3" onChangeCapture={markDirty}>
       <div className="mb-3 flex items-center justify-between">

@@ -19,7 +19,7 @@ import { TemplateVisualEditorDialog } from "@/components/subscriptions/TemplateV
 import { parseDocument as parseYamlDocument } from "yaml";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import { Activity, Clock3, Copy, Database, Ellipsis, FileCode2, FileText, FolderPlus, Library, LayoutGrid, Link2, List, Loader2, MonitorSmartphone, Network, Pencil, Plus, Power, RefreshCw, Search, Server, Trash2, Upload, UsersRound } from "lucide-react";
+import { Activity, Clock3, Copy, Database, Ellipsis, FileCode2, FileText, FolderPlus, LayoutGrid, Link2, List, Loader2, MonitorSmartphone, Network, Pencil, Plus, Power, RefreshCw, Search, Server, Trash2, Upload, UsersRound } from "lucide-react";
 
 type SubscriptionSection = "subscriptions" | "node-subscriptions" | "nodes" | "templates";
 type SubscriptionViewMode = "card" | "table";
@@ -889,7 +889,6 @@ export default function SubscriptionCenterPage() {
               <div><CardTitle className="flex items-center gap-2 text-lg"><ActiveIcon className="h-5 w-5 text-primary" />{activeItem.label}</CardTitle><CardDescription className="mt-1.5">{activeSection === "node-subscriptions" ? `原始节点订阅入口 · 共 ${nodeSubscriptions.length} 条 · 可用节点 ${nodeSubscriptions.reduce((sum, item) => sum + (item.Nodes?.filter((node) => !node.Disabled).length || 0), 0)} 个` : sectionDescriptions[activeSection]}</CardDescription></div>
               <div className="flex shrink-0 gap-2">
                 {activeSection === "node-subscriptions" && <div className="relative hidden w-64 sm:block"><Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" /><Input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="搜索节点订阅或 Token…" className="h-8 pl-8 text-xs" /></div>}
-                {activeSection === "nodes" && <Button variant="outline" size="sm" className="gap-2" onClick={openIpLibrary}><Library className="h-4 w-4" />节点库</Button>}
                 {activeSection === "templates" && <Button variant="outline" size="sm" className="gap-2" onClick={() => openEditor("template-import")}><FileText className="h-4 w-4" />导入模板</Button>}
               </div>
             </CardHeader>
