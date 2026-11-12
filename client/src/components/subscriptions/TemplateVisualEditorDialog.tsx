@@ -1410,8 +1410,8 @@ export function TemplateVisualEditorDialog({
                                               {rule.noResolve && <span className="rounded border border-amber-500/30 bg-amber-500/10 px-1 py-0.5 font-sans text-[10px] text-amber-700 dark:text-amber-300">no-resolve</span>}
                                             </div>
                                             <div className="col-span-4 truncate text-[11px] text-foreground" title={rule.value}>{rule.type === "MATCH" ? "匹配其余全部流量" : rule.value}</div>
-                                            <div className={`col-span-3 flex min-w-0 items-center gap-1 truncate font-sans text-[11px] ${directTarget ? "text-sky-700 dark:text-sky-300" : "text-primary"}`}>
-                                              <span>{directTarget ? "→" : "🚀"}</span><span className="truncate font-medium">{rule.target}</span>
+                                            <div className={`col-span-3 min-w-0 truncate font-sans text-[11px] ${directTarget ? "text-sky-700 dark:text-sky-300" : "text-primary"}`}>
+                                              <span className="truncate font-medium">{rule.target}</span>
                                             </div>
                                             <div className="col-span-2 flex items-center justify-end gap-1.5 font-sans">
                                               <Switch aria-label="启用规则" checked={rule.enabled} onCheckedChange={(enabled) => setRules((items) => items.map((item, position) => position === ruleIndex ? { ...item, enabled } : item))} />

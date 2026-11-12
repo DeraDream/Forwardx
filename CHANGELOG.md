@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.4.34] - 2026-11-12
+
+### Improved
+
+- Clash / Egern 策略组内的流量规则列表不再在策略目标前显示火箭图标，仅显示目标名称。
+- Egern 规则列表补齐 Clash 风格的规则类型配色；编辑规则改为使用流量规则弹窗。
+- Egern `rule_set` 在规则列表及编辑弹窗中显示规则集名称，不再显示具体地址。
+
+Agent 保持 `2.2.231`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.4.33] - 2026-11-12
 
 ### Improved
