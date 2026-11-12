@@ -137,6 +137,8 @@ export function EgernVisualEditor({ value, view = "groups", onChange, onError, o
   const [groups, setGroups] = useState<Group[]>([]);
   const [rules, setRules] = useState<Rule[]>([]);
   const [expanded, setExpanded] = useState<number[]>([]);
+  const [expandedRules, setExpandedRules] = useState<number[]>([]);
+  const [editingRuleIndex, setEditingRuleIndex] = useState<number | null>(null);
   const [rulesDirty, setRulesDirty] = useState(false);
   const markDirty = () => { setRulesDirty(true); onDirtyChange(true); };
   useEffect(() => {
@@ -205,6 +207,7 @@ export function EgernVisualEditor({ value, view = "groups", onChange, onError, o
     setGroups((items) => items.filter((_, position) => position !== index));
     setRules((items) => items.filter((rule) => rule.policy !== name));
     setExpanded((items) => items.filter((position) => position !== index).map((position) => position > index ? position - 1 : position));
+    setExpandedRules((items) => items.filter((position) => position !== index).map((position) => position > index ? position - 1 : position));
   };
   if (view === "rules") return <EgernRuleWorkspace
     groups={groups}
@@ -321,72 +324,56 @@ export function EgernVisualEditor({ value, view = "groups", onChange, onError, o
                   />
                 </label>
               )}
-              <div className="border-t pt-2 text-sm font-semibold">
-                流量规则（{groupRules(group.name).length}）
-              </div>
-              {groupRules(group.name).map(({ rule, index: ruleIndex }) => (
-                <div key={ruleIndex} className="flex gap-2">
-                  <Select
-                    value={rule.type}
-                    onValueChange={(type) => {
-                      markDirty();
-                      setRules((items) =>
-                        items.map((item, position) =>
-                          position === ruleIndex
-                            ? { ...item, type }
-                            : item,
-                        ),
-                      );
-                    }}
+              <section className="border-t border-border/70 pt-3">
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <button
+                    className="flex items-center gap-2 text-left text-xs font-semibold text-foreground"
+                    onClick={() => setExpandedRules((items) => items.includes(index) ? items.filter((item) => item !== index) : [...items, index])}
                   >
-                    <SelectTrigger className="h-9 min-w-32 border-input bg-background text-xs"><SelectValue /></SelectTrigger>
-                    <SelectContent>{ruleTypes.map((type) => <SelectItem key={type} value={type} className="text-xs">{type}</SelectItem>)}</SelectContent>
-                  </Select>
-                  {rule.type !== "default" && (
-                    <Input
-                      className="h-9"
-                      value={rule.match || ""}
-                      onChange={(event) =>
-                        setRules((items) =>
-                          items.map((item, position) =>
-                            position === ruleIndex
-                              ? { ...item, match: event.target.value }
-                              : item,
-                          ),
-                        )
-                      }
-                    />
-                  )}
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => {
-                      markDirty();
-                      setRules((items) =>
-                        items.filter((_, position) => position !== ruleIndex),
-                      );
-                    }}
-                  >
-                    <Trash2 className="h-4 w-4 text-destructive" />
-                  </Button>
+                    流量规则
+                    <span className="rounded-full border border-primary/25 bg-primary/10 px-2 py-0.5 font-mono text-[10px] font-medium text-primary">
+                      {groupRules(group.name).length} 条规则
+                    </span>
+                  </button>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 border-primary/40 bg-primary/10 px-2.5 text-xs text-primary hover:bg-primary/15 hover:text-primary"
+                      onClick={() => {
+                        markDirty();
+                        setRules((items) => [...items, { type: "domain_suffix", match: "", policy: group.name }]);
+                        setExpandedRules((items) => items.includes(index) ? items : [...items, index]);
+                      }}
+                    >
+                      <Plus className="mr-1 size-3.5" />添加规则
+                    </Button>
+                    <Button variant="ghost" size="sm" className="h-7 px-1.5 text-xs text-muted-foreground hover:text-foreground" onClick={() => setExpandedRules((items) => items.includes(index) ? items.filter((item) => item !== index) : [...items, index])}>
+                      {expandedRules.includes(index) ? <ChevronUp className="mr-1 size-3.5" /> : <ChevronDown className="mr-1 size-3.5" />}
+                      {expandedRules.includes(index) ? "收起" : "展开"}
+                    </Button>
+                  </div>
                 </div>
-              ))}
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  markDirty();
-                  setRules((items) => [
-                    ...items,
-                    { type: "domain_suffix", match: "", policy: group.name },
-                  ]);
-                }}
-              >
-                添加规则
-              </Button>
-              <Button size="sm" onClick={sync}>
-                应用此组更改
-              </Button>
+                {expandedRules.includes(index) && (
+                  <div className="overflow-hidden rounded-lg border border-border bg-background">
+                    <div className="grid grid-cols-12 gap-2 border-b border-border bg-muted/55 px-3 py-2 font-sans text-[11px] font-medium text-muted-foreground">
+                      <div className="col-span-3">规则类型</div><div className="col-span-4">匹配目标值</div><div className="col-span-3">指向策略 / 节点</div><div className="col-span-2 pr-1 text-right">操作</div>
+                    </div>
+                    <div className="max-h-64 divide-y divide-border/70 overflow-y-auto font-mono text-xs">
+                      {groupRules(group.name).map(({ rule, index: ruleIndex }) => {
+                        const editing = editingRuleIndex === ruleIndex;
+                        const directTarget = ["DIRECT", "REJECT"].includes(rule.policy);
+                        return <div key={ruleIndex} className="grid grid-cols-12 items-center gap-2 px-3 py-2.5 transition-colors hover:bg-muted/45">
+                          <div className="col-span-3 min-w-0">{editing ? <Select value={rule.type} onValueChange={(type) => { markDirty(); setRules((items) => items.map((item, position) => position === ruleIndex ? { ...item, type } : item)); }}><SelectTrigger className="h-8 border-input bg-background text-xs"><SelectValue /></SelectTrigger><SelectContent>{ruleTypes.map((type) => <SelectItem key={type} value={type} className="text-xs">{type}</SelectItem>)}</SelectContent></Select> : <span className="rounded border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">{rule.type}</span>}</div>
+                          <div className="col-span-4 min-w-0">{editing && rule.type !== "default" ? <Input className="h-8 text-xs" value={rule.match || ""} onChange={(event) => { markDirty(); setRules((items) => items.map((item, position) => position === ruleIndex ? { ...item, match: event.target.value } : item)); }} /> : <div className="truncate text-[11px] text-foreground" title={rule.match}>{rule.type === "default" ? "匹配其余全部流量" : rule.match || "未填写"}</div>}</div>
+                          <div className={`col-span-3 flex min-w-0 items-center gap-1 truncate font-sans text-[11px] ${directTarget ? "text-sky-700 dark:text-sky-300" : "text-primary"}`}><span>{directTarget ? "→" : "🚀"}</span><span className="truncate font-medium">{rule.policy}</span></div>
+                          <div className="col-span-2 flex items-center justify-end gap-1.5 font-sans"><Switch aria-label="启用规则" checked={!rule.disabled} onCheckedChange={(enabled) => { markDirty(); setRules((items) => items.map((item, position) => position === ruleIndex ? { ...item, disabled: !enabled } : item)); }} /><Button variant="ghost" size="sm" className="h-7 px-1 text-[11px] text-muted-foreground hover:text-foreground" onClick={() => setEditingRuleIndex(editing ? null : ruleIndex)}>{editing ? "完成" : "编辑"}</Button><Button variant="ghost" size="sm" className="h-7 px-1 text-[11px] text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => { markDirty(); setRules((items) => items.filter((_, position) => position !== ruleIndex)); }}>删除</Button></div>
+                        </div>;
+                      })}
+                    </div>
+                  </div>
+                )}
+              </section>
             </div>
           )}
         </article>
