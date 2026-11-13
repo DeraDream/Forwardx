@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.4.35] - 2026-11-13
+
+### Improved
+
+- Egern 策略组与“流量规则”Tab 的新建、编辑规则入口统一使用流量规则弹窗，保留原有列表与模板编辑界面。
+
+Agent 保持 `2.2.231`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.4.34] - 2026-11-12
 
 ### Improved

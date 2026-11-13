@@ -42,23 +42,6 @@ const getLatencyTestURL = (group: Group) =>
   typeof group.latency_test_url === "string" && group.latency_test_url.trim()
     ? group.latency_test_url
     : defaultLatencyTestURL;
-const ruleTypes = [
-  "domain",
-  "domain_suffix",
-  "domain_keyword",
-  "domain_regex",
-  "domain_wildcard",
-  "geoip",
-  "ip_cidr",
-  "ip_cidr6",
-  "asn",
-  "url_regex",
-  "user_agent",
-  "dest_port",
-  "protocol",
-  "rule_set",
-  "default",
-];
 function parse(value: string) {
   const doc = parseDocument(value, { prettyErrors: false, strict: true });
   if (doc.errors.length) throw new Error(String(doc.errors[0].message));
@@ -114,12 +97,42 @@ function egernRuleTagClass(type: string) {
   return "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
 }
 
+function EgernRuleDialog({
+  editor,
+  groups,
+  onEditorChange,
+  onSave,
+}: {
+  editor: { index: number | null; rule: Rule } | null;
+  groups: Group[];
+  onEditorChange: (editor: { index: number | null; rule: Rule } | null) => void;
+  onSave: () => void;
+}) {
+  const policyOptions = ["DIRECT", "REJECT", ...groups.map((group) => group.name.trim()).filter(Boolean)];
+  if (!editor) return null;
+  const selectType = (type: string) => onEditorChange({ ...editor, rule: { ...editor.rule, type, ...(type === "default" ? { match: undefined } : {}) } });
+  const setPolicy = (policy: string) => onEditorChange({ ...editor, rule: { ...editor.rule, policy } });
+  return <Dialog open onOpenChange={(open) => !open && onEditorChange(null)}>
+    <DialogContent className="max-h-[calc(100svh-2rem)] max-w-4xl overflow-y-auto p-0">
+      <DialogHeader className="border-b border-border px-6 py-5"><DialogTitle>{editor.index === null ? "新建流量规则" : "编辑流量规则"}</DialogTitle><p className="text-sm text-muted-foreground">规则会关联到当前策略组，并实时写入右侧预览。</p></DialogHeader>
+      <div className="space-y-5 px-6 py-5">
+        <section className="rounded-xl border border-border bg-muted/20 p-4"><p className="mb-3 text-sm font-semibold">匹配类型</p><div className="space-y-3">{egernRuleTypeGroups.map((group) => <div key={group.label}><p className="mb-2 text-xs font-medium text-muted-foreground">{group.label}</p><div className="flex flex-wrap gap-2">{group.types.map((type) => <button key={type} type="button" onClick={() => selectType(type)} className={`w-32 rounded-lg border p-2 text-left transition-colors ${editor.rule.type === type ? "border-primary bg-primary/10 text-primary" : "border-border bg-background hover:border-primary/50"}`}><b className="block font-mono text-xs">{type.toUpperCase()}</b><span className="mt-1 block text-[11px] leading-tight text-muted-foreground">{egernRuleDescriptions[type]}</span></button>)}</div></div>)}</div></section>
+        <div className="grid gap-4 md:grid-cols-2">
+          {editor.rule.type === "default" ? <div className="rounded-lg border border-dashed border-border px-3 py-3 text-sm text-muted-foreground">MATCH 会匹配所有尚未命中的流量。</div> : <label className="grid gap-1.5 text-sm font-medium">规则参数<Input value={editor.rule.type === "rule_set" ? ruleSetName(editor.rule) : editor.rule.match || ""} onChange={(event) => onEditorChange({ ...editor, rule: editor.rule.type === "rule_set" ? { ...editor.rule, name: event.target.value } : { ...editor.rule, match: event.target.value } })} placeholder={editor.rule.type === "rule_set" ? "规则集名称" : "请输入匹配内容"} className="font-mono" /></label>}
+          <label className="grid gap-1.5 text-sm font-medium">路由目标<Select value={policyOptions.includes(editor.rule.policy) ? editor.rule.policy : "__custom"} onValueChange={(policy) => policy !== "__custom" && setPolicy(policy)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{!policyOptions.includes(editor.rule.policy) && <SelectItem value="__custom">{editor.rule.policy || "自定义目标"}</SelectItem>}{policyOptions.map((policy) => <SelectItem key={policy} value={policy}>{policy === "DIRECT" ? "DIRECT（直连）" : policy === "REJECT" ? "REJECT（拒绝）" : policy}</SelectItem>)}</SelectContent></Select><Input value={editor.rule.policy} onChange={(event) => setPolicy(event.target.value)} placeholder="或输入策略组名称" /></label>
+        </div>
+        <label className="flex items-center justify-between rounded-lg border border-border px-3 py-2.5 text-xs"><span><b className="block">启用规则</b><small className="text-muted-foreground">关闭后保留在模板中，但不参与匹配。</small></span><Switch checked={!editor.rule.disabled} onCheckedChange={(enabled) => onEditorChange({ ...editor, rule: { ...editor.rule, disabled: !enabled } })} /></label>
+      </div>
+      <DialogFooter className="border-t border-border bg-muted/20 px-6 py-4"><Button variant="outline" onClick={() => onEditorChange(null)}>取消</Button><Button onClick={onSave}>应用规则</Button></DialogFooter>
+    </DialogContent>
+  </Dialog>;
+}
+
 function EgernRuleWorkspace({ groups, rules, onRulesChange }: { groups: Group[]; rules: Rule[]; onRulesChange: (rules: Rule[]) => void }) {
   const [filter, setFilter] = useState<"all" | "direct" | "reject" | "orphan">("all");
   const [query, setQuery] = useState("");
   const [editor, setEditor] = useState<{ index: number | null; rule: Rule } | null>(null);
   const groupNames = new Set(groups.map((group) => group.name.trim()).filter(Boolean));
-  const policyOptions = ["DIRECT", "REJECT", ...Array.from(groupNames)];
   const categoryOf = (rule: Rule) => rule.policy === "DIRECT" ? "direct" : rule.policy === "REJECT" ? "reject" : groupNames.has(rule.policy) ? "group" : "orphan";
   const count = (category: "direct" | "reject" | "orphan") => rules.filter((rule) => categoryOf(rule) === category).length;
   const visible = rules.map((rule, index) => ({ rule, index, category: categoryOf(rule) })).filter(({ rule, category }) => {
@@ -140,7 +153,7 @@ function EgernRuleWorkspace({ groups, rules, onRulesChange }: { groups: Group[];
       <div className="min-h-0 flex-1 overflow-auto overscroll-contain"><div className="min-w-[650px]"><div className="grid grid-cols-12 gap-2 border-b border-border bg-muted/50 px-3 py-2 text-[10px] font-medium text-muted-foreground"><span className="col-span-1">#</span><span className="col-span-3">规则类型</span><span className="col-span-3">匹配载荷</span><span className="col-span-3">路由目标</span><span className="col-span-2 text-right">操作</span></div>{visible.map(({ rule, index }) => { const direct = rule.policy === "DIRECT"; const reject = rule.policy === "REJECT"; return <div key={index} className="grid grid-cols-12 items-center gap-2 border-b border-border/60 px-3 py-2.5 last:border-b-0 hover:bg-muted/35"><span className="col-span-1 font-mono text-[11px] text-muted-foreground">{String(index + 1).padStart(2, "0")}</span><div className="col-span-3"><span className={`rounded border px-1.5 py-0.5 font-mono text-[10px] font-semibold ${egernRuleTagClass(rule.type)}`}>{rule.type}</span></div><code className="col-span-3 truncate rounded bg-muted/70 px-1.5 py-1 text-[11px]">{ruleMatchLabel(rule)}</code><div className="col-span-3"><span className={`inline-flex max-w-full rounded px-2 py-1 font-mono text-[11px] font-semibold ${direct ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300" : reject ? "bg-rose-500/15 text-rose-700 dark:text-rose-300" : "bg-primary/15 text-primary"}`}>{direct ? "➜ " : reject ? "⊘ " : ""}{rule.policy || "未指定"}</span></div><div className="col-span-2 flex justify-end gap-1"><Switch aria-label={`启用规则 ${index + 1}`} checked={!rule.disabled} onCheckedChange={(enabled) => onRulesChange(rules.map((item, position) => position === index ? { ...item, disabled: !enabled } : item))} /><Button variant="ghost" size="icon" className="size-7" aria-label="编辑规则" onClick={() => setEditor({ index, rule: { ...rule } })}><Code2 className="size-3.5" /></Button><Button variant="ghost" size="icon" className="size-7 text-destructive hover:text-destructive" aria-label="删除规则" onClick={() => onRulesChange(rules.filter((_, position) => position !== index))}><Trash2 className="size-3.5" /></Button></div></div>; })}{!visible.length && <div className="grid min-h-48 place-items-center text-sm text-muted-foreground">没有匹配的规则</div>}</div></div>
     </section>
     <section className="hidden min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-background lg:flex"><header className="border-b border-border bg-muted/30 px-4 py-3"><p className="text-sm font-semibold">Egern 原生规则</p><p className="mt-0.5 text-xs text-muted-foreground">启用状态、类型与目标会即时写入 YAML。</p></header><pre className="min-h-0 flex-1 overflow-auto p-4 font-mono text-xs leading-6 text-muted-foreground">{stringify({ rules: rules.map(({ type, ...settings }) => ({ [type]: settings })) }, { lineWidth: 0 })}</pre></section>
-    <Dialog open={Boolean(editor)} onOpenChange={(open) => !open && setEditor(null)}><DialogContent className="max-h-[calc(100svh-3rem)] overflow-y-auto"><DialogHeader><DialogTitle>{editor?.index === null ? "添加 Egern 流量规则" : "编辑 Egern 流量规则"}</DialogTitle></DialogHeader>{editor && <div className="grid gap-5 py-2"><section><p className="mb-2 text-sm font-semibold">规则类型</p><div className="grid gap-3">{egernRuleTypeGroups.map((group) => <div key={group.label}><p className="mb-1.5 text-[11px] text-muted-foreground">{group.label}</p><div className="flex flex-wrap gap-1.5">{group.types.map((type) => <button type="button" key={type} onClick={() => setEditor({ ...editor, rule: { ...editor.rule, type, ...(type === "default" ? { match: undefined } : {}) } })} className={`rounded-md border px-2 py-1.5 text-left ${editor.rule.type === type ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:border-primary/50"}`}><span className="block font-mono text-[11px] font-semibold">{type}</span><span className="block text-[10px] opacity-75">{egernRuleDescriptions[type]}</span></button>)}</div></div>)}</div></section><section className="grid gap-3 rounded-xl border border-border bg-muted/20 p-3"><label className="grid gap-1.5 text-xs font-medium">路由目标<Select value={policyOptions.includes(editor.rule.policy) ? editor.rule.policy : "__custom"} onValueChange={(policy) => policy !== "__custom" && setEditor({ ...editor, rule: { ...editor.rule, policy } })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{!policyOptions.includes(editor.rule.policy) && <SelectItem value="__custom">{editor.rule.policy || "自定义目标"}</SelectItem>}{policyOptions.map((policy) => <SelectItem key={policy} value={policy}>{policy === "DIRECT" ? "DIRECT（直连）" : policy === "REJECT" ? "REJECT（拒绝）" : policy}</SelectItem>)}</SelectContent></Select></label><Input value={editor.rule.policy} onChange={(event) => setEditor({ ...editor, rule: { ...editor.rule, policy: event.target.value } })} placeholder="或输入策略组名称" /></section>{editor.rule.type !== "default" && <label className="grid gap-1.5 text-xs font-medium">{editor.rule.type === "rule_set" ? "规则集名称" : "匹配内容"}<Input value={editor.rule.type === "rule_set" ? ruleSetName(editor.rule) : editor.rule.match || ""} onChange={(event) => setEditor({ ...editor, rule: editor.rule.type === "rule_set" ? { ...editor.rule, name: event.target.value } : { ...editor.rule, match: event.target.value } })} placeholder={editor.rule.type === "rule_set" ? "规则集名称" : "请输入匹配内容"} className="font-mono" /></label>}<label className="flex items-center justify-between rounded-lg border border-border px-3 py-2.5 text-xs"><span><b className="block">启用规则</b><small className="text-muted-foreground">关闭后保留在模板中，但不参与匹配。</small></span><Switch checked={!editor.rule.disabled} onCheckedChange={(enabled) => setEditor({ ...editor, rule: { ...editor.rule, disabled: !enabled } })} /></label></div>}<DialogFooter><Button variant="outline" onClick={() => setEditor(null)}>取消</Button><Button onClick={save}>保存规则</Button></DialogFooter></DialogContent></Dialog>
+    <EgernRuleDialog editor={editor} groups={groups} onEditorChange={setEditor} onSave={save} />
   </section>;
 }
 
@@ -390,24 +403,12 @@ export function EgernVisualEditor({ value, view = "groups", onChange, onError, o
           暂无策略组
         </p>
       )}
-      <Dialog open={Boolean(ruleEditor)} onOpenChange={(open) => !open && setRuleEditor(null)}>
-        <DialogContent className="max-h-[calc(100svh-3rem)] overflow-y-auto">
-          <DialogHeader><DialogTitle>{ruleEditor?.index === null ? "添加 Egern 流量规则" : "编辑 Egern 流量规则"}</DialogTitle></DialogHeader>
-          {ruleEditor && <div className="grid gap-4 py-2">
-            <label className="grid gap-1.5 text-xs font-medium">规则类型
-              <Select value={ruleEditor.rule.type} onValueChange={(type) => setRuleEditor({ ...ruleEditor, rule: { ...ruleEditor.rule, type, ...(type === "default" ? { match: undefined } : {}) } })}>
-                <SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{ruleTypes.map((type) => <SelectItem key={type} value={type}>{type}</SelectItem>)}</SelectContent>
-              </Select>
-            </label>
-            {ruleEditor.rule.type !== "default" && <label className="grid gap-1.5 text-xs font-medium">{ruleEditor.rule.type === "rule_set" ? "规则集名称" : "匹配内容"}
-              <Input value={ruleEditor.rule.type === "rule_set" ? ruleSetName(ruleEditor.rule) : ruleEditor.rule.match || ""} onChange={(event) => setRuleEditor({ ...ruleEditor, rule: ruleEditor.rule.type === "rule_set" ? { ...ruleEditor.rule, name: event.target.value } : { ...ruleEditor.rule, match: event.target.value } })} placeholder={ruleEditor.rule.type === "rule_set" ? "规则集名称" : "请输入匹配内容"} className="font-mono" />
-            </label>}
-            <label className="grid gap-1.5 text-xs font-medium">指向策略 / 节点<Input value={ruleEditor.rule.policy} disabled /></label>
-            <label className="flex items-center justify-between rounded-lg border border-border px-3 py-2.5 text-xs"><span><b className="block">启用规则</b><small className="text-muted-foreground">关闭后保留在模板中，但不参与匹配。</small></span><Switch checked={!ruleEditor.rule.disabled} onCheckedChange={(enabled) => setRuleEditor({ ...ruleEditor, rule: { ...ruleEditor.rule, disabled: !enabled } })} /></label>
-          </div>}
-          <DialogFooter><Button variant="outline" onClick={() => setRuleEditor(null)}>取消</Button><Button onClick={() => { if (!ruleEditor) return; markDirty(); setRules((items) => ruleEditor.index === null ? [...items, ruleEditor.rule] : items.map((item, position) => position === ruleEditor.index ? ruleEditor.rule : item)); setRuleEditor(null); }}>保存规则</Button></DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <EgernRuleDialog editor={ruleEditor} groups={groups} onEditorChange={setRuleEditor} onSave={() => {
+        if (!ruleEditor) return;
+        markDirty();
+        setRules((items) => ruleEditor.index === null ? [...items, ruleEditor.rule] : items.map((item, position) => position === ruleEditor.index ? ruleEditor.rule : item));
+        setRuleEditor(null);
+      }} />
     </section>
   );
 }
