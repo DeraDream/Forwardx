@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.4.37] - 2026-11-14
+
+### Fixed
+
+- 修复订阅模板编辑弹窗中 Clash/Egern 策略组、流量规则及 Egern 模块列表在桌面浏览器无法从六点手柄开始拖动的问题。
+
+Agent 保持 `2.2.231`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.4.36] - 2026-11-14
 
 ### Improved
