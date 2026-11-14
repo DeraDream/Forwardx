@@ -247,8 +247,8 @@ export function EgernVisualEditor({ value, view = "groups", onChange, onError, o
     markDirty();
     setGroups((items) => { const next = [...items]; next.splice(to, 0, next.splice(from, 1)[0]); return next; });
   };
-  const groupPointerSort = usePointerListSort(reorderGroups, (index) => <div className="w-[min(640px,calc(100vw-3rem))] rounded-md border border-primary/60 bg-card px-4 py-3 shadow-2xl"><b>{groups[index]?.name || "未命名策略组"}</b><span className="ml-3 font-mono text-xs text-muted-foreground">{groups[index]?.type}</span></div>);
-  const rulePointerSort = usePointerListSort(reorderRules, (index) => <div className="w-[min(640px,calc(100vw-3rem))] rounded-md border border-primary/60 bg-card px-4 py-3 shadow-2xl"><b className="font-mono">{rules[index]?.type}</b><span className="ml-3">{ruleMatchLabel(rules[index] || { type: "", policy: "" })}</span></div>);
+  const groupPointerSort = usePointerListSort(reorderGroups, (index) => <div className="flex min-h-11 w-[min(900px,calc(100vw-3rem))] items-center gap-2 rounded-md border border-primary/70 bg-card px-3 py-2.5 text-sm font-semibold shadow-2xl"><GripVertical className="size-4 shrink-0 text-muted-foreground" /><span>{groups[index]?.name || `未命名策略组 ${index + 1}`}</span><span className="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] font-medium text-primary">{groups[index]?.type || "select"}</span></div>);
+  const rulePointerSort = usePointerListSort(reorderRules, (index) => <div className="flex w-[min(640px,calc(100vw-3rem))] items-center gap-3 rounded-md border border-primary/70 bg-card px-3 py-2.5 shadow-2xl"><GripVertical className="size-4 shrink-0 text-muted-foreground" /><b className="font-mono text-xs">{rules[index]?.type || "RULE"}</b><span className="truncate text-sm">{ruleMatchLabel(rules[index] || { type: "", policy: "" })}</span></div>);
   const removeGroup = (index: number) => {
     markDirty();
     const name = groups[index]?.name;
