@@ -12,14 +12,15 @@ test("Loon plugin toggles comment without changing other lines or URL query", ()
   assert.equal(moduleRanges("loon", off.source).length, 2);
 });
 
-test("Egern toggle preserves nested module data and original comments", () => {
+test("Egern toggle uses native enabled flag and preserves nested module data", () => {
   const source = "policy_groups: []\nmodules:\n  - name: A\n    url: https://a.example/m\n    env:\n      KEY: value\n    # original\n  - url: https://b.example/m\nrules: []\n";
   const off = toggleModuleComment("egern", source, 0, false);
   assert.equal(off.line, 3);
-  assert.match(off.source, /  # - name: A/);
+  assert.match(off.source, /    enabled: false/);
+  assert.doesNotMatch(off.source, /# - name: A/);
   assert.equal(moduleRanges("egern", off.source).length, 2);
-  assert.equal(parse(uncommentModuleEntries("egern", off.source)).modules[0].env.KEY, "value");
-  assert.equal(toggleModuleComment("egern", off.source, 0, true).source, source);
+  assert.equal(parse(off.source).modules[0].env.KEY, "value");
+  assert.match(toggleModuleComment("egern", off.source, 0, true).source, /enabled: true/);
 });
 
 test("enabling existing native disabled flag removes the effective disable", () => {

@@ -35,6 +35,18 @@ export function toggleModuleComment(kind: ModuleKind, source: string, index: num
   const lines = source.replace(/\r/g, "").split("\n");
   const range = moduleRanges(kind, source)[index];
   if (!range) throw new Error("无法定位模块，请先应用模块更改");
+  if (kind === "egern") {
+    // Egern natively supports `enabled`; unlike Loon, keep the entire module
+    // entry readable rather than commenting out its YAML block.
+    if (range.disabled) for (let i = range.start; i < range.end; i++) lines[i] = lines[i].replace(/^(\s*)# ?/, "$1");
+    const enabledLine = lines.findIndex((line, lineIndex) => lineIndex >= range.start && lineIndex < range.end && /^\s*enabled\s*:/.test(line));
+    if (enabledLine >= 0) lines[enabledLine] = lines[enabledLine].replace(/^(\s*enabled\s*:\s*)(?:true|false)\b/i, `$1${enabled}`);
+    else {
+      const indent = (lines[range.start].match(/^(\s*)/)?.[1] || "") + "  ";
+      lines.splice(range.start + 1, 0, `${indent}enabled: ${enabled}`);
+    }
+    return { source: lines.join("\n"), line: range.start + 1 };
+  }
   if (range.disabled !== !enabled) {
     for (let i = range.start; i < range.end; i++) {
       if (!lines[i].trim()) continue;
@@ -42,10 +54,7 @@ export function toggleModuleComment(kind: ModuleKind, source: string, index: num
       else lines[i] = lines[i].replace(/^(\s*)/, "$1# ");
     }
   }
-  if (enabled) {
-    if (kind === "loon") lines[range.start] = lines[range.start].replace(/(\benable\s*=\s*)false\b/i, "$1true");
-    else for (let i = range.start; i < range.end; i++) lines[i] = lines[i].replace(/^(\s*(?:-\s*)?enabled\s*:\s*)false\b/i, "$1true");
-  }
+  if (enabled) lines[range.start] = lines[range.start].replace(/(\benable\s*=\s*)false\b/i, "$1true");
   return { source: lines.join("\n"), line: range.start + 1 };
 }
 

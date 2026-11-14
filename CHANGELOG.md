@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.4.36] - 2026-11-14
+
+### Improved
+
+- Clash 与 Egern 模板编辑器的策略组、流量规则列表支持通过左侧六点拖动图标排序；Egern 模块列表同样支持拖动排序。
+- Egern 模块关闭时改为写入原生 `enabled: false`，不再注释整个 YAML 模块段；其他配置项的关闭行为保持不变。
+
+Agent 保持 `2.2.231`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.4.35] - 2026-11-13
 
 ### Improved

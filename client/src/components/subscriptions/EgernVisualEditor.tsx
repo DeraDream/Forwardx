@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, Code2, GripVertical, Plus, Search, Trash2 } from "lucide-react";
 import { parseDocument, stringify } from "yaml";
 import { Button } from "@/components/ui/button";
@@ -132,6 +132,7 @@ function EgernRuleWorkspace({ groups, rules, onRulesChange }: { groups: Group[];
   const [filter, setFilter] = useState<"all" | "direct" | "reject" | "orphan">("all");
   const [query, setQuery] = useState("");
   const [editor, setEditor] = useState<{ index: number | null; rule: Rule } | null>(null);
+  const dragIndex = useRef<number | null>(null);
   const groupNames = new Set(groups.map((group) => group.name.trim()).filter(Boolean));
   const categoryOf = (rule: Rule) => rule.policy === "DIRECT" ? "direct" : rule.policy === "REJECT" ? "reject" : groupNames.has(rule.policy) ? "group" : "orphan";
   const count = (category: "direct" | "reject" | "orphan") => rules.filter((rule) => categoryOf(rule) === category).length;
@@ -139,6 +140,12 @@ function EgernRuleWorkspace({ groups, rules, onRulesChange }: { groups: Group[];
     const keyword = query.trim().toLowerCase();
     return (filter === "all" || category === filter) && (!keyword || `${rule.type} ${rule.match || ""} ${rule.policy}`.toLowerCase().includes(keyword));
   });
+  const reorder = (from: number, to: number) => {
+    if (from === to) return;
+    const next = [...rules];
+    next.splice(to, 0, next.splice(from, 1)[0]);
+    onRulesChange(next);
+  };
   const save = () => {
     if (!editor) return;
     const rule = { ...editor.rule, policy: editor.rule.policy.trim() || "DIRECT" };
@@ -150,7 +157,7 @@ function EgernRuleWorkspace({ groups, rules, onRulesChange }: { groups: Group[];
     <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-card shadow-sm">
       <header className="border-b border-border bg-muted/30 px-4 py-3"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-sm font-semibold">全量分流规则 <span className="ml-1 rounded-full bg-primary/10 px-2 py-0.5 font-mono text-xs text-primary">{rules.length}</span></p><p className="mt-0.5 text-xs text-muted-foreground">按从上到下顺序匹配；命中首条规则即停止。</p></div><Button size="sm" onClick={() => setEditor({ index: null, rule: { type: "domain_suffix", match: "", policy: groups[0]?.name || "DIRECT" } })}><Plus className="mr-1 size-4" />新建规则</Button></div><div className="mt-3 flex flex-wrap gap-2"><Button size="sm" variant={filter === "all" ? "secondary" : "outline"} className="h-7 text-xs" onClick={() => setFilter("all")}>全部全局（{rules.length}）</Button><Button size="sm" variant={filter === "direct" ? "secondary" : "outline"} className="h-7 border-emerald-500/30 text-xs text-emerald-700 dark:text-emerald-300" onClick={() => setFilter("direct")}>DIRECT 直连（{count("direct")}）</Button><Button size="sm" variant={filter === "reject" ? "secondary" : "outline"} className="h-7 border-rose-500/30 text-xs text-rose-700 dark:text-rose-300" onClick={() => setFilter("reject")}>REJECT 拦截（{count("reject")}）</Button>{count("orphan") > 0 && <Button size="sm" variant={filter === "orphan" ? "destructive" : "outline"} className="h-7 text-xs" onClick={() => setFilter("orphan")}>未归属异常（{count("orphan")}）</Button>}<div className="relative min-w-40 flex-1"><Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" /><Input value={query} onChange={(event) => setQuery(event.target.value)} className="h-7 pl-7 text-xs" placeholder="过滤规则类型、匹配值或目标" /></div></div></header>
       {count("orphan") > 0 && filter !== "direct" && filter !== "reject" && <div className="m-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">检测到 {count("orphan")} 条目标策略组不存在的规则。请重新指定可用策略。</div>}
-      <div className="min-h-0 flex-1 overflow-auto overscroll-contain"><div className="min-w-[650px]"><div className="grid grid-cols-12 gap-2 border-b border-border bg-muted/50 px-3 py-2 text-[10px] font-medium text-muted-foreground"><span className="col-span-1">#</span><span className="col-span-3">规则类型</span><span className="col-span-3">匹配载荷</span><span className="col-span-3">路由目标</span><span className="col-span-2 text-right">操作</span></div>{visible.map(({ rule, index }) => { const direct = rule.policy === "DIRECT"; const reject = rule.policy === "REJECT"; return <div key={index} className="grid grid-cols-12 items-center gap-2 border-b border-border/60 px-3 py-2.5 last:border-b-0 hover:bg-muted/35"><span className="col-span-1 font-mono text-[11px] text-muted-foreground">{String(index + 1).padStart(2, "0")}</span><div className="col-span-3"><span className={`rounded border px-1.5 py-0.5 font-mono text-[10px] font-semibold ${egernRuleTagClass(rule.type)}`}>{rule.type}</span></div><code className="col-span-3 truncate rounded bg-muted/70 px-1.5 py-1 text-[11px]">{ruleMatchLabel(rule)}</code><div className="col-span-3"><span className={`inline-flex max-w-full rounded px-2 py-1 font-mono text-[11px] font-semibold ${direct ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300" : reject ? "bg-rose-500/15 text-rose-700 dark:text-rose-300" : "bg-primary/15 text-primary"}`}>{direct ? "➜ " : reject ? "⊘ " : ""}{rule.policy || "未指定"}</span></div><div className="col-span-2 flex justify-end gap-1"><Switch aria-label={`启用规则 ${index + 1}`} checked={!rule.disabled} onCheckedChange={(enabled) => onRulesChange(rules.map((item, position) => position === index ? { ...item, disabled: !enabled } : item))} /><Button variant="ghost" size="icon" className="size-7" aria-label="编辑规则" onClick={() => setEditor({ index, rule: { ...rule } })}><Code2 className="size-3.5" /></Button><Button variant="ghost" size="icon" className="size-7 text-destructive hover:text-destructive" aria-label="删除规则" onClick={() => onRulesChange(rules.filter((_, position) => position !== index))}><Trash2 className="size-3.5" /></Button></div></div>; })}{!visible.length && <div className="grid min-h-48 place-items-center text-sm text-muted-foreground">没有匹配的规则</div>}</div></div>
+      <div className="min-h-0 flex-1 overflow-auto overscroll-contain"><div className="min-w-[650px]"><div className="grid grid-cols-12 gap-2 border-b border-border bg-muted/50 px-3 py-2 text-[10px] font-medium text-muted-foreground"><span className="col-span-1">#</span><span className="col-span-3">规则类型</span><span className="col-span-3">匹配载荷</span><span className="col-span-3">路由目标</span><span className="col-span-2 text-right">操作</span></div>{visible.map(({ rule, index }) => { const direct = rule.policy === "DIRECT"; const reject = rule.policy === "REJECT"; return <div key={index} onDragOver={(event) => event.preventDefault()} onDrop={() => { if (dragIndex.current !== null) reorder(dragIndex.current, index); dragIndex.current = null; }} className="grid grid-cols-12 items-center gap-2 border-b border-border/60 px-3 py-2.5 last:border-b-0 hover:bg-muted/35"><span className="col-span-1 flex items-center gap-1 font-mono text-[11px] text-muted-foreground"><span draggable onDragStart={(event) => { dragIndex.current = index; event.dataTransfer.effectAllowed = "move"; }}><GripVertical className="size-4 cursor-grab touch-none" aria-label="长按拖动排序" /></span>{String(index + 1).padStart(2, "0")}</span><div className="col-span-3"><span className={`rounded border px-1.5 py-0.5 font-mono text-[10px] font-semibold ${egernRuleTagClass(rule.type)}`}>{rule.type}</span></div><code className="col-span-3 truncate rounded bg-muted/70 px-1.5 py-1 text-[11px]">{ruleMatchLabel(rule)}</code><div className="col-span-3"><span className={`inline-flex max-w-full rounded px-2 py-1 font-mono text-[11px] font-semibold ${direct ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300" : reject ? "bg-rose-500/15 text-rose-700 dark:text-rose-300" : "bg-primary/15 text-primary"}`}>{direct ? "➜ " : reject ? "⊘ " : ""}{rule.policy || "未指定"}</span></div><div className="col-span-2 flex justify-end gap-1"><Switch aria-label={`启用规则 ${index + 1}`} checked={!rule.disabled} onCheckedChange={(enabled) => onRulesChange(rules.map((item, position) => position === index ? { ...item, disabled: !enabled } : item))} /><Button variant="ghost" size="icon" className="size-7" aria-label="编辑规则" onClick={() => setEditor({ index, rule: { ...rule } })}><Code2 className="size-3.5" /></Button><Button variant="ghost" size="icon" className="size-7 text-destructive hover:text-destructive" aria-label="删除规则" onClick={() => onRulesChange(rules.filter((_, position) => position !== index))}><Trash2 className="size-3.5" /></Button></div></div>; })}{!visible.length && <div className="grid min-h-48 place-items-center text-sm text-muted-foreground">没有匹配的规则</div>}</div></div>
     </section>
     <section className="hidden min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-background lg:flex"><header className="border-b border-border bg-muted/30 px-4 py-3"><p className="text-sm font-semibold">Egern 原生规则</p><p className="mt-0.5 text-xs text-muted-foreground">启用状态、类型与目标会即时写入 YAML。</p></header><pre className="min-h-0 flex-1 overflow-auto p-4 font-mono text-xs leading-6 text-muted-foreground">{stringify({ rules: rules.map(({ type, ...settings }) => ({ [type]: settings })) }, { lineWidth: 0 })}</pre></section>
     <EgernRuleDialog editor={editor} groups={groups} onEditorChange={setEditor} onSave={save} />
@@ -165,6 +172,8 @@ export function EgernVisualEditor({ value, view = "groups", onChange, onError, o
   const [expandedRules, setExpandedRules] = useState<number[]>([]);
   const [ruleEditor, setRuleEditor] = useState<{ index: number | null; rule: Rule } | null>(null);
   const [rulesDirty, setRulesDirty] = useState(false);
+  const groupDragIndex = useRef<number | null>(null);
+  const ruleDragIndex = useRef<number | null>(null);
   const markDirty = () => { setRulesDirty(true); onDirtyChange(true); };
   useEffect(() => {
     try {
@@ -226,6 +235,11 @@ export function EgernVisualEditor({ value, view = "groups", onChange, onError, o
       [next[index], next[target]] = [next[target], next[index]];
       return next;
     });
+  const reorderRules = (from: number, to: number) => {
+    if (from === to) return;
+    markDirty();
+    setRules((items) => { const next = [...items]; next.splice(to, 0, next.splice(from, 1)[0]); return next; });
+  };
   const removeGroup = (index: number) => {
     markDirty();
     const name = groups[index]?.name;
@@ -264,6 +278,8 @@ export function EgernVisualEditor({ value, view = "groups", onChange, onError, o
       {groups.map((group, index) => (
         <article
           key={index}
+          onDragOver={(event) => event.preventDefault()}
+          onDrop={() => { if (groupDragIndex.current !== null && groupDragIndex.current !== index) { markDirty(); setGroups((items) => { const next = [...items]; next.splice(index, 0, next.splice(groupDragIndex.current!, 1)[0]); return next; }); } groupDragIndex.current = null; }}
           className="mb-3 rounded-md border border-border/70"
         >
           <div
@@ -279,7 +295,7 @@ export function EgernVisualEditor({ value, view = "groups", onChange, onError, o
               )
             }
           >
-              <GripVertical className="size-4 shrink-0 text-muted-foreground" />
+              <span draggable onDragStart={(event) => { groupDragIndex.current = index; event.dataTransfer.effectAllowed = "move"; }}><GripVertical className="size-4 shrink-0 cursor-grab touch-none text-muted-foreground" aria-label="长按拖动排序" /></span>
               <span className="truncate">{group.name || `未命名策略组 ${index + 1}`}</span>
               <span className="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] font-medium text-primary">{group.type}</span>
             </button>
@@ -383,8 +399,8 @@ export function EgernVisualEditor({ value, view = "groups", onChange, onError, o
                     <div className="max-h-64 divide-y divide-border/70 overflow-y-auto font-mono text-xs">
                       {groupRules(group.name).map(({ rule, index: ruleIndex }) => {
                         const directTarget = ["DIRECT", "REJECT"].includes(rule.policy);
-                        return <div key={ruleIndex} className="grid grid-cols-12 items-center gap-2 px-3 py-2.5 transition-colors hover:bg-muted/45">
-                          <div className="col-span-3 min-w-0"><span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${egernRuleTagClass(rule.type)}`}>{rule.type}</span></div>
+                        return <div key={ruleIndex} onDragOver={(event) => event.preventDefault()} onDrop={() => { if (ruleDragIndex.current !== null) reorderRules(ruleDragIndex.current, ruleIndex); ruleDragIndex.current = null; }} className="grid grid-cols-12 items-center gap-2 px-3 py-2.5 transition-colors hover:bg-muted/45">
+                          <div className="col-span-3 flex min-w-0 items-center gap-1"><span draggable onDragStart={(event) => { ruleDragIndex.current = ruleIndex; event.dataTransfer.effectAllowed = "move"; }}><GripVertical className="size-4 shrink-0 cursor-grab touch-none text-muted-foreground" aria-label="长按拖动排序" /></span><span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${egernRuleTagClass(rule.type)}`}>{rule.type}</span></div>
                           <div className="col-span-4 min-w-0"><div className="truncate text-[11px] text-foreground" title={String(rule.match || "")}>{ruleMatchLabel(rule)}</div></div>
                           <div className={`col-span-3 min-w-0 truncate font-sans text-[11px] ${directTarget ? "text-sky-700 dark:text-sky-300" : "text-primary"}`}><span className="truncate font-medium">{rule.policy}</span></div>
                           <div className="col-span-2 flex items-center justify-end gap-1.5 font-sans"><Switch aria-label="启用规则" checked={!rule.disabled} onCheckedChange={(enabled) => { markDirty(); setRules((items) => items.map((item, position) => position === ruleIndex ? { ...item, disabled: !enabled } : item)); }} /><Button variant="ghost" size="sm" className="h-7 px-1 text-[11px] text-muted-foreground hover:text-foreground" onClick={() => setRuleEditor({ index: ruleIndex, rule: { ...rule } })}>编辑</Button><Button variant="ghost" size="sm" className="h-7 px-1 text-[11px] text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => { markDirty(); setRules((items) => items.filter((_, position) => position !== ruleIndex)); }}>删除</Button></div>
