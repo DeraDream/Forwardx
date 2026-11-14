@@ -47,6 +47,7 @@ import { EgernVisualEditor } from "@/components/subscriptions/EgernVisualEditor"
 import { LoonVisualEditor } from "@/components/subscriptions/LoonVisualEditor";
 import { RuleSetVisualEditor } from "@/components/subscriptions/RuleSetVisualEditor";
 import { ModuleVisualEditor } from "@/components/subscriptions/ModuleVisualEditor";
+import { usePointerListSort } from "@/components/subscriptions/usePointerListSort";
 
 type Group = {
   name: string;
@@ -360,11 +361,12 @@ function RuleVisualWorkspace({
   });
   const count = (category: "direct" | "reject" | "orphan") => rules.filter((rule) => categoryOf(rule) === category).length;
   const reorder = (from: number, to: number) => { if (from === to) return; const next = [...rules]; next.splice(to, 0, next.splice(from, 1)[0]); onRulesChange(next); };
+  const pointerSort = usePointerListSort(reorder, (index) => <div className="w-[min(640px,calc(100vw-3rem))] rounded-lg border border-primary/60 bg-card px-4 py-3 shadow-2xl"><b className="font-mono text-sm">{rules[index]?.type}</b><span className="ml-3 text-sm">{rules[index]?.value || "MATCH"}</span></div>);
   const renderRow = ({ rule, index }: { rule: Rule; index: number }) => {
     const direct = rule.target === "DIRECT";
     const reject = rule.target === "REJECT";
-    return <div key={index} onDragOver={(event) => event.preventDefault()} onDrop={() => { if (dragIndex.current !== null) reorder(dragIndex.current, index); dragIndex.current = null; }} className="grid grid-cols-12 items-center gap-2 border-b border-border/60 px-3 py-2.5 last:border-b-0 hover:bg-muted/35">
-      <span className="col-span-1 flex items-center gap-1 font-mono text-[11px] text-muted-foreground"><span draggable onDragStart={(event) => { dragIndex.current = index; event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", String(index)); }} ><GripVertical className="size-4 cursor-grab touch-none" aria-label="长按拖动排序" /></span>{String(index + 1).padStart(2, "0")}</span>
+    return <div key={index} data-pointer-sort-index={index} className="grid grid-cols-12 items-center gap-2 border-b border-border/60 px-3 py-2.5 last:border-b-0 hover:bg-muted/35">
+      <span className="col-span-1 flex items-center gap-1 font-mono text-[11px] text-muted-foreground"><span onPointerDown={(event) => pointerSort.begin(index, event)}><GripVertical className="size-4 cursor-grab touch-none" aria-label="长按拖动排序" /></span>{String(index + 1).padStart(2, "0")}</span>
       <div className="col-span-3 flex min-w-0 flex-wrap items-center gap-1.5"><span className={`rounded border px-1.5 py-0.5 font-mono text-[10px] font-semibold ${ruleTagClass(rule.type)}`}>{rule.type}</span>{rule.noResolve && <span className="rounded border border-amber-500/30 bg-amber-500/10 px-1 py-0.5 text-[10px] text-amber-700 dark:text-amber-300">no-resolve</span>}</div>
       <div className="col-span-3 flex min-w-0 items-center gap-1 rounded bg-muted/70 px-1.5 py-1"><code className="min-w-0 flex-1 truncate text-[11px] text-foreground">{rule.type === "MATCH" ? "* (兜底匹配)" : rule.value}</code>{rule.type === "RULE-SET" && rule.value && <Button variant="ghost" size="icon" className="size-5 shrink-0 text-cyan-700 hover:bg-cyan-500/10 hover:text-cyan-700 dark:text-cyan-300 dark:hover:text-cyan-300" aria-label={`打开规则集 ${rule.value}`} title={`打开规则集 ${rule.value}`} onClick={() => onOpenRuleSet(rule.value)}><ArrowUpRight className="size-3.5" /></Button>}</div>
       <div className="col-span-3"><span className={`inline-flex max-w-full items-center gap-1 rounded px-2 py-1 font-mono text-[11px] font-semibold ${direct ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300" : reject ? "bg-rose-500/15 text-rose-700 dark:text-rose-300" : "bg-primary/15 text-primary"}`}>{(direct || reject) && <span>{direct ? "➜" : "⊘"}</span>}<span className="truncate">{rule.target || "未指定"}</span></span></div>
@@ -375,7 +377,7 @@ function RuleVisualWorkspace({
     <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-card shadow-sm">
       <header className="border-b border-border bg-muted/30 px-4 py-3"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-sm font-semibold">全量分流规则 <span className="ml-1 rounded-full bg-primary/10 px-2 py-0.5 font-mono text-xs text-primary">{rules.length}</span></p><p className="mt-0.5 text-xs text-muted-foreground">规则按从上到下顺序匹配；命中首条规则即停止。</p></div><Button size="sm" onClick={() => onAdd(groups[0]?.name || "DIRECT")}><Plus className="mr-1 size-4" />新建规则</Button></div><div className="mt-3 flex flex-wrap gap-2"><Button size="sm" variant={filter === "all" ? "secondary" : "outline"} className="h-7 text-xs" onClick={() => setFilter("all")}>全部全局（{rules.length}）</Button><Button size="sm" variant={filter === "direct" ? "secondary" : "outline"} className="h-7 border-emerald-500/30 text-xs text-emerald-700 dark:text-emerald-300" onClick={() => setFilter("direct")}>DIRECT 直连（{count("direct")}）</Button><Button size="sm" variant={filter === "reject" ? "secondary" : "outline"} className="h-7 border-rose-500/30 text-xs text-rose-700 dark:text-rose-300" onClick={() => setFilter("reject")}>REJECT 拦截（{count("reject")}）</Button>{count("orphan") > 0 && <Button size="sm" variant={filter === "orphan" ? "destructive" : "outline"} className="h-7 text-xs" onClick={() => setFilter("orphan")}>未归属异常（{count("orphan")}）</Button>}<Input value={query} onChange={(event) => setQuery(event.target.value)} className="h-7 min-w-40 flex-1 text-xs" placeholder="过滤规则类型、匹配值或目标" /></div></header>
       {count("orphan") > 0 && filter !== "direct" && filter !== "reject" && <div className="m-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">检测到 {count("orphan")} 条未归属 / 目标策略组缺失规则。它们会保留在 YAML 中，请重新定向到可用策略组。</div>}
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain touch-pan-y [-webkit-overflow-scrolling:touch]"><div className="grid grid-cols-12 gap-2 border-b border-border bg-muted/50 px-3 py-2 text-[10px] font-medium text-muted-foreground"><span className="col-span-1">#</span><span className="col-span-3">规则类型</span><span className="col-span-3">匹配载荷</span><span className="col-span-3">路由目标</span><span className="col-span-2 text-right">操作</span></div>{visible.map(renderRow)}{!visible.length && <div className="grid min-h-48 place-items-center text-sm text-muted-foreground">没有匹配的规则</div>}</div>
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain touch-pan-y [-webkit-overflow-scrolling:touch]" onPointerMove={pointerSort.move} onPointerUp={pointerSort.end} onPointerCancel={pointerSort.end}><div className="grid grid-cols-12 gap-2 border-b border-border bg-muted/50 px-3 py-2 text-[10px] font-medium text-muted-foreground"><span className="col-span-1">#</span><span className="col-span-3">规则类型</span><span className="col-span-3">匹配载荷</span><span className="col-span-3">路由目标</span><span className="col-span-2 text-right">操作</span></div>{visible.map(renderRow)}{pointerSort.overlay}{!visible.length && <div className="grid min-h-48 place-items-center text-sm text-muted-foreground">没有匹配的规则</div>}</div>
     </section>
     <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-background"><header className="flex items-center justify-between border-b border-border bg-muted/30 px-4 py-3"><div><p className="text-sm font-semibold">实时 YAML 生成 <span className="ml-1 rounded bg-emerald-500/10 px-1.5 py-0.5 font-mono text-[10px] text-emerald-700 dark:text-emerald-300">双向同步</span></p><p className="mt-0.5 text-xs text-muted-foreground">规则分类、启用状态与目标会即时写入模板。</p></div></header><CodeSurface value={rulesYaml} language="clash" readOnly focusLine={yamlFocus?.line} focusNonce={yamlFocus?.nonce} /></section>
   </div>;
@@ -785,6 +787,7 @@ export function TemplateVisualEditorDialog({
     if (from === to) return;
     setGroups((items) => { const next = [...items]; next.splice(to, 0, next.splice(from, 1)[0]); return next; });
   };
+  const groupPointerSort = usePointerListSort(reorderGroups, (index) => <div className="w-[min(720px,calc(100vw-3rem))] rounded-lg border border-primary/60 bg-card px-4 py-3 shadow-2xl"><b>{groups[index]?.name || "未命名策略组"}</b><span className="ml-3 rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{groups[index]?.type}</span></div>);
   const templateKind = detectTemplateKind(source);
   const codeLanguage: CodeLanguage = templateKind === "loon" ? "loon" : templateKind === "egern" ? "egern" : "clash";
   const codeFormatLabel = templateKind === "loon" ? "Loon INI" : templateKind === "egern" ? "Egern YAML" : templateKind === "clash" ? "Clash YAML" : "未识别配置";
@@ -1223,7 +1226,7 @@ export function TemplateVisualEditorDialog({
                       未识别为 Clash、Egern 或 Loon 模板。请在代码模式中补齐格式特有字段后再编辑；不会根据文件后缀猜测格式。
                     </div>
                   ) : (
-                    <div className="min-h-0 flex-1 overflow-auto p-3">
+                    <div className="min-h-0 flex-1 overflow-auto p-3" onPointerMove={groupPointerSort.move} onPointerUp={groupPointerSort.end} onPointerCancel={groupPointerSort.end}>
                       {groups.length === 0 ? (
                         <div className="grid h-48 place-items-center text-sm text-muted-foreground">
                           暂无代理组，点击“添加代理组”开始配置
@@ -1232,8 +1235,7 @@ export function TemplateVisualEditorDialog({
                         groups.map((group, index) => (
                           <article
                             key={index}
-                            onDragOver={(event) => event.preventDefault()}
-                            onDrop={() => { if (groupDragIndex.current !== null) reorderGroups(groupDragIndex.current, index); groupDragIndex.current = null; }}
+                            data-pointer-sort-index={index}
                             className="mb-2 overflow-hidden rounded-lg border border-border bg-card shadow-sm"
                           >
                               <div className="flex min-h-14 items-center gap-2 px-3">
@@ -1244,7 +1246,7 @@ export function TemplateVisualEditorDialog({
                                   toggle(expanded, index, setExpanded)
                                 }
                               >
-                                <span draggable onDragStart={(event) => { groupDragIndex.current = index; event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", String(index)); }} ><GripVertical className="h-4 w-4 cursor-grab touch-none text-muted-foreground" aria-label="长按拖动排序" /></span>
+                                <span onPointerDown={(event) => groupPointerSort.begin(index, event)}><GripVertical className="h-4 w-4 cursor-grab touch-none text-muted-foreground" aria-label="长按拖动排序" /></span>
                                 <strong className="truncate text-sm text-foreground">
                                   {group.name || `未命名策略组 ${index + 1}`}
                                 </strong>
@@ -1438,6 +1440,7 @@ export function TemplateVisualEditorDialog({
                           </article>
                         ))
                       )}
+                      {groupPointerSort.overlay}
                     </div>
                   )}
                 </section>
