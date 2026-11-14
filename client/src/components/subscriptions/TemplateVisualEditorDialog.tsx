@@ -251,6 +251,8 @@ function CodeSurface({
   readOnly = false,
   focusLine,
   focusNonce = 0,
+  searchQuery = "",
+  searchNonce = 0,
 }: {
   value: string;
   onChange?: (value: string) => void;
@@ -258,12 +260,15 @@ function CodeSurface({
   readOnly?: boolean;
   focusLine?: number | null;
   focusNonce?: number;
+  searchQuery?: string;
+  searchNonce?: number;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const overlayRef = useRef<HTMLPreElement>(null);
   const lineRef = useRef<HTMLPreElement>(null);
   const readOnlyScrollRef = useRef<HTMLDivElement>(null);
   const [flashingLine, setFlashingLine] = useState<number | null>(null);
+  const searchCursorRef = useRef({ query: "", index: -1 });
   const lines = value.replace(/\r/g, "").split("\n");
   useEffect(() => {
     if (!readOnly || !focusLine) return;
@@ -273,6 +278,24 @@ function CodeSurface({
     const timer = window.setTimeout(() => setFlashingLine(null), 1500);
     return () => window.clearTimeout(timer);
   }, [focusLine, focusNonce, readOnly]);
+  useEffect(() => {
+    if (readOnly || !searchQuery.trim()) return;
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    const needle = searchQuery.toLowerCase();
+    const haystack = value.toLowerCase();
+    const previous = searchCursorRef.current;
+    const start = previous.query === needle ? previous.index + 1 : 0;
+    let index = haystack.indexOf(needle, start);
+    if (index < 0 && start > 0) index = haystack.indexOf(needle);
+    if (index < 0) { searchCursorRef.current = { query: needle, index: -1 }; return; }
+    searchCursorRef.current = { query: needle, index };
+    textarea.focus();
+    textarea.setSelectionRange(index, index + searchQuery.length);
+    const line = value.slice(0, index).split("\n").length - 1;
+    textarea.scrollTo({ top: Math.max(0, line * 28 - textarea.clientHeight / 3), behavior: "smooth" });
+    syncScroll();
+  }, [readOnly, searchNonce, searchQuery]);
   const syncScroll = () => {
     const textarea = textareaRef.current;
     if (!textarea) return;
@@ -685,6 +708,8 @@ export function TemplateVisualEditorDialog({
   const [ruleSetFocus, setRuleSetFocus] = useState<string | null>(null);
   const [ruleSetFocusNonce, setRuleSetFocusNonce] = useState(0);
   const [copied, setCopied] = useState(false);
+  const [codeSearch, setCodeSearch] = useState("");
+  const [codeSearchNonce, setCodeSearchNonce] = useState(0);
   const [ruleEditor, setRuleEditor] = useState<{
     index: number | null;
     target: string;
@@ -1048,12 +1073,14 @@ export function TemplateVisualEditorDialog({
               <div className="grid min-h-0 flex-1 gap-4 overflow-hidden bg-muted/20 p-4 lg:grid-cols-[minmax(0,1.05fr)_minmax(420px,.95fr)]">
                 <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-background shadow-sm">
                   <header className="flex items-center justify-between border-b border-border bg-muted/30 px-4 py-3 text-sm font-semibold text-foreground">
-                    <span className="font-mono"><i className="mr-2 inline-block size-2 rounded-full bg-primary" />{codeFormatLabel} 全量编辑器</span><div className="flex items-center gap-2"><Button variant="ghost" size="sm" className="h-7 px-2 text-xs text-primary hover:text-primary" onClick={formatSource}>格式化</Button><span className="font-mono text-[11px] font-normal text-muted-foreground">语法高亮 · 实时编辑</span></div>
+                    <span className="font-mono"><i className="mr-2 inline-block size-2 rounded-full bg-primary" />{codeFormatLabel} 全量编辑器</span><div className="flex items-center gap-2"><div className="flex h-7 items-center rounded-md border border-border bg-background"><Search className="ml-2 size-3.5 text-muted-foreground" /><Input value={codeSearch} onChange={(event) => { setCodeSearch(event.target.value); setCodeSearchNonce((value) => value + 1); }} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); setCodeSearchNonce((value) => value + 1); } }} placeholder="查找" className="h-6 w-28 border-0 bg-transparent px-2 text-xs shadow-none focus-visible:ring-0" /><Button type="button" variant="ghost" size="sm" className="h-6 px-1.5 text-[10px]" disabled={!codeSearch.trim()} onClick={() => setCodeSearchNonce((value) => value + 1)}>下一个</Button></div><Button variant="ghost" size="sm" className="h-7 px-2 text-xs text-primary hover:text-primary" onClick={formatSource}>格式化</Button><span className="font-mono text-[11px] font-normal text-muted-foreground">语法高亮 · 实时编辑</span></div>
                   </header>
                   <CodeSurface
                     value={source}
                     onChange={setSource}
                     language={codeLanguage}
+                    searchQuery={codeSearch}
+                    searchNonce={codeSearchNonce}
                   />
                 </section>
                 <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-background">

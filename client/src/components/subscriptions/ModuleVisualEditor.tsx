@@ -269,6 +269,7 @@ function StructuredDirectives({ kind, value, onChange }: { kind: Kind; value: st
       }
     } catch { setDraft({}); }
   }, [kind, value]);
+  const visibleKeys = keys.filter((key) => Object.prototype.hasOwnProperty.call(draft, key));
   const update = (key: string, next: string) => {
     const nextDraft = { ...draft, [key]: next };
     setDraft(nextDraft);
@@ -294,7 +295,8 @@ function StructuredDirectives({ kind, value, onChange }: { kind: Kind; value: st
       }
     } catch { /* keep the draft visible until the user fixes syntax */ }
   };
-  return <div className="space-y-3 rounded-lg border border-border bg-background/50 p-3"><div className="flex items-center justify-between"><div><p className="text-xs font-semibold text-foreground">结构化指令编辑</p><p className="mt-0.5 text-[11px] text-muted-foreground">逐模块编辑 Rewrite、Script、MITM、Rule 和 DNS；源码会同步更新。</p></div><Code2 className="size-4 text-primary" /></div>{keys.map((key) => <label key={key} className="grid gap-1.5 text-[11px] font-medium"><span className="font-mono text-primary">{kind === "loon" ? `[${key}]` : key}</span>{kind === "loon" && key === "Script" ? <LoonScriptEditor value={draft[key] || ""} onChange={(next) => update(key, next)} /> : kind === "loon" && key === "Argument" ? <LoonArgumentEditor value={draft[key] || ""} onChange={(next) => update(key, next)} /> : <textarea className="min-h-16 resize-y rounded-md border border-input bg-background px-2.5 py-2 font-mono text-[11px] leading-5 text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/20" value={draft[key] || ""} onChange={(event) => update(key, event.target.value)} placeholder={kind === "loon" ? "每行一条原生指令" : "YAML 数组或对象"} />}</label>)}</div>;
+  if (!visibleKeys.length) return null;
+  return <div className="space-y-3 rounded-lg border border-border bg-background/50 p-3"><div className="flex items-center justify-between"><div><p className="text-xs font-semibold text-foreground">结构化指令编辑</p><p className="mt-0.5 text-[11px] text-muted-foreground">逐模块编辑 Rewrite、Script、MITM、Rule 和 DNS；源码会同步更新。</p></div><Code2 className="size-4 text-primary" /></div>{visibleKeys.map((key) => <label key={key} className="grid gap-1.5 text-[11px] font-medium"><span className="font-mono text-primary">{kind === "loon" ? `[${key}]` : key}</span>{kind === "loon" && key === "Script" ? <LoonScriptEditor value={draft[key] || ""} onChange={(next) => update(key, next)} /> : kind === "loon" && key === "Argument" ? <LoonArgumentEditor value={draft[key] || ""} onChange={(next) => update(key, next)} /> : <textarea className="min-h-16 resize-y rounded-md border border-input bg-background px-2.5 py-2 font-mono text-[11px] leading-5 text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/20" value={draft[key] || ""} onChange={(event) => update(key, event.target.value)} placeholder={kind === "loon" ? "每行一条原生指令" : "YAML 数组或对象"} />}</label>)}</div>;
 }
 
 export function ModuleVisualEditor({ kind, value, onChange, onDirtyChange, onError, onFocusLine }: Props) {
