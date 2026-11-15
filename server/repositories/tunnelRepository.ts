@@ -614,7 +614,10 @@ export async function deleteTunnel(id: number) {
   const db = await getDb();
   if (!db) return;
   const before = await getTunnelById(id).catch(() => undefined);
-  await db.update(forwardRules).set({ tunnelId: null, isEnabled: false, isRunning: false, updatedAt: nowDate() }).where(eq(forwardRules.tunnelId, id));
+  // Keep isRunning until the entry Agent confirms its runtime cleanup. Clearing it
+  // here loses the stop acknowledgement and can strand pendingDelete rules
+  // holding their old source ports indefinitely.
+  await db.update(forwardRules).set({ tunnelId: null, isEnabled: false, updatedAt: nowDate() }).where(eq(forwardRules.tunnelId, id));
   await db.delete(forwardRuleTunnelExits).where(eq(forwardRuleTunnelExits.tunnelId, id));
   await db.delete(tunnelExitNodes).where(eq(tunnelExitNodes.tunnelId, id));
   await db.delete(tunnelHops).where(eq(tunnelHops.tunnelId, id));
