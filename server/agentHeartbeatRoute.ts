@@ -107,6 +107,7 @@ import { DnsRuntimeGenerationTracker } from "./dnsRuntimeGeneration";
 import { selectResolvedTargetIp } from "./dnsTargetResolution";
 import { buildForwardXMimicConfig } from "./mimicConfig";
 import { gateForwardRulesForRuntime } from "./linkAccessView";
+import { canFinalizeSettledPendingRule } from "./pendingForwardRuleCleanup";
 import { runAgentRuntimeRecovery } from "./agentRuntimeRecovery";
 import { observePresenceCapableHostActivity, registerPresenceCapableHost } from "./agentFastLiveness";
 import { recordAuthenticatedAgentActivity } from "./agentActivity";
@@ -5018,6 +5019,28 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
 
     const runtimeDriftedRuleIds: number[] = [];
     for (const rule of rules) {
+      // Tunnel deletion can leave pendingDelete=true/isRunning=false records.
+      // Those must retain their port reservation until this Agent confirms
+      // that no local runtime still owns the rule or the source port.
+      if (runtimeBool(rule.pendingDelete) && !runtimeBool(rule.isRunning)) {
+        const completeRuntimeSnapshot = hasReportedRuntimeState && !localRuntimeState.requestLocalState;
+        if (canFinalizeSettledPendingRule({
+          pendingDelete: true,
+          isRunning: false,
+          ruleId: Number(rule.id),
+          sourcePort: Number(rule.sourcePort),
+          completeRuntimeSnapshot,
+          localRules: reportedLocalRules,
+        })) {
+          await settleStoppedRule(rule);
+          continue;
+        }
+        if (completeRuntimeSnapshot) {
+          const removeAction = await buildDisabledRuleRemovalAction(rule);
+          if (removeAction) actions.push(removeAction);
+        }
+        continue;
+      }
       if ((rule as any)._skipRuntimeApply) continue;
       const ruleTunnel = (rule as any).tunnelId ? tunnelById.get((rule as any).tunnelId) as any : null;
       const ruleProtocolEnabled = isRuleProtocolEnabled(forwardProtocolSettings, rule, ruleTunnel);
