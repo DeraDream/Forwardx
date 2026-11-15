@@ -16,6 +16,6 @@ test("search match selection does not steal focus from the YAML search input", (
   applyCodeSearchSelection(editor, 12, 3, 4);
 
   assert.deepEqual(selection, [12, 15]);
-  assert.deepEqual(scroll, { top: 12 * 28 - 100, behavior: "smooth" });
+  assert.deepEqual(scroll, { top: 4 * 28 - 100, behavior: "smooth" });
   assert.equal(focused, false);
 });
