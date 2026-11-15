@@ -300,7 +300,9 @@ function CodeSurface({
     if (index < 0 && start > 0) index = haystack.indexOf(needle);
     if (index < 0) { searchCursorRef.current = { query: needle, index: -1 }; return; }
     searchCursorRef.current = { query: needle, index };
-    textarea.focus();
+    // Updating a controlled search query runs this effect for every keystroke.
+    // Do not focus the editor here: it steals focus from the search input after
+    // the first character. Selection/scroll work without changing focus.
     textarea.setSelectionRange(index, index + searchQuery.length);
     const line = value.slice(0, index).split("\n").length - 1;
     textarea.scrollTo({ top: Math.max(0, line * 28 - textarea.clientHeight / 3), behavior: "smooth" });
