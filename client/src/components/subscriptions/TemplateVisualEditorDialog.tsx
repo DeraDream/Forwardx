@@ -253,6 +253,10 @@ function CodeSurface({
   focusNonce = 0,
   searchQuery = "",
   searchNonce = 0,
+  searchOpen = false,
+  onSearchOpenChange,
+  onSearchQueryChange,
+  onSearchNext,
 }: {
   value: string;
   onChange?: (value: string) => void;
@@ -262,12 +266,18 @@ function CodeSurface({
   focusNonce?: number;
   searchQuery?: string;
   searchNonce?: number;
+  searchOpen?: boolean;
+  onSearchOpenChange?: (open: boolean) => void;
+  onSearchQueryChange?: (value: string) => void;
+  onSearchNext?: () => void;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const overlayRef = useRef<HTMLPreElement>(null);
   const lineRef = useRef<HTMLPreElement>(null);
   const readOnlyScrollRef = useRef<HTMLDivElement>(null);
   const [flashingLine, setFlashingLine] = useState<number | null>(null);
+  useEffect(() => { if (searchOpen) searchInputRef.current?.focus(); }, [searchOpen]);
   const searchCursorRef = useRef({ query: "", index: -1 });
   const lines = value.replace(/\r/g, "").split("\n");
   useEffect(() => {
@@ -304,7 +314,7 @@ function CodeSurface({
     if (lineRef.current) lineRef.current.style.transform = `translateY(${-textarea.scrollTop}px)`;
   };
   return (
-    <div className="relative min-h-0 flex-1 overflow-hidden bg-[linear-gradient(90deg,hsl(var(--muted)/.55)_0, hsl(var(--muted)/.55)_3.5rem,transparent_3.5rem)] font-mono text-[12px] leading-7">
+    <div className="relative min-h-0 flex-1 overflow-hidden bg-[linear-gradient(90deg,hsl(var(--muted)/.55)_0, hsl(var(--muted)/.55)_3.5rem,transparent_3.5rem)] font-mono text-[12px] leading-7">{!readOnly && searchOpen && <div className="absolute right-3 top-3 z-30 flex h-8 items-center rounded-md border border-border bg-card px-2 shadow-lg"><Search className="size-3.5 text-muted-foreground" /><Input ref={searchInputRef} value={searchQuery} onChange={(event) => onSearchQueryChange?.(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); onSearchNext?.(); } if (event.key === "Escape") { event.preventDefault(); onSearchOpenChange?.(false); textareaRef.current?.focus(); } }} placeholder="查找" className="h-6 w-40 border-0 bg-transparent px-2 text-xs shadow-none focus-visible:ring-0" /><Button type="button" variant="ghost" size="sm" className="h-6 px-1.5 text-[10px]" onClick={onSearchNext}>下一个</Button><Button type="button" variant="ghost" size="icon" className="size-6" onClick={() => onSearchOpenChange?.(false)}><X className="size-3.5" /></Button></div>}
       <div className="absolute inset-0 overflow-hidden">
         <pre ref={lineRef} aria-hidden className="pointer-events-none absolute left-0 top-0 w-14 select-none border-r border-border/70 py-4 pr-3 text-right text-[11px] leading-7 text-muted-foreground/70">
           {lines.map((_, index) => <div key={index}>{index + 1}</div>)}
@@ -336,6 +346,7 @@ function CodeSurface({
           className="relative z-10 block h-full w-full resize-none overflow-auto bg-transparent py-4 pl-[4.5rem] pr-6 font-mono text-[12px] leading-7 text-transparent caret-foreground outline-none selection:bg-primary/30"
           value={value}
           onChange={(event) => onChange?.(event.target.value)}
+          onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") { event.preventDefault(); onSearchOpenChange?.(true); } }}
           onScroll={syncScroll}
           spellCheck={false}
           wrap="off"
@@ -709,6 +720,7 @@ export function TemplateVisualEditorDialog({
   const [ruleSetFocusNonce, setRuleSetFocusNonce] = useState(0);
   const [copied, setCopied] = useState(false);
   const [codeSearch, setCodeSearch] = useState("");
+  const [codeSearchOpen, setCodeSearchOpen] = useState(false);
   const [codeSearchNonce, setCodeSearchNonce] = useState(0);
   const [ruleEditor, setRuleEditor] = useState<{
     index: number | null;
@@ -1073,7 +1085,7 @@ export function TemplateVisualEditorDialog({
               <div className="grid min-h-0 flex-1 gap-4 overflow-hidden bg-muted/20 p-4 lg:grid-cols-[minmax(0,1.05fr)_minmax(420px,.95fr)]">
                 <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-background shadow-sm">
                   <header className="flex items-center justify-between border-b border-border bg-muted/30 px-4 py-3 text-sm font-semibold text-foreground">
-                    <span className="font-mono"><i className="mr-2 inline-block size-2 rounded-full bg-primary" />{codeFormatLabel} 全量编辑器</span><div className="flex items-center gap-2"><div className="flex h-7 items-center rounded-md border border-border bg-background"><Search className="ml-2 size-3.5 text-muted-foreground" /><Input value={codeSearch} onChange={(event) => { setCodeSearch(event.target.value); setCodeSearchNonce((value) => value + 1); }} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); setCodeSearchNonce((value) => value + 1); } }} placeholder="查找" className="h-6 w-28 border-0 bg-transparent px-2 text-xs shadow-none focus-visible:ring-0" /><Button type="button" variant="ghost" size="sm" className="h-6 px-1.5 text-[10px]" disabled={!codeSearch.trim()} onClick={() => setCodeSearchNonce((value) => value + 1)}>下一个</Button></div><Button variant="ghost" size="sm" className="h-7 px-2 text-xs text-primary hover:text-primary" onClick={formatSource}>格式化</Button><span className="font-mono text-[11px] font-normal text-muted-foreground">语法高亮 · 实时编辑</span></div>
+                    <span className="font-mono"><i className="mr-2 inline-block size-2 rounded-full bg-primary" />{codeFormatLabel} 全量编辑器</span><div className="flex items-center gap-2"><Button variant="ghost" size="sm" className="h-7 px-2 text-xs text-primary hover:text-primary" onClick={formatSource}>格式化</Button><span className="font-mono text-[11px] font-normal text-muted-foreground">语法高亮 · 实时编辑</span></div>
                   </header>
                   <CodeSurface
                     value={source}
@@ -1081,6 +1093,10 @@ export function TemplateVisualEditorDialog({
                     language={codeLanguage}
                     searchQuery={codeSearch}
                     searchNonce={codeSearchNonce}
+                    searchOpen={codeSearchOpen}
+                    onSearchOpenChange={setCodeSearchOpen}
+                    onSearchQueryChange={(value) => { setCodeSearch(value); setCodeSearchNonce((nonce) => nonce + 1); }}
+                    onSearchNext={() => setCodeSearchNonce((nonce) => nonce + 1)}
                   />
                 </section>
                 <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-background">
@@ -1568,7 +1584,7 @@ export function TemplateVisualEditorDialog({
           if (!value) setRuleEditor(null);
         }}
       >
-        <DialogContent onOpenAutoFocus={(event) => event.preventDefault()} className="max-w-[900px] gap-0 overflow-hidden border border-border bg-card p-0 text-card-foreground shadow-2xl sm:p-0">
+        <DialogContent onOpenAutoFocus={(event) => event.preventDefault()} onPointerDownOutside={(event) => event.preventDefault()} onEscapeKeyDown={(event) => event.preventDefault()} className="max-w-[900px] gap-0 overflow-hidden border border-border bg-card p-0 text-card-foreground shadow-2xl sm:p-0">
           <DialogHeader className="border-b border-border bg-muted/30 px-6 py-5 pr-16">
             <DialogTitle className="flex items-center gap-3 text-xl text-foreground"><span className="grid size-9 place-items-center rounded-lg bg-primary/10 text-primary"><Code2 className="size-5" /></span>
               {ruleEditor?.index === null ? "添加流量规则" : "编辑流量规则"}

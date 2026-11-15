@@ -538,7 +538,11 @@ function DashboardLayoutContent({
         window.clearInterval(upgradeRefreshIntervalRef.current);
         upgradeRefreshIntervalRef.current = null;
       }
-      window.location.reload();
+      // Add a unique navigation query so the browser and any intermediary cache
+      // must fetch the newly deployed HTML and its newly hashed asset bundle.
+      const url = new URL(window.location.href);
+      url.searchParams.set("__forwardx_refresh", String(Date.now()));
+      window.location.replace(url.toString());
     }, PANEL_UPGRADE_REFRESH_DELAY_MS);
   }, []);
 
