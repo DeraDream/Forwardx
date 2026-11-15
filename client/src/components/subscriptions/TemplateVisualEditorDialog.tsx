@@ -48,6 +48,7 @@ import { LoonVisualEditor } from "@/components/subscriptions/LoonVisualEditor";
 import { RuleSetVisualEditor } from "@/components/subscriptions/RuleSetVisualEditor";
 import { ModuleVisualEditor } from "@/components/subscriptions/ModuleVisualEditor";
 import { usePointerListSort } from "@/components/subscriptions/usePointerListSort";
+import { applyCodeSearchSelection } from "@/components/subscriptions/codeSearchSelection";
 
 type Group = {
   name: string;
@@ -303,9 +304,8 @@ function CodeSurface({
     // Updating a controlled search query runs this effect for every keystroke.
     // Do not focus the editor here: it steals focus from the search input after
     // the first character. Selection/scroll work without changing focus.
-    textarea.setSelectionRange(index, index + searchQuery.length);
     const line = value.slice(0, index).split("\n").length - 1;
-    textarea.scrollTo({ top: Math.max(0, line * 28 - textarea.clientHeight / 3), behavior: "smooth" });
+    applyCodeSearchSelection(textarea, index, searchQuery.length, line);
     syncScroll();
   }, [readOnly, searchNonce, searchQuery]);
   const syncScroll = () => {
