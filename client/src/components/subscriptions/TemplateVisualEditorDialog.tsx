@@ -11,6 +11,7 @@ import {
   Eye,
   FolderTree,
   GripVertical,
+  ImageIcon,
   Network,
   PackagePlus,
   Plus,
@@ -55,6 +56,7 @@ type Group = {
   type: string;
   proxies: string[];
   hidden?: boolean;
+  icon?: string;
   url?: string;
   interval?: string;
   tolerance?: string;
@@ -528,12 +530,13 @@ function parseTemplate(value: string) {
           Boolean(item) && typeof item === "object" && !Array.isArray(item),
       )
       .map((item) => {
-        const { name, type, proxies, hidden, url, interval, tolerance, filter, "exclude-filter": excludeFilter, ...extra } = item;
+        const { name, type, proxies, hidden, icon, url, interval, tolerance, filter, "exclude-filter": excludeFilter, ...extra } = item;
         return {
           name: String(name || ""),
           type: String(type || "select"),
           proxies: Array.isArray(proxies) ? proxies.map(String) : [],
           hidden: hidden === true,
+          icon: icon == null ? "" : String(icon),
           url: url == null ? "" : String(url),
           interval: interval == null ? "" : String(interval),
           tolerance: tolerance == null ? "" : String(tolerance),
@@ -593,6 +596,7 @@ function parseTemplate(value: string) {
       collectingProxies = key === "proxies" && !val;
       if (key === "type") current.type = unquote(val) || "select";
       if (key === "hidden") current.hidden = val === "true";
+      if (key === "icon") current.icon = unquote(val);
       if (key === "url") current.url = unquote(val);
       if (key === "interval") current.interval = unquote(val);
       if (key === "tolerance") current.tolerance = unquote(val);
@@ -662,12 +666,13 @@ function buildYaml(base: string, groups: Group[], rules: Rule[]) {
     const root: Record<string, unknown> = { ...parsed };
     // Do not serialize blank optional values. Mihomo parses `interval` as an
     // integer, so an editor placeholder must never become `interval: ""`.
-    root["proxy-groups"] = groups.map(({ name, type, proxies, hidden, url, interval, tolerance, filter, excludeFilter, extra }) => ({
+    root["proxy-groups"] = groups.map(({ name, type, proxies, hidden, icon, url, interval, tolerance, filter, excludeFilter, extra }) => ({
       ...extra,
       name,
       type,
       proxies,
       ...(hidden ? { hidden: true } : {}),
+      ...(icon ? { icon } : {}),
       ...(url ? { url } : {}),
       ...(/^\d+$/.test(interval || "") ? { interval: Number(interval) } : {}),
       ...(/^\d+$/.test(tolerance || "") ? { tolerance: Number(tolerance) } : {}),
@@ -685,6 +690,7 @@ function buildYaml(base: string, groups: Group[], rules: Rule[]) {
         `  - name: ${yamlQuote(group.name || "未命名策略组")}`,
         `    type: ${group.type}`,
         group.hidden ? "    hidden: true" : "",
+        group.icon ? `    icon: ${yamlQuote(group.icon)}` : "",
         group.url ? `    url: ${yamlQuote(group.url)}` : "",
         group.interval ? `    interval: ${group.interval}` : "",
         group.tolerance ? `    tolerance: ${group.tolerance}` : "",
@@ -1210,7 +1216,7 @@ export function TemplateVisualEditorDialog({
               <div className="grid min-h-0 flex-1 overflow-hidden bg-muted/20 lg:grid-cols-[minmax(420px,1fr)_minmax(420px,1fr)]">
                 <section className="flex h-full min-h-0 flex-col overflow-hidden p-4">
                   <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border bg-card shadow-sm">
-                    <header className="border-b border-border bg-muted/30 px-4 py-3"><p className="text-sm font-semibold text-foreground">{templateKind === "egern" ? "Egern 策略组" : "Loon 策略组"} <span className="ml-1 rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] text-primary">原生结构</span></p><p className="mt-0.5 text-xs text-muted-foreground">{templateKind === "egern" ? "编辑 policy_groups，并同步引用这些策略的规则。" : "编辑 [Proxy Group]，并同步引用这些策略组的规则。"}</p></header>
+                    <header className="border-b border-border bg-muted/30 px-4 py-3"><p className="text-sm font-semibold text-foreground">策略组 <span className="ml-1 rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] text-primary">原生结构</span></p><p className="mt-0.5 text-xs text-muted-foreground">{templateKind === "egern" ? "编辑 policy_groups，并同步引用这些策略的规则。" : "编辑 [Proxy Group]，并同步引用这些策略组的规则。"}</p></header>
                     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{templateKind === "egern" ? <EgernVisualEditor view="groups" value={source} onChange={setSource} onDirtyChange={setExternalVisualDirty} onError={(message) => { if (message) toast.error(message); }} onOpenRuleSet={(name) => { setRuleSetFocus(name); setRuleSetFocusNonce((nonce) => nonce + 1); setMode("ruleSets"); }} onFocusLine={(line) => setVisualYamlFocus({ line, nonce: Date.now() })} /> : <LoonVisualEditor view="groups" value={source} onChange={setSource} onDirtyChange={setExternalVisualDirty} onError={(message) => { if (message) toast.error(message); }} onOpenRuleSet={(name) => { setRuleSetFocus(name); setRuleSetFocusNonce((nonce) => nonce + 1); setMode("ruleSets"); }} onFocusLine={(line) => setVisualYamlFocus({ line, nonce: Date.now() })} />}</div>
                   </div>
                 </section>
@@ -1225,7 +1231,7 @@ export function TemplateVisualEditorDialog({
                   <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-muted/30 px-4 py-3">
                     <div>
                       <p className="text-sm font-semibold text-foreground">
-                        代理组配置 <span className="ml-1 rounded-full bg-primary/10 px-2 py-0.5 font-mono text-xs text-primary">
+                        策略组 <span className="ml-1 rounded-full bg-primary/10 px-2 py-0.5 font-mono text-xs text-primary">
                           {groups.length}
                         </span>
                       </p>
@@ -1249,7 +1255,7 @@ export function TemplateVisualEditorDialog({
                         }}
                       >
                         <Plus className="mr-1 h-4 w-4" />
-                        添加代理组
+                        添加策略组
                       </Button>
                     </div>}
                   </header>
@@ -1287,7 +1293,7 @@ export function TemplateVisualEditorDialog({
                     <div className="min-h-0 flex-1 overflow-auto p-3" onPointerMove={groupPointerSort.move} onPointerUp={groupPointerSort.end} onPointerCancel={groupPointerSort.end}>
                       {groups.length === 0 ? (
                         <div className="grid h-48 place-items-center text-sm text-muted-foreground">
-                          暂无代理组，点击“添加代理组”开始配置
+                          暂无策略组，点击“添加策略组”开始配置
                         </div>
                       ) : (
                         groups.map((group, index) => (
@@ -1305,6 +1311,7 @@ export function TemplateVisualEditorDialog({
                                 }
                               >
                                 <span onPointerDown={(event) => groupPointerSort.begin(index, event)}><GripVertical className="h-4 w-4 cursor-grab touch-none text-muted-foreground" aria-label="长按拖动排序" /></span>
+                                {group.icon ? (/^https?:\/\//i.test(group.icon) ? <img src={group.icon} alt="" className="size-4 shrink-0 rounded object-contain" /> : <ImageIcon className="size-4 shrink-0 text-primary" aria-label={group.icon} />) : null}
                                 <strong className="truncate text-sm text-foreground">
                                   {group.name || `未命名策略组 ${index + 1}`}
                                 </strong>
@@ -1408,24 +1415,20 @@ export function TemplateVisualEditorDialog({
                                     </div>
                                   </label>
                                 </div>
-                                <div className="grid gap-3 sm:grid-cols-3">
-                                  {["url-test", "fallback", "load-balance"].includes(group.type) && <>
-                                    <label className="grid gap-1.5 text-xs font-medium">
-                                      测速 URL
-                                      <Input className={editorFieldClass} value={group.url || ""} onChange={(event) => update(index, { url: event.target.value })} placeholder="http://www.gstatic.com/generate_204" />
-                                    </label>
-                                    <label className="grid gap-1.5 text-xs font-medium">
-                                      间隔（秒）
-                                      <Input className={editorFieldClass} value={group.interval || ""} onChange={(event) => update(index, { interval: event.target.value })} placeholder="300" />
-                                    </label>
-                                  </>}
+                                {group.type === "url-test" && <div className="grid gap-3 sm:grid-cols-2">
+                                  <label className="grid gap-1.5 text-xs font-medium">
+                                    测速 URL
+                                    <Input className={editorFieldClass} value={group.url || ""} onChange={(event) => update(index, { url: event.target.value })} placeholder="http://www.gstatic.com/generate_204" />
+                                  </label>
+                                  <label className="grid gap-1.5 text-xs font-medium">
+                                    间隔（秒）
+                                    <Input className={editorFieldClass} value={group.interval || ""} onChange={(event) => update(index, { interval: event.target.value })} placeholder="300" />
+                                  </label>
+                                </div>}
+                                <div className="grid gap-3 sm:grid-cols-2">
+                                  <label className="grid gap-1.5 text-xs font-medium">图标（icon）<Input className={editorFieldClass} value={group.icon || ""} onChange={(event) => update(index, { icon: event.target.value })} placeholder="https://example.com/icon.png" /></label>
                                   <label className="flex items-end gap-2 pb-2 text-xs font-medium">
-                                    <Switch
-                                      checked={Boolean(group.hidden)}
-                                      onCheckedChange={(hidden) =>
-                                        update(index, { hidden })
-                                      }
-                                    />
+                                    <Switch checked={Boolean(group.hidden)} onCheckedChange={(hidden) => update(index, { hidden })} />
                                     隐藏策略组
                                   </label>
                                 </div>
@@ -1434,7 +1437,7 @@ export function TemplateVisualEditorDialog({
                                   <label className="grid gap-1.5 text-xs font-medium">排除关键词（exclude-filter）<Input className={editorFieldClass} value={group.excludeFilter || ""} onChange={(event) => update(index, { excludeFilter: event.target.value })} placeholder="例如：游戏|IPLC|Traffic" /></label>
                                 </div>
                                 <section className="space-y-2">
-                                  <div className="flex items-center justify-between text-xs font-medium"><span>代理组成员</span><span className="text-muted-foreground">已选 {group.proxies.length} 项</span></div>
+                                  <div className="flex items-center justify-between text-xs font-medium"><span>策略组成员</span><span className="text-muted-foreground">已选 {group.proxies.length} 项</span></div>
                                   <div className="space-y-2">
                                     {group.proxies.map((member, memberIndex) => <div key={`${member}-${memberIndex}`} className="flex items-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm"><GripVertical className="size-4 text-muted-foreground" /><span className="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] text-primary">{member === "DIRECT" || member === "REJECT" ? "BUILT-IN" : "GROUP"}</span><span className="min-w-0 flex-1 truncate">{member}</span><Button variant="ghost" size="sm" className="h-7 text-destructive hover:text-destructive" onClick={() => update(index, { proxies: group.proxies.filter((_, itemIndex) => itemIndex !== memberIndex) })}>移除</Button></div>)}
                                   </div>
@@ -1580,7 +1583,7 @@ export function TemplateVisualEditorDialog({
       <Dialog open={memberPickerGroup !== null} onOpenChange={(next) => { if (!next) setMemberPickerIndex(null); }}>
         <DialogContent onOpenAutoFocus={(event) => event.preventDefault()} className="h-[min(760px,calc(100svh-3rem))] max-w-[1180px] gap-0 overflow-hidden border border-border bg-card p-0 text-card-foreground shadow-2xl sm:p-0">
           <DialogHeader className="border-b border-border bg-muted/30 px-6 py-5 pr-16">
-            <DialogTitle className="flex items-center gap-3 text-xl text-foreground"><span className="grid size-9 place-items-center rounded-lg bg-primary/10 text-primary"><Plus className="size-5" /></span>添加成员到代理组</DialogTitle>
+            <DialogTitle className="flex items-center gap-3 text-xl text-foreground"><span className="grid size-9 place-items-center rounded-lg bg-primary/10 text-primary"><Plus className="size-5" /></span>添加成员到策略组</DialogTitle>
             <DialogDescription>目标策略组：{memberPickerGroup?.name || "未命名策略组"} · 选择后会实时同步到 YAML 预览。</DialogDescription>
           </DialogHeader>
           <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[1.15fr_.85fr]">

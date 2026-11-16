@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.4.52] - 2026-11-16
+
+### Improved
+
+- Clash、Egern、Loon 策略组编辑器统一策略组/成员/成员选择弹窗术语，并继续对齐展开排版与成员列表。
+- Clash 策略组可视化编辑支持 `icon` 的读取、编辑、写回及卡片展示。
+- Egern 自动测速组仅暴露测速 URL 和检查间隔，使用默认容差、超时；隐藏 QUIC 控件。
+- Egern、Loon 策略组类型下拉框使用中文功能名称。
+
+Agent 保持 `2.2.231`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.4.51] - 2026-11-16
 
 ### Improved

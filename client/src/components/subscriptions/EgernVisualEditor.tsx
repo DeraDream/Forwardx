@@ -40,6 +40,15 @@ const types = [
   "external",
   "conditional",
 ];
+const typeLabels: Record<string, string> = {
+  select: "手动选择",
+  auto_test: "自动测速",
+  smart: "智能选择",
+  fallback: "故障转移",
+  load_balance: "负载均衡",
+  external: "外部策略",
+  conditional: "条件策略",
+};
 const defaultLatencyTestURL = "http://www.gstatic.com/generate_204";
 const getLatencyTestURL = (group: Group) =>
   typeof group.latency_test_url === "string" && group.latency_test_url.trim()
@@ -68,6 +77,9 @@ function parse(value: string) {
       if (group.urls === null) delete group.urls;
       group.latency_test_url = getLatencyTestURL(group);
     }
+    // 面板固定使用 Egern 默认的切换容差和超时，不暴露或保留覆写值。
+    delete group.tolerance;
+    delete group.timeout;
     return group;
   });
   const rules = (Array.isArray(root.rules) ? root.rules : []).map(
@@ -306,7 +318,7 @@ export function EgernVisualEditor({ value, view = "groups", onChange, onError, o
     markDirty();
     setGroups((items) => { const next = [...items]; next.splice(to, 0, next.splice(from, 1)[0]); return next; });
   };
-  const groupPointerSort = usePointerListSort(reorderGroups, (index) => <div className="flex min-h-11 w-[min(900px,calc(100vw-3rem))] items-center gap-2 rounded-md border border-primary/70 bg-card px-3 py-2.5 text-sm font-semibold shadow-2xl"><GripVertical className="size-4 shrink-0 text-muted-foreground" /><span>{groups[index]?.name || `未命名策略组 ${index + 1}`}</span><span className="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] font-medium text-primary">{groups[index]?.type || "select"}</span></div>);
+  const groupPointerSort = usePointerListSort(reorderGroups, (index) => <div className="flex min-h-11 w-[min(900px,calc(100vw-3rem))] items-center gap-2 rounded-md border border-primary/70 bg-card px-3 py-2.5 text-sm font-semibold shadow-2xl"><GripVertical className="size-4 shrink-0 text-muted-foreground" /><span>{groups[index]?.name || `未命名策略组 ${index + 1}`}</span><span className="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] font-medium text-primary">{typeLabels[groups[index]?.type || "select"] || groups[index]?.type || "select"}</span></div>);
   const rulePointerSort = usePointerListSort(reorderRules, (index) => <div className="flex w-[min(640px,calc(100vw-3rem))] items-center gap-3 rounded-md border border-primary/70 bg-card px-3 py-2.5 shadow-2xl"><GripVertical className="size-4 shrink-0 text-muted-foreground" /><b className="font-mono text-xs">{rules[index]?.type || "RULE"}</b><span className="truncate text-sm">{ruleMatchLabel(rules[index] || { type: "", policy: "" })}</span></div>);
   const removeGroup = (index: number) => {
     markDirty();
@@ -328,7 +340,7 @@ export function EgernVisualEditor({ value, view = "groups", onChange, onError, o
   return (
     <section className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3" onChangeCapture={markDirty} onPointerMove={(event) => { groupPointerSort.move(event); rulePointerSort.move(event); }} onPointerUp={(event) => { groupPointerSort.end(event); rulePointerSort.end(event); }} onPointerCancel={(event) => { groupPointerSort.end(event); rulePointerSort.end(event); }}>
       <div className="mb-3 flex items-center justify-between gap-2">
-        <strong className="text-sm">Egern 策略组 · {groups.length}</strong>
+        <strong className="text-sm">策略组 <span className="ml-1 rounded-full bg-primary/10 px-2 py-0.5 font-mono text-xs text-primary">{groups.length}</span></strong>
         <div className="flex gap-2"><Button size="sm" variant="outline" onClick={() => setExpanded(allGroupsExpanded ? [] : groups.map((_, index) => index))}>{allGroupsExpanded ? "全部收起" : "全部展开"}</Button><Button
           size="sm"
           onClick={() => {
@@ -369,7 +381,7 @@ export function EgernVisualEditor({ value, view = "groups", onChange, onError, o
               <span onPointerDown={(event) => groupPointerSort.begin(index, event)}><GripVertical className="size-4 shrink-0 cursor-grab touch-none text-muted-foreground" aria-label="长按拖动排序" /></span>
               {typeof group.icon === "string" && /^https?:\/\//i.test(group.icon) ? <img src={group.icon} alt="" className="size-4 shrink-0 rounded object-contain" /> : group.icon ? <ImageIcon className="size-4 shrink-0 text-primary" aria-label={String(group.icon)} /> : null}
               <span className="truncate">{group.name || `未命名策略组 ${index + 1}`}</span>
-              <span className="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] font-medium text-primary">{group.type}</span>
+              <span className="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] font-medium text-primary">{typeLabels[group.type] || group.type}</span>
             </button>
             <Button variant="ghost" size="icon" className="size-7" disabled={!index} onClick={() => { markDirty(); moveGroup(index, -1); }}><ChevronUp className="size-4" /></Button>
             <Button variant="ghost" size="icon" className="size-7" disabled={index === groups.length - 1} onClick={() => { markDirty(); moveGroup(index, 1); }}><ChevronDown className="size-4" /></Button>
@@ -401,41 +413,25 @@ export function EgernVisualEditor({ value, view = "groups", onChange, onError, o
                   }}
                 >
                   <SelectTrigger className="h-10 border-input bg-background"><SelectValue /></SelectTrigger>
-                  <SelectContent>{types.map((type) => <SelectItem key={type} value={type}>{type}</SelectItem>)}</SelectContent>
+                  <SelectContent>{types.map((type) => <SelectItem key={type} value={type}>{typeLabels[type]}</SelectItem>)}</SelectContent>
                 </Select></label>
               </div>
-              {group.type !== "external" && group.type !== "conditional" && <section className="order-3 space-y-2 rounded-lg border border-border bg-muted/15 p-3">
+              {group.type !== "external" && group.type !== "conditional" && <section className="order-4 space-y-2">
                 <div className="flex items-center justify-between text-xs font-medium"><span>策略组成员</span><span className="text-muted-foreground">已选 {group.policies.filter(Boolean).length} 项</span></div>
                 <div className="space-y-2">{group.policies.filter(Boolean).map((policy, policyIndex) => <div key={`${policy}-${policyIndex}`} className="flex items-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm"><GripVertical className="size-4 text-muted-foreground" /><span className="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] text-primary">{["DIRECT", "REJECT"].includes(policy) ? "BUILT-IN" : "GROUP"}</span><span className="min-w-0 flex-1 truncate">{policy}</span><Button variant="ghost" size="sm" className="h-7 text-destructive hover:text-destructive" onClick={() => { markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, policies: item.policies.filter((_, currentIndex) => currentIndex !== policyIndex) } : item)); }}>移除</Button></div>)}</div>
                 <Button variant="outline" className="w-full border-dashed" onClick={() => { setMemberQuery(""); setMemberPickerIndex(index); }}><Plus className="mr-1 size-4" />添加成员</Button>
               </section>}
-              {group.type !== "conditional" && <section className="order-2 grid gap-3 rounded-lg border border-border bg-muted/15 p-3 sm:grid-cols-2">
-                <label className="grid gap-1 text-xs font-medium">图标（icon）<Input value={String(group.icon || "")} onChange={(event) => { markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, icon: event.target.value || undefined } : item)); }} placeholder="SF Symbol 或 URL" /></label>
-                <label className="grid gap-1 text-xs font-medium">筛选关键词（filter）<Input value={String(group.filter || "")} onChange={(event) => { markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, filter: event.target.value || undefined } : item)); }} placeholder="例如：香港|HK|Hong Kong" /></label>
-                <label className="grid gap-1 text-xs font-medium">排除关键词（exclude_filter）<Input value={String(group.exclude_filter || "")} onChange={(event) => { markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, exclude_filter: event.target.value || undefined } : item)); }} placeholder="例如：游戏|IPLC|Traffic" /></label>
-                <label className="flex items-center justify-between rounded border border-border bg-background px-3 py-2 text-xs"><span>阻止 QUIC（block_quic）</span><Switch checked={group.block_quic === true} onCheckedChange={(block_quic) => { markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, block_quic } : item)); }} /></label>
-                <label className="flex items-center justify-between rounded border border-border bg-background px-3 py-2 text-xs"><span>在 Egern UI 隐藏（hidden）</span><Switch checked={group.hidden === true} onCheckedChange={(hidden) => { markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, hidden } : item)); }} /></label>
+              {group.type !== "conditional" && <section className="order-3 grid gap-3 sm:grid-cols-2">
+                <label className="order-1 grid gap-1 text-xs font-medium">图标（icon）<Input value={String(group.icon || "")} onChange={(event) => { markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, icon: event.target.value || undefined } : item)); }} placeholder="SF Symbol 或 URL" /></label>
+                <label className="order-3 grid gap-1 text-xs font-medium">筛选关键词（filter）<Input value={String(group.filter || "")} onChange={(event) => { markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, filter: event.target.value || undefined } : item)); }} placeholder="例如：香港|HK|Hong Kong" /></label>
+                <label className="order-4 grid gap-1 text-xs font-medium">排除关键词（exclude_filter）<Input value={String(group.exclude_filter || "")} onChange={(event) => { markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, exclude_filter: event.target.value || undefined } : item)); }} placeholder="例如：游戏|IPLC|Traffic" /></label>
+                <label className="order-2 flex items-center justify-between rounded border border-border bg-background px-3 py-2 text-xs"><span>在 Egern UI 隐藏（hidden）</span><Switch checked={group.hidden === true} onCheckedChange={(hidden) => { markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, hidden } : item)); }} /></label>
               </section>}
-              {group.type === "conditional" && <section className="order-2 grid gap-3 rounded-lg border border-border bg-muted/15 p-3 sm:grid-cols-2"><label className="grid gap-1 text-xs font-medium">环境规则（rules，JSON 数组）<Input value={Array.isArray(group.rules) ? JSON.stringify(group.rules) : ""} onChange={(event) => { try { const rules = event.target.value ? JSON.parse(event.target.value) : []; if (!Array.isArray(rules)) return; markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, rules } : item)); } catch { /* 仅在 JSON 有效时写入 */ } }} placeholder='[{"ssid":{"match":"Home-*","policy":"DIRECT"}}]' /></label><label className="grid gap-1 text-xs font-medium">默认策略（default_policy）<Input value={String(group.default_policy || "DIRECT")} onChange={(event) => { markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, default_policy: event.target.value } : item)); }} /></label><label className="grid gap-1 text-xs font-medium">图标（icon）<Input value={String(group.icon || "")} onChange={(event) => { markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, icon: event.target.value || undefined } : item)); }} /></label><label className="flex items-center justify-between rounded border border-border bg-background px-3 py-2 text-xs"><span>阻止 QUIC（block_quic）</span><Switch checked={group.block_quic === true} onCheckedChange={(block_quic) => { markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, block_quic } : item)); }} /></label><label className="flex items-center justify-between rounded border border-border bg-background px-3 py-2 text-xs"><span>在 Egern UI 隐藏（hidden）</span><Switch checked={group.hidden === true} onCheckedChange={(hidden) => { markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, hidden } : item)); }} /></label></section>}
-              {group.type === "external" && <label className="order-2 grid gap-1 text-xs font-medium">订阅节点选择策略（type）<Select value={String((group as any).externalType || "select")} onValueChange={(externalType) => { markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, externalType } : item)); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{["select", "auto_test", "smart", "fallback", "load_balance"].map((type) => <SelectItem key={type} value={type}>{type}</SelectItem>)}</SelectContent></Select></label>}
-              {["auto_test", "fallback"].includes(group.type === "external" ? String((group as any).externalType || "select") : group.type) && <div className="order-4 grid gap-3 sm:grid-cols-3"><label className="grid gap-1 text-xs font-medium">检查间隔（interval）<Input inputMode="numeric" value={group.interval === undefined ? "" : String(group.interval)} onChange={(event) => { markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, interval: event.target.value === "" ? undefined : Number(event.target.value) } : item)); }} placeholder="600" /></label>{(group.type === "auto_test" || (group.type === "external" && (group as any).externalType === "auto_test")) && <label className="grid gap-1 text-xs font-medium">切换容差（tolerance）<Input inputMode="numeric" value={group.tolerance === undefined ? "" : String(group.tolerance)} onChange={(event) => { markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, tolerance: event.target.value === "" ? undefined : Number(event.target.value) } : item)); }} placeholder="100" /></label>}<label className="grid gap-1 text-xs font-medium">超时（timeout，最大 60）<Input inputMode="numeric" value={group.timeout === undefined ? "" : String(group.timeout)} onChange={(event) => { const timeout = Number(event.target.value); if (event.target.value && (!Number.isInteger(timeout) || timeout < 1 || timeout > 60)) return; markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, timeout: event.target.value === "" ? undefined : timeout } : item)); }} placeholder="5" /></label></div>}
+              {group.type === "conditional" && <section className="order-2 grid gap-3 rounded-lg border border-border bg-muted/15 p-3 sm:grid-cols-2"><label className="grid gap-1 text-xs font-medium">环境规则（rules，JSON 数组）<Input value={Array.isArray(group.rules) ? JSON.stringify(group.rules) : ""} onChange={(event) => { try { const rules = event.target.value ? JSON.parse(event.target.value) : []; if (!Array.isArray(rules)) return; markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, rules } : item)); } catch { /* 仅在 JSON 有效时写入 */ } }} placeholder='[{"ssid":{"match":"Home-*","policy":"DIRECT"}}]' /></label><label className="grid gap-1 text-xs font-medium">默认策略（default_policy）<Input value={String(group.default_policy || "DIRECT")} onChange={(event) => { markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, default_policy: event.target.value } : item)); }} /></label><label className="grid gap-1 text-xs font-medium">图标（icon）<Input value={String(group.icon || "")} onChange={(event) => { markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, icon: event.target.value || undefined } : item)); }} /></label><label className="flex items-center justify-between rounded border border-border bg-background px-3 py-2 text-xs"><span>在 Egern UI 隐藏（hidden）</span><Switch checked={group.hidden === true} onCheckedChange={(hidden) => { markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, hidden } : item)); }} /></label></section>}
+              {group.type === "external" && <label className="order-2 grid gap-1 text-xs font-medium">订阅节点选择策略（type）<Select value={String((group as any).externalType || "select")} onValueChange={(externalType) => { markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, externalType } : item)); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{["select", "auto_test", "smart", "fallback", "load_balance"].map((type) => <SelectItem key={type} value={type}>{typeLabels[type]}</SelectItem>)}</SelectContent></Select></label>}
+              {(group.type === "auto_test" || (group.type === "external" && (group as any).externalType === "auto_test")) && <div className="order-2 grid gap-3 sm:grid-cols-2"><label className="grid gap-1 text-xs font-medium">测速 URL<Input value={getLatencyTestURL(group)} placeholder={defaultLatencyTestURL} onChange={(event) => { markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, latency_test_url: event.target.value } : item)); }} /></label><label className="grid gap-1 text-xs font-medium">检查间隔（interval）<Input inputMode="numeric" value={group.interval === undefined ? "" : String(group.interval)} onChange={(event) => { markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, interval: event.target.value === "" ? undefined : Number(event.target.value) } : item)); }} placeholder="600" /></label></div>}
               {(group.type === "load_balance" || (group.type === "external" && (group as any).externalType === "load_balance")) && <label className="order-4 grid gap-1 text-xs font-medium">负载均衡算法<Select value={String(group.algorithm || "hash")} onValueChange={(algorithm) => { markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, algorithm } : item)); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="hash">hash（按目标固定）</SelectItem><SelectItem value="round_robin">round_robin（轮询）</SelectItem></SelectContent></Select></label>}
               {(group.type === "smart" || (group.type === "external" && (group as any).externalType === "smart")) && <label className="order-4 grid gap-1 text-xs font-medium">优先级系数（priorities，JSON 对象）<Input value={group.priorities ? JSON.stringify(group.priorities) : ""} onChange={(event) => { try { const priorities = event.target.value ? JSON.parse(event.target.value) : undefined; markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, priorities } : item)); } catch { /* 仅在 JSON 有效时写入 */ } }} placeholder='{"^HK Premium$": 0.8}' /></label>}
-              {(group.type === "auto_test" || (group.type === "external" && (group as any).externalType === "auto_test")) && (
-                <label className="order-4 grid gap-1.5 text-xs font-medium">
-                  测速 URL
-                  <Input
-                    value={getLatencyTestURL(group)}
-                    placeholder={defaultLatencyTestURL}
-                    onChange={(event) => setGroups((items) =>
-                      items.map((item, position) => position === index
-                        ? { ...item, latency_test_url: event.target.value }
-                        : item,
-                      ),
-                    )}
-                  />
-                </label>
-              )}
               <section className="order-5 border-t border-border/70 pt-3">
                 <div className="mb-3 flex items-center justify-between gap-2">
                   <button
