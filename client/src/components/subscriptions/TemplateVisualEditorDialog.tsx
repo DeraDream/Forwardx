@@ -1169,6 +1169,8 @@ export function TemplateVisualEditorDialog({
                 onChange={setSource}
                 onDirtyChange={setExternalVisualDirty}
                 onError={(message) => { if (message) toast.error(message); }}
+                onOpenRuleSet={(name) => { setRuleSetFocus(name); setRuleSetFocusNonce((nonce) => nonce + 1); setMode("ruleSets"); }}
+                onFocusLine={(line) => setVisualYamlFocus({ line, nonce: Date.now() })}
               />
             ) : mode === "rules" ? (
               <div className="grid min-h-0 flex-1 overflow-hidden bg-muted/20 lg:grid-cols-[minmax(420px,1fr)_minmax(420px,1fr)]">
@@ -1180,7 +1182,7 @@ export function TemplateVisualEditorDialog({
                   </header>
                   {visualRewriteRisk && <div className="mx-3 mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">此模板含注释。可视化保存前会再次确认；如需严格保持注释位置，请使用代码模式。</div>}
                   <div className="min-h-0 flex-1 overflow-hidden [&_input]:border-border [&_input]:bg-background [&_input]:text-foreground [&_select]:border-border [&_select]:bg-background [&_select]:text-foreground">
-                    {templateKind === "egern" ? <EgernVisualEditor view="rules" value={source} onChange={setSource} onDirtyChange={setExternalVisualDirty} onError={(message) => { if (message) toast.error(message); }} /> : <LoonVisualEditor view="rules" value={source} onChange={setSource} onDirtyChange={setExternalVisualDirty} onError={(message) => { if (message) toast.error(message); }} />}
+                    {templateKind === "egern" ? <EgernVisualEditor view="rules" value={source} onChange={setSource} onDirtyChange={setExternalVisualDirty} onError={(message) => { if (message) toast.error(message); }} onOpenRuleSet={(name) => { setRuleSetFocus(name); setRuleSetFocusNonce((nonce) => nonce + 1); setMode("ruleSets"); }} onFocusLine={(line) => setVisualYamlFocus({ line, nonce: Date.now() })} /> : <LoonVisualEditor view="rules" value={source} onChange={setSource} onDirtyChange={setExternalVisualDirty} onError={(message) => { if (message) toast.error(message); }} onOpenRuleSet={(name) => { setRuleSetFocus(name); setRuleSetFocusNonce((nonce) => nonce + 1); setMode("ruleSets"); }} />}
                   </div>
                 </div>
                 </section>
@@ -1192,7 +1194,7 @@ export function TemplateVisualEditorDialog({
                     </div>
                     <span className={`font-mono text-[11px] ${validation.valid ? "text-emerald-600 dark:text-emerald-400" : "text-destructive"}`}>{validation.valid ? "格式合规" : "待修复"}</span>
                   </header>
-                  <CodeSurface value={source} language={codeLanguage} readOnly />
+                  <CodeSurface value={source} language={codeLanguage} readOnly focusLine={visualYamlFocus?.line} focusNonce={visualYamlFocus?.nonce} />
                 </section>
               </div>
             ) : mode === "visual" && templateKind !== "clash" && templateKind !== "unknown" ? (
@@ -1200,12 +1202,12 @@ export function TemplateVisualEditorDialog({
                 <section className="flex h-full min-h-0 flex-col overflow-hidden p-4">
                   <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border bg-card shadow-sm">
                     <header className="border-b border-border bg-muted/30 px-4 py-3"><p className="text-sm font-semibold text-foreground">{templateKind === "egern" ? "Egern 策略组" : "Loon 策略组"} <span className="ml-1 rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] text-primary">原生结构</span></p><p className="mt-0.5 text-xs text-muted-foreground">{templateKind === "egern" ? "编辑 policy_groups，并同步引用这些策略的规则。" : "编辑 [Proxy Group]，并同步引用这些策略组的规则。"}</p></header>
-                    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{templateKind === "egern" ? <EgernVisualEditor view="groups" value={source} onChange={setSource} onDirtyChange={setExternalVisualDirty} onError={(message) => { if (message) toast.error(message); }} /> : <LoonVisualEditor view="groups" value={source} onChange={setSource} onDirtyChange={setExternalVisualDirty} onError={(message) => { if (message) toast.error(message); }} />}</div>
+                    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{templateKind === "egern" ? <EgernVisualEditor view="groups" value={source} onChange={setSource} onDirtyChange={setExternalVisualDirty} onError={(message) => { if (message) toast.error(message); }} onOpenRuleSet={(name) => { setRuleSetFocus(name); setRuleSetFocusNonce((nonce) => nonce + 1); setMode("ruleSets"); }} onFocusLine={(line) => setVisualYamlFocus({ line, nonce: Date.now() })} /> : <LoonVisualEditor view="groups" value={source} onChange={setSource} onDirtyChange={setExternalVisualDirty} onError={(message) => { if (message) toast.error(message); }} />}</div>
                   </div>
                 </section>
                 <section className="hidden min-h-0 flex-col overflow-hidden border-l border-border bg-background lg:flex">
                   <header className="flex items-center justify-between border-b border-border bg-muted/30 px-4 py-3"><div><p className="text-sm font-semibold text-foreground"><i className="mr-2 inline-block size-2 rounded-full bg-cyan-400" />实时 {codeFormatLabel} 预览 <span className="ml-1 font-mono text-[11px] font-normal text-muted-foreground">· 双向同步</span></p><p className="mt-0.5 text-xs text-muted-foreground">左侧策略组修改会实时反映在此处；最终保存由右上角“保存模板”完成。</p></div><span className={`font-mono text-[11px] ${validation.valid ? "text-emerald-600 dark:text-emerald-400" : "text-destructive"}`}>{validation.valid ? "格式合规" : "待修复"}</span></header>
-                  <CodeSurface value={source} language={codeLanguage} readOnly />
+                  <CodeSurface value={source} language={codeLanguage} readOnly focusLine={visualYamlFocus?.line} focusNonce={visualYamlFocus?.nonce} />
                 </section>
               </div>
             ) : (
@@ -1252,6 +1254,8 @@ export function TemplateVisualEditorDialog({
                       onError={(message) => {
                         if (message) toast.error(message);
                       }}
+                      onOpenRuleSet={(name) => { setRuleSetFocus(name); setRuleSetFocusNonce((nonce) => nonce + 1); setMode("ruleSets"); }}
+                      onFocusLine={(line) => setVisualYamlFocus({ line, nonce: Date.now() })}
                     />
                     </div>
                   ) : templateKind === "loon" ? (
