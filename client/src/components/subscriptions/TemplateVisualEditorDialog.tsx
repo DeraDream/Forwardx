@@ -660,9 +660,18 @@ function buildYaml(base: string, groups: Group[], rules: Rule[]) {
     typeof parsed === "object"
   ) {
     const root: Record<string, unknown> = { ...parsed };
-    root["proxy-groups"] = groups.map(({ excludeFilter, extra, ...group }) => ({
+    // Do not serialize blank optional values. Mihomo parses `interval` as an
+    // integer, so an editor placeholder must never become `interval: ""`.
+    root["proxy-groups"] = groups.map(({ name, type, proxies, hidden, url, interval, tolerance, filter, excludeFilter, extra }) => ({
       ...extra,
-      ...group,
+      name,
+      type,
+      proxies,
+      ...(hidden ? { hidden: true } : {}),
+      ...(url ? { url } : {}),
+      ...(/^\d+$/.test(interval || "") ? { interval: Number(interval) } : {}),
+      ...(/^\d+$/.test(tolerance || "") ? { tolerance: Number(tolerance) } : {}),
+      ...(filter ? { filter } : {}),
       ...(excludeFilter ? { "exclude-filter": excludeFilter } : {}),
     }));
     // 先让 YAML 库处理其它字段，再把 rules 区替换为原有顺序的文本行；
