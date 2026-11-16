@@ -1,306 +1,62 @@
-import { useEffect, useMemo, useState } from "react";
-import { ArrowUpRight, ChevronDown, ChevronUp, GripVertical, Plus, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowUpRight, ChevronDown, ChevronUp, Code2, GripVertical, Plus, Search, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { usePointerListSort } from "./usePointerListSort";
 
 type Section = { name: string; lines: string[] };
-type Group = {
-  name: string;
-  type: string;
-  policies: string[];
-  extras: string[];
-};
-type Rule = { value: string; target: string };
-type Props = {
-  value: string;
-  view?: "groups" | "rules";
-  onChange: (value: string) => void;
-  onError: (message: string) => void;
-  onDirtyChange: (dirty: boolean) => void;
-  onOpenRuleSet?: (name: string) => void;
-};
-const types = ["select", "url-test", "fallback", "load-balance"];
-const ruleSetReference = (value: string) => {
-  const [type, name] = value.split(",").map((part) => part.trim());
-  return type?.toUpperCase() === "RULE-SET" ? name || "" : "";
-};
-const targetOf = (value: string) =>
-  value
-    .split(",")
-    .map((part) => part.trim())
-    .reverse()
-    .find(
-      (part) =>
-        part &&
-        !["no-resolve", "extended-matching", "force-remote-dns"].includes(
-          part.toLowerCase(),
-        ),
-    ) || "";
+type Group = { name: string; type: string; policies: string[]; settings: Record<string, string>; extras: string[] };
+type Rule = { value: string; target: string; disabled?: boolean };
+type Props = { value: string; view?: "groups" | "rules"; onChange: (value: string) => void; onError: (message: string) => void; onDirtyChange: (dirty: boolean) => void; onOpenRuleSet?: (name: string) => void; onFocusLine?: (line: number) => void };
+const groupTypes = ["select", "url-test", "fallback", "load-balance"];
+const ruleTypes = ["DOMAIN", "DOMAIN-SUFFIX", "DOMAIN-KEYWORD", "DOMAIN-WILDCARD", "DOMAIN-REGEX", "USER-AGENT", "URL-REGEX", "IP-CIDR", "IP-CIDR6", "GEOIP", "RULE-SET", "PROCESS-NAME", "PROCESS-PATH", "DST-PORT", "SRC-IP", "AND", "OR", "NOT", "FINAL"];
+const modifiers = new Set(["no-resolve", "extended-matching", "force-remote-dns"]);
+const builtIns = ["DIRECT", "REJECT", "PROXY", "__LOON_ALL_NODES__"];
+const ruleSetReference = (value: string) => { const [type, name] = value.split(",").map((part) => part.trim()); return type?.toUpperCase() === "RULE-SET" ? name || "" : ""; };
+function targetOf(value: string) { return value.split(",").map((part) => part.trim()).reverse().find((part) => part && !modifiers.has(part.toLowerCase())) || ""; }
 function load(value: string) {
-  const sections: Section[] = [];
-  let current: Section | undefined;
-  value
-    .replace(/\r/g, "")
-    .split("\n")
-    .forEach((line) => {
-      const heading = line.match(/^\s*\[([^\]]+)\]\s*$/);
-      if (heading) {
-        current = { name: heading[1], lines: [] };
-        sections.push(current);
-      } else if (current) current.lines.push(line);
-    });
-  if (!sections.length)
-    throw new Error("Loon 配置需要 INI 分段，例如 [Proxy Group]");
-  const groupSection = sections.find(
-    (item) => item.name.toLowerCase() === "proxy group",
-  );
-  const ruleSection = sections.find(
-    (item) => item.name.toLowerCase() === "rule",
-  );
-  const groups = (groupSection?.lines || [])
-    .filter((line) => line.includes("=") && !/^\s*[#;]/.test(line))
-    .map((line) => {
-      const [name, raw] = line.split(/=(.*)/s);
-      const [type = "select", ...items] = raw
-        .split(",")
-        .map((item) => item.trim())
-        .filter(Boolean);
-      return {
-        name: name.trim(),
-        type: types.includes(type) ? type : "select",
-        policies: items.filter((item) => !item.includes("=")),
-        extras: items.filter((item) => item.includes("=")),
-      };
-    });
-  const rules = (ruleSection?.lines || [])
-    .filter((line) => line.trim() && !/^\s*[#;]/.test(line))
-    .map((value) => ({ value, target: targetOf(value) }));
+  const sections: Section[] = []; let current: Section | undefined;
+  value.replace(/\r/g, "").split("\n").forEach((line) => { const heading = line.match(/^\s*\[([^\]]+)\]\s*$/); if (heading) { current = { name: heading[1], lines: [] }; sections.push(current); } else if (current) current.lines.push(line); });
+  if (!sections.length) throw new Error("Loon 配置需要 INI 分段，例如 [Proxy Group]");
+  const groupSection = sections.find((item) => item.name.toLowerCase() === "proxy group");
+  const ruleSection = sections.find((item) => item.name.toLowerCase() === "rule");
+  const groups = (groupSection?.lines || []).flatMap((line) => {
+    if (!line.includes("=") || /^\s*[#;]/.test(line)) return [];
+    const [name, raw] = line.split(/=(.*)/s); const [rawType = "select", ...items] = raw.split(",").map((item) => item.trim()).filter(Boolean);
+    const settings: Record<string, string> = {}; const policies: string[] = []; const extras: string[] = [];
+    items.forEach((item) => { const [key, ...rest] = item.split("="); const setting = rest.join("=").trim(); if (!setting) policies.push(item); else if (["url", "interval", "tolerance", "max-timeout", "algorithm"].includes(key.trim())) settings[key.trim()] = setting; else extras.push(item); });
+    return [{ name: name.trim(), type: groupTypes.includes(rawType) ? rawType : "select", policies, settings, extras }];
+  });
+  const rules = (ruleSection?.lines || []).flatMap((line) => !line.trim() || /^\s*[#;]/.test(line) ? [] : [{ value: line, target: targetOf(line), disabled: false }]);
   return { sections, groups, rules };
 }
-export function LoonVisualEditor({ value, view = "groups", onChange, onError, onDirtyChange, onOpenRuleSet }: Props) {
-  const [sections, setSections] = useState<Section[]>([]);
-  const [groups, setGroups] = useState<Group[]>([]);
-  const [rules, setRules] = useState<Rule[]>([]);
-  const [expanded, setExpanded] = useState<number[]>([]);
-  const [ruleDraft, setRuleDraft] = useState("DOMAIN-SUFFIX,example.com,DIRECT");
-  const [ruleDialogOpen, setRuleDialogOpen] = useState(false);
-  const [rulesDirty, setRulesDirty] = useState(false);
+function ruleParts(rule: Rule) { const parts = rule.value.split(",").map((part) => part.trim()); const type = (parts.shift() || "DOMAIN-SUFFIX").toUpperCase(); const targetIndex = parts.map((part, index) => ({ part, index })).filter(({ part }) => !modifiers.has(part.toLowerCase())).at(-1)?.index ?? -1; const target = targetIndex >= 0 ? parts[targetIndex] : "DIRECT"; const match = type === "FINAL" ? "" : parts.slice(0, Math.max(0, targetIndex)).join(","); const flags = parts.filter((part, index) => index > targetIndex && modifiers.has(part.toLowerCase())); return { type, match, target, flags }; }
+function encodeRule(type: string, match: string, target: string, flags: string[]) { return [type, ...(type === "FINAL" ? [] : [match.trim()]), target.trim() || "DIRECT", ...flags].filter(Boolean).join(","); }
+function validateRule(rule: Rule, targets: string[], ruleSets: string[]) { const { type, match, target } = ruleParts(rule); if (!targets.includes(target)) return "请选择当前模板中有效的路由目标"; if (type !== "FINAL" && !match) return "请填写规则匹配值"; if (["IP-CIDR", "IP-CIDR6"].includes(type) && !/^[0-9a-f:.]+\/\d+$/i.test(match)) return "CIDR 格式无效"; if (type === "DST-PORT" && !/^\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*$/.test(match)) return "端口格式无效，例如 80,443,8000-9000"; if (type === "GEOIP" && !/^[a-z]{2}$/i.test(match)) return "GEOIP 请使用两位地区代码"; if (type === "RULE-SET" && !ruleSets.includes(match)) return "请选择已有的 Loon 规则集"; return ""; }
+function LoonRuleDialog({ editor, targets, ruleSets, onChange, onSave }: { editor: { index: number | null; rule: Rule } | null; targets: string[]; ruleSets: string[]; onChange: (value: { index: number | null; rule: Rule } | null) => void; onSave: () => void }) {
+  if (!editor) return null; const parsed = ruleParts(editor.rule); const update = (patch: Partial<typeof parsed>) => onChange({ ...editor, rule: { ...editor.rule, value: encodeRule(patch.type || parsed.type, patch.match === undefined ? parsed.match : patch.match, patch.target || parsed.target, patch.flags || parsed.flags), target: patch.target || parsed.target } });
+  return <Dialog open onOpenChange={(open) => !open && onChange(null)}><DialogContent className="max-w-[900px] gap-0 overflow-hidden p-0"><DialogHeader className="border-b border-border bg-muted/30 px-6 py-5"><DialogTitle>{editor.index === null ? "添加 Loon 流量规则" : "编辑 Loon 流量规则"}</DialogTitle><p className="mt-1 text-sm text-muted-foreground">按 Loon [Rule] 原生格式生成并即时写入预览。</p></DialogHeader><div className="grid max-h-[min(650px,calc(100svh-13rem))] gap-5 overflow-y-auto p-6"><section className="rounded-xl border border-border bg-muted/15 p-4"><p className="mb-3 text-sm font-semibold">匹配类型</p><div className="flex flex-wrap gap-1.5">{ruleTypes.map((type) => <button key={type} type="button" onClick={() => update({ type, match: type === "FINAL" ? "" : parsed.match })} className={`rounded-md border px-2 py-1.5 font-mono text-xs ${parsed.type === type ? "border-primary bg-primary/10 text-primary" : "border-border bg-background text-muted-foreground hover:border-primary/50"}`}>{type}</button>)}</div></section><div className="grid gap-5 md:grid-cols-2"><section className="grid content-start gap-3 rounded-xl border border-border p-4"><p className="text-sm font-semibold">规则参数</p>{parsed.type === "FINAL" ? <code className="rounded bg-primary/5 p-3 text-primary">FINAL（无需匹配值）</code> : parsed.type === "RULE-SET" ? <Select value={ruleSets.includes(parsed.match) ? parsed.match : "__custom"} onValueChange={(match) => match !== "__custom" && update({ match })}><SelectTrigger><SelectValue placeholder="选择规则集" /></SelectTrigger><SelectContent><SelectItem value="__custom" disabled>{parsed.match || "引用不存在的规则集"}</SelectItem>{ruleSets.map((name) => <SelectItem key={name} value={name}>{name}</SelectItem>)}</SelectContent></Select> : <Input value={parsed.match} onChange={(event) => update({ match: event.target.value })} placeholder={parsed.type.includes("CIDR") ? "例如 1.2.3.0/24" : "匹配内容"} />}</section><section className="grid content-start gap-3 rounded-xl border border-border p-4"><p className="text-sm font-semibold">路由目标</p><Select value={targets.includes(parsed.target) ? parsed.target : "__custom"} onValueChange={(target) => target !== "__custom" && update({ target })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{!targets.includes(parsed.target) && <SelectItem value="__custom" disabled>{parsed.target || "未指定"}</SelectItem>}{targets.map((target) => <SelectItem key={target} value={target}>{target}</SelectItem>)}</SelectContent></Select>{["IP-CIDR", "IP-CIDR6", "GEOIP"].includes(parsed.type) && <label className="flex items-center justify-between rounded border p-3 text-xs">no-resolve<Switch checked={parsed.flags.includes("no-resolve")} onCheckedChange={(checked) => update({ flags: checked ? [...parsed.flags, "no-resolve"] : parsed.flags.filter((item) => item !== "no-resolve") })} /></label>}</section></div><code className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-xs text-primary">{editor.rule.value}</code></div><DialogFooter className="border-t border-border bg-muted/30 px-6 py-4"><Button variant="outline" onClick={() => onChange(null)}>取消</Button><Button onClick={onSave}>应用规则</Button></DialogFooter></DialogContent></Dialog>;
+}
+export function LoonVisualEditor({ value, view = "groups", onChange, onError, onDirtyChange, onOpenRuleSet, onFocusLine }: Props) {
+  const [sections, setSections] = useState<Section[]>([]); const [groups, setGroups] = useState<Group[]>([]); const [rules, setRules] = useState<Rule[]>([]); const [expanded, setExpanded] = useState<number[]>([]); const [expandedRules, setExpandedRules] = useState<number[]>([]); const [memberPickerIndex, setMemberPickerIndex] = useState<number | null>(null); const [memberQuery, setMemberQuery] = useState(""); const [ruleEditor, setRuleEditor] = useState<{ index: number | null; rule: Rule } | null>(null); const [rulesDirty, setRulesDirty] = useState(false); const previousOutput = useRef("");
   const markDirty = () => { setRulesDirty(true); onDirtyChange(true); };
-  useEffect(() => {
-    try {
-      const next = load(value);
-      setSections(next.sections);
-      setGroups(next.groups);
-      setRules(next.rules);
-      onDirtyChange(false);
-      onError("");
-    } catch (error) {
-      onError(error instanceof Error ? error.message : "Loon 格式错误");
-    }
-  }, [value]);
-  const output = useMemo(() => {
-    const next = sections.map((section) => ({
-      ...section,
-      lines: [...section.lines],
-    }));
-    const pg = next.find((item) => item.name.toLowerCase() === "proxy group");
-    const rs = next.find((item) => item.name.toLowerCase() === "rule");
-    if (pg) {
-      const notes = pg.lines.filter((line) => !line.trim() || /^\s*[#;]/.test(line));
-      pg.lines = [
-        ...notes,
-        ...groups.map(
-        (group) =>
-          `${group.name} = ${[group.type, ...group.policies.filter(Boolean), ...group.extras].join(",")}`,
-        ),
-      ];
-    }
-    if (rs) {
-      const notes = rs.lines.filter((line) => !line.trim() || /^\s*[#;]/.test(line));
-      rs.lines = [...notes, ...rules.map((rule) => rule.value)];
-    }
-    return (
-      next
-        .map((section) =>
-          `[${section.name}]\n${section.lines.join("\n")}`.trimEnd(),
-        )
-        .join("\n\n") + "\n"
-    );
-  }, [sections, groups, rules]);
-  useEffect(() => { if (rulesDirty) { onChange(output); setRulesDirty(false); onDirtyChange(false); } }, [rulesDirty, output, onChange, onDirtyChange]);
-  const groupRules = (name: string) =>
-    rules
-      .map((rule, index) => ({ rule, index }))
-      .filter((item) => item.rule.target === name);
-  const renameGroup = (index: number, name: string) => {
-    const previous = groups[index]?.name;
-    setGroups((items) => items.map((item, position) => position === index ? { ...item, name } : item));
-    if (previous !== undefined && previous !== name) {
-      setRules((items) => items.map((rule) => rule.target === previous ? { ...rule, target: name, value: rule.value.replace(new RegExp(`,\\s*${previous.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`), `,${name}`) } : rule));
-    }
-  };
-  const moveGroup = (index: number, amount: number) =>
-    setGroups((items) => {
-      const next = [...items];
-      const target = index + amount;
-      if (target < 0 || target >= next.length) return items;
-      [next[index], next[target]] = [next[target], next[index]];
-      return next;
-    });
-  const removeGroup = (index: number) => {
-    markDirty();
-    const name = groups[index]?.name;
-    setGroups((items) => items.filter((_, position) => position !== index));
-    setRules((items) => items.filter((rule) => rule.target !== name));
-    setExpanded((items) => items.filter((position) => position !== index).map((position) => position > index ? position - 1 : position));
-  };
-  if (view === "rules") return <><section className="min-h-0 flex-1 overflow-y-auto overscroll-contain touch-pan-y p-3 [-webkit-overflow-scrolling:touch]" onChangeCapture={markDirty}>
-    <div className="mb-3 flex items-center justify-between"><div><strong className="text-sm">Loon 流量规则 · {rules.length}</strong><p className="mt-0.5 text-xs text-muted-foreground">按 [Rule] 原始顺序匹配；一行对应一条 Loon 规则。</p></div><Button size="sm" onClick={() => { setRuleDraft("DOMAIN-SUFFIX,example.com,DIRECT"); setRuleDialogOpen(true); }}><Plus className="mr-1 size-4" />添加规则</Button></div>
-    <div className="overflow-hidden rounded-xl border border-border"><div className="grid grid-cols-[34px_minmax(180px,1fr)_120px_36px] gap-2 border-b border-border bg-muted/40 px-3 py-2 text-[10px] text-muted-foreground"><span>#</span><span>规则内容</span><span>路由目标</span><span /></div>{rules.map((rule, index) => <div key={index} className="grid grid-cols-[34px_minmax(180px,1fr)_120px_36px] items-center gap-2 border-b border-border/60 px-3 py-2 last:border-b-0"><span className="font-mono text-[11px] text-muted-foreground">{index + 1}</span><div className="relative min-w-0"><Input className="h-8 w-full pr-8 font-mono text-xs" value={rule.value} onChange={(event) => setRules((items) => items.map((item, position) => position === index ? { value: event.target.value, target: targetOf(event.target.value) } : item))} />{ruleSetReference(rule.value) && <Button variant="ghost" size="icon" className="absolute right-0 top-0 size-8 text-cyan-700 hover:bg-cyan-500/10 hover:text-cyan-700 dark:text-cyan-300 dark:hover:text-cyan-300" aria-label={`打开规则集 ${ruleSetReference(rule.value)}`} title={`打开规则集 ${ruleSetReference(rule.value)}`} onClick={() => onOpenRuleSet?.(ruleSetReference(rule.value))}><ArrowUpRight className="size-3.5" /></Button>}</div><span className="truncate rounded bg-primary/10 px-2 py-1 font-mono text-[11px] text-primary">{rule.target || "未指定"}</span><Button variant="ghost" size="icon" className="size-8 text-destructive" onClick={() => { markDirty(); setRules((items) => items.filter((_, position) => position !== index)); }}><Trash2 className="size-4" /></Button></div>)}</div>
-    <div className="mt-3 flex justify-end"><Button onClick={() => { onChange(output); onDirtyChange(false); }}>应用规则更改</Button></div>
-  </section><Dialog open={ruleDialogOpen} onOpenChange={setRuleDialogOpen}><DialogContent onOpenAutoFocus={(event) => event.preventDefault()}><DialogHeader><DialogTitle>添加 Loon 流量规则</DialogTitle></DialogHeader><label className="grid gap-1.5 py-2 text-sm">规则内容<Input value={ruleDraft} onChange={(event) => setRuleDraft(event.target.value)} placeholder="DOMAIN-SUFFIX,example.com,DIRECT" /></label><DialogFooter><Button variant="outline" onClick={() => setRuleDialogOpen(false)}>取消</Button><Button onClick={() => { const value = ruleDraft.trim(); if (value) { markDirty(); setRules((items) => [...items, { value, target: targetOf(value) }]); setRuleDialogOpen(false); } }}>添加规则</Button></DialogFooter></DialogContent></Dialog></>;
-  return (
-    <section className="min-h-0 flex-1 overflow-auto p-3" onChangeCapture={markDirty}>
-      <div className="mb-3 flex items-center justify-between">
-        <strong className="text-sm">Loon 策略组 · {groups.length}</strong>
-        <Button
-          size="sm"
-          onClick={() => {
-            markDirty();
-            setSections((items) =>
-              items.some((item) => item.name.toLowerCase() === "proxy group")
-                ? items
-                : [
-                    ...items,
-                    { name: "Proxy Group", lines: [] },
-                    { name: "Rule", lines: [] },
-                  ],
-            );
-            setGroups((items) => [
-              ...items,
-              {
-                name: `策略组 ${items.length + 1}`,
-                type: "select",
-                policies: ["__LOON_ALL_NODES__", "DIRECT"],
-                extras: [],
-              },
-            ]);
-          }}
-        >
-          <Plus className="mr-1 h-4 w-4" />
-          添加策略组
-        </Button>
-      </div>
-      {groups.map((group, index) => (
-        <article key={index} className="mb-3 overflow-hidden rounded-md border border-border/70">
-          <div className="flex items-center gap-2 bg-muted/30 px-3 py-2.5">
-            <button className="flex min-w-0 flex-1 items-center gap-2 text-left text-sm font-semibold" onClick={() => setExpanded((items) => items.includes(index) ? items.filter((item) => item !== index) : [...items, index])}>
-              <GripVertical className="size-4 shrink-0 text-muted-foreground" />
-              <span className="truncate">{group.name || `未命名策略组 ${index + 1}`}</span>
-              <span className="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] font-medium text-primary">{group.type}</span>
-            </button>
-            <Button variant="ghost" size="icon" className="size-7" disabled={!index} onClick={() => { markDirty(); moveGroup(index, -1); }}><ChevronUp className="size-4" /></Button>
-            <Button variant="ghost" size="icon" className="size-7" disabled={index === groups.length - 1} onClick={() => { markDirty(); moveGroup(index, 1); }}><ChevronDown className="size-4" /></Button>
-            <Button variant="ghost" size="icon" className="size-7 text-destructive hover:text-destructive" onClick={() => removeGroup(index)}><Trash2 className="size-4" /></Button>
-          </div>
-          {expanded.includes(index) && <div className="space-y-3 p-3">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Input
-              value={group.name}
-              onChange={(event) => renameGroup(index, event.target.value)}
-            />
-            <Select
-              value={group.type}
-              onValueChange={(type) => {
-                markDirty();
-                setGroups((items) =>
-                  items.map((item, position) =>
-                    position === index
-                      ? { ...item, type }
-                      : item,
-                  ),
-                );
-              }}
-            >
-              <SelectTrigger className="h-10 border-input bg-background"><SelectValue /></SelectTrigger>
-              <SelectContent>{types.map((type) => <SelectItem key={type} value={type}>{type}</SelectItem>)}</SelectContent>
-            </Select>
-          </div>
-          <Input
-            value={group.policies.join(", ")}
-            placeholder="策略组成员"
-            onChange={(event) =>
-              setGroups((items) =>
-                items.map((item, position) =>
-                  position === index
-                    ? {
-                        ...item,
-                        policies: event.target.value
-                          .split(",")
-                          .map((part) => part.trim()),
-                      }
-                    : item,
-                ),
-              )
-            }
-          />
-          <div className="border-t pt-2 text-sm font-semibold">
-            流量规则（{groupRules(group.name).length}）
-          </div>
-          {groupRules(group.name).map(({ rule, index: ruleIndex }) => (
-            <div key={ruleIndex} className="flex gap-2">
-              <Input
-                className="h-9"
-                value={rule.value}
-                onChange={(event) =>
-                  setRules((items) =>
-                    items.map((item, position) =>
-                      position === ruleIndex
-                        ? {
-                            value: event.target.value,
-                            target: targetOf(event.target.value),
-                          }
-                        : item,
-                    ),
-                  )
-                }
-              />
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => {
-                  markDirty();
-                  setRules((items) =>
-                    items.filter((_, position) => position !== ruleIndex),
-                  );
-                }}
-              >
-                <Trash2 className="h-4 w-4 text-destructive" />
-              </Button>
-            </div>
-          ))}
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => {
-              markDirty();
-              setRules((items) => [
-                ...items,
-                {
-                  value: `DOMAIN-SUFFIX,example.com,${group.name}`,
-                  target: group.name,
-                },
-              ]);
-            }}
-          >
-            添加规则
-          </Button>
-          </div>}
-        </article>
-      ))}
-      <Button onClick={() => { onChange(output); onDirtyChange(false); }}>应用更改</Button>
-    </section>
-  );
+  useEffect(() => { try { const next = load(value); setSections(next.sections); setGroups(next.groups); setRules(next.rules); onDirtyChange(false); onError(""); } catch (error) { onError(error instanceof Error ? error.message : "Loon 格式错误"); } }, [value]);
+  const output = useMemo(() => { const next = sections.map((section) => ({ ...section, lines: [...section.lines] })); const pg = next.find((item) => item.name.toLowerCase() === "proxy group"); const rs = next.find((item) => item.name.toLowerCase() === "rule"); if (pg) { const notes = pg.lines.filter((line) => !line.trim() || /^\s*[#;]/.test(line)); pg.lines = [...notes, ...groups.map((group) => `${group.name} = ${[group.type, ...group.policies.filter(Boolean), ...Object.entries(group.settings).filter(([, setting]) => setting).map(([key, setting]) => `${key}=${setting}`), ...group.extras].join(",")}`)]; } if (rs) { const notes = rs.lines.filter((line) => !line.trim() || /^\s*[#;]/.test(line)); rs.lines = [...notes, ...rules.map((rule) => rule.value)]; } return next.map((section) => `[${section.name}]\n${section.lines.join("\n")}`.trimEnd()).join("\n\n") + "\n"; }, [sections, groups, rules]);
+  const proxyTargets = useMemo(() => [...new Set([...builtIns, ...groups.map((group) => group.name.trim()).filter(Boolean)])], [groups]);
+  const ruleSets = useMemo(() => { const remote = sections.find((section) => section.name.toLowerCase() === "remote rule"); return (remote?.lines || []).flatMap((line) => { const tag = line.match(/(?:^|,)\s*tag\s*=\s*([^,]+)/i)?.[1]?.trim(); return tag ? [tag] : []; }); }, [sections]);
+  const memberPickerGroup = memberPickerIndex === null ? null : groups[memberPickerIndex] || null; const memberCandidates = useMemo(() => { const query = memberQuery.trim().toLowerCase(); return proxyTargets.filter((item) => item !== memberPickerGroup?.name && (!query || item.toLowerCase().includes(query))); }, [memberPickerGroup?.name, memberQuery, proxyTargets]);
+  useEffect(() => { if (rulesDirty) { const names = groups.map((group) => group.name.trim()); if (names.some((name) => !name) || new Set(names).size !== names.length) { onError("Loon 策略组名称必须非空且唯一"); return; } const error = rules.map((rule) => validateRule(rule, proxyTargets, ruleSets)).find(Boolean); if (error) { onError(error); return; } onChange(output); setRulesDirty(false); onDirtyChange(false); } }, [rulesDirty, output]);
+  useEffect(() => { const previous = previousOutput.current; previousOutput.current = output; if (!previous || previous === output) return; const before = previous.split("\n"); const line = output.split("\n").findIndex((item, index) => item !== before[index]); onFocusLine?.(Math.max(1, line + 1)); }, [output, onFocusLine]);
+  const updateGroup = (index: number, patch: Partial<Group>) => { markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, ...patch } : item)); };
+  const groupRules = (name: string) => rules.map((rule, index) => ({ rule, index })).filter((item) => item.rule.target === name);
+  const removeGroup = (index: number) => { const name = groups[index]?.name; markDirty(); setGroups((items) => items.filter((_, position) => position !== index)); setRules((items) => items.filter((rule) => rule.target !== name)); };
+  const reorderRules = (from: number, to: number) => { if (from === to) return; markDirty(); setRules((items) => { const next = [...items]; next.splice(to, 0, next.splice(from, 1)[0]); return next; }); };
+  const pointerSort = usePointerListSort(reorderRules, (index) => <div className="w-[min(640px,calc(100vw-3rem))] rounded-lg border border-primary/60 bg-card px-4 py-3 shadow-2xl"><b className="font-mono text-sm">{ruleParts(rules[index] || { value: "", target: "" }).type}</b><span className="ml-3 text-sm">{rules[index]?.value}</span></div>);
+  const saveRule = () => { if (!ruleEditor) return; const error = validateRule(ruleEditor.rule, proxyTargets, ruleSets); if (error) { window.alert(error); return; } markDirty(); setRules((items) => ruleEditor.index === null ? [...items, ruleEditor.rule] : items.map((item, index) => index === ruleEditor.index ? ruleEditor.rule : item)); setRuleEditor(null); };
+  if (view === "rules") return <section className="grid min-h-0 flex-1 gap-4 overflow-hidden bg-muted/20 p-4 lg:grid-cols-[minmax(0,1.04fr)_minmax(380px,.96fr)]"><section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-card"><header className="border-b border-border bg-muted/30 px-4 py-3"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-sm font-semibold">Loon 全量分流规则 <span className="rounded-full bg-primary/10 px-2 py-0.5 font-mono text-xs text-primary">{rules.length}</span></p><p className="mt-0.5 text-xs text-muted-foreground">按 [Rule] 顺序匹配，命中首条即停止。</p></div><Button size="sm" onClick={() => setRuleEditor({ index: null, rule: { value: "DOMAIN-SUFFIX,example.com,DIRECT", target: "DIRECT" } })}><Plus className="mr-1 size-4" />新建规则</Button></div></header><div className="min-h-0 flex-1 overflow-auto" onPointerMove={pointerSort.move} onPointerUp={pointerSort.end} onPointerCancel={pointerSort.end}><div className="min-w-[650px]"><div className="grid grid-cols-12 gap-2 border-b bg-muted/50 px-3 py-2 text-[10px] text-muted-foreground"><span className="col-span-1">#</span><span className="col-span-3">规则类型</span><span className="col-span-3">匹配载荷</span><span className="col-span-3">路由目标</span><span className="col-span-2 text-right">操作</span></div>{rules.map((rule, index) => { const parsed = ruleParts(rule); return <div key={index} data-pointer-sort-index={index} className="grid grid-cols-12 items-center gap-2 border-b border-border/60 px-3 py-2.5"><span className="col-span-1 flex items-center gap-1 font-mono text-[11px] text-muted-foreground"><span onPointerDown={(event) => pointerSort.begin(index, event)}><GripVertical className="size-4 cursor-grab touch-none" /></span>{index + 1}</span><span className="col-span-3 font-mono text-xs">{parsed.type}</span><div className="col-span-3 flex min-w-0 items-center gap-1"><code className="min-w-0 flex-1 truncate text-xs">{parsed.match || "*"}</code>{parsed.type === "RULE-SET" && parsed.match && <Button variant="ghost" size="icon" className="size-6" onClick={() => onOpenRuleSet?.(parsed.match)}><ArrowUpRight className="size-3.5" /></Button>}</div><span className="col-span-3 truncate font-mono text-xs text-primary">{parsed.target}</span><div className="col-span-2 flex justify-end gap-1"><Button variant="ghost" size="icon" className="size-7" onClick={() => setRuleEditor({ index, rule })}><Code2 className="size-3.5" /></Button><Button variant="ghost" size="icon" className="size-7 text-destructive" onClick={() => { markDirty(); setRules((items) => items.filter((_, position) => position !== index)); }}><Trash2 className="size-3.5" /></Button></div></div>; })}{pointerSort.overlay}</div></div></section><section className="hidden min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-background lg:flex"><header className="border-b px-4 py-3"><p className="text-sm font-semibold">Loon 原生规则</p></header><pre className="min-h-0 flex-1 overflow-auto p-4 font-mono text-xs leading-6 text-muted-foreground">{output.match(/\[Rule\][\s\S]*?(?=\n\s*\[|$)/i)?.[0] || "[Rule]"}</pre></section><LoonRuleDialog editor={ruleEditor} targets={proxyTargets} ruleSets={ruleSets} onChange={setRuleEditor} onSave={saveRule} /></section>;
+  const allExpanded = groups.length > 0 && expanded.length === groups.length;
+  return <section className="min-h-0 flex-1 overflow-y-auto p-3"><div className="mb-3 flex items-center justify-between gap-2"><strong className="text-sm">Loon 策略组 · {groups.length}</strong><div className="flex gap-2"><Button size="sm" variant="outline" onClick={() => setExpanded(allExpanded ? [] : groups.map((_, index) => index))}>{allExpanded ? "全部收起" : "全部展开"}</Button><Button size="sm" onClick={() => { markDirty(); setSections((items) => items.some((item) => item.name.toLowerCase() === "proxy group") ? items : [...items, { name: "Proxy Group", lines: [] }, { name: "Rule", lines: [] }]); setGroups((items) => [...items, { name: `策略组 ${items.length + 1}`, type: "select", policies: ["__LOON_ALL_NODES__", "DIRECT"], settings: {}, extras: [] }]); }}><Plus className="mr-1 size-4" />添加策略组</Button></div></div>{groups.map((group, index) => <article key={index} className="mb-3 overflow-hidden rounded-xl border border-border/70"><div className="flex items-center gap-2 bg-muted/30 px-3 py-2.5"><button className="flex min-w-0 flex-1 items-center gap-2 text-left text-sm font-semibold" onClick={() => setExpanded((items) => items.includes(index) ? items.filter((item) => item !== index) : [...items, index])}><GripVertical className="size-4 text-muted-foreground" /><span className="truncate">{group.name || `未命名策略组 ${index + 1}`}</span><span className="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] text-primary">{group.type}</span></button><Button variant="ghost" size="icon" className="size-7" disabled={!index} onClick={() => { markDirty(); setGroups((items) => { const next = [...items]; [next[index], next[index - 1]] = [next[index - 1], next[index]]; return next; }); }}><ChevronUp className="size-4" /></Button><Button variant="ghost" size="icon" className="size-7" disabled={index === groups.length - 1} onClick={() => { markDirty(); setGroups((items) => { const next = [...items]; [next[index], next[index + 1]] = [next[index + 1], next[index]]; return next; }); }}><ChevronDown className="size-4" /></Button><Button variant="ghost" size="icon" className="size-7 text-destructive" onClick={() => removeGroup(index)}><Trash2 className="size-4" /></Button></div>{expanded.includes(index) && <div className="space-y-3 p-3"><div className="grid gap-3 sm:grid-cols-2"><Input value={group.name} placeholder="策略组名称" onChange={(event) => { const previous = group.name; const name = event.target.value; updateGroup(index, { name }); if (previous !== name) setRules((items) => items.map((rule) => rule.target === previous ? { ...rule, target: name, value: rule.value.replace(new RegExp(`,\\s*${previous.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`), `,${name}`) } : rule)); }} /><Select value={group.type} onValueChange={(type) => updateGroup(index, { type })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{groupTypes.map((type) => <SelectItem key={type} value={type}>{type}</SelectItem>)}</SelectContent></Select></div><section className="space-y-2 rounded-lg border border-border bg-muted/15 p-3"><div className="flex justify-between text-xs font-medium"><span>策略组成员</span><span>{group.policies.length} 项</span></div><div className="flex flex-wrap gap-1.5">{group.policies.map((member, position) => <button type="button" key={`${member}-${position}`} className="rounded bg-primary/10 px-2 py-1 font-mono text-[11px] text-primary hover:bg-destructive/10 hover:text-destructive" onClick={() => updateGroup(index, { policies: group.policies.filter((_, current) => current !== position) })}>{member} ×</button>)}</div><Button variant="outline" className="w-full border-dashed" onClick={() => { setMemberQuery(""); setMemberPickerIndex(index); }}><Plus className="mr-1 size-4" />添加成员</Button></section>{group.type !== "select" && <section className="grid gap-3 rounded-lg border border-border bg-muted/15 p-3 sm:grid-cols-2"><label className="grid gap-1 text-xs font-medium">测速 URL<Input value={group.settings.url || ""} onChange={(event) => updateGroup(index, { settings: { ...group.settings, url: event.target.value } })} placeholder="http://www.gstatic.com/generate_204" /></label><label className="grid gap-1 text-xs font-medium">测速间隔（秒）<Input inputMode="numeric" value={group.settings.interval || ""} onChange={(event) => updateGroup(index, { settings: { ...group.settings, interval: event.target.value } })} placeholder="600" /></label>{group.type === "url-test" && <label className="grid gap-1 text-xs font-medium">容差（毫秒）<Input inputMode="numeric" value={group.settings.tolerance || ""} onChange={(event) => updateGroup(index, { settings: { ...group.settings, tolerance: event.target.value } })} placeholder="50" /></label>}{["fallback", "load-balance"].includes(group.type) && <label className="grid gap-1 text-xs font-medium">超时（毫秒）<Input inputMode="numeric" value={group.settings["max-timeout"] || ""} onChange={(event) => updateGroup(index, { settings: { ...group.settings, "max-timeout": event.target.value } })} placeholder="5000" /></label>}{group.type === "load-balance" && <label className="grid gap-1 text-xs font-medium">负载算法<Select value={group.settings.algorithm || "__none"} onValueChange={(algorithm) => updateGroup(index, { settings: { ...group.settings, algorithm: algorithm === "__none" ? "" : algorithm } })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="__none">默认</SelectItem><SelectItem value="Random">Random</SelectItem><SelectItem value="PCC">PCC</SelectItem><SelectItem value="Round-Robin">Round-Robin</SelectItem></SelectContent></Select></label>}</section>}<section className="border-t pt-3"><div className="flex items-center justify-between"><button className="text-xs font-semibold" onClick={() => setExpandedRules((items) => items.includes(index) ? items.filter((item) => item !== index) : [...items, index])}>流量规则 <span className="rounded-full bg-primary/10 px-2 py-0.5 text-primary">{groupRules(group.name).length}</span></button><Button size="sm" variant="outline" onClick={() => setRuleEditor({ index: null, rule: { value: `DOMAIN-SUFFIX,example.com,${group.name}`, target: group.name } })}><Plus className="mr-1 size-3.5" />添加规则</Button></div>{expandedRules.includes(index) && <div className="mt-3 space-y-2">{groupRules(group.name).map(({ rule, index: ruleIndex }) => <div key={ruleIndex} className="flex items-center gap-2 rounded border p-2"><code className="min-w-0 flex-1 truncate text-xs">{rule.value}</code><Button variant="ghost" size="sm" onClick={() => setRuleEditor({ index: ruleIndex, rule })}>编辑</Button><Button variant="ghost" size="icon" className="size-7 text-destructive" onClick={() => { markDirty(); setRules((items) => items.filter((_, position) => position !== ruleIndex)); }}><Trash2 className="size-3.5" /></Button></div>)}</div>}</section></div>}</article>)}{!groups.length && <p className="py-12 text-center text-sm text-muted-foreground">暂无策略组</p>}<Dialog open={memberPickerGroup !== null} onOpenChange={(open) => !open && setMemberPickerIndex(null)}><DialogContent className="max-w-[900px] gap-0 overflow-hidden p-0"><DialogHeader className="border-b border-border bg-muted/30 px-6 py-5"><DialogTitle>添加成员到策略组</DialogTitle><p className="mt-1 text-sm text-muted-foreground">选择 Loon 内置动作或当前策略组；节点由订阅动态注入。</p></DialogHeader><div className="grid max-h-[min(600px,calc(100svh-13rem))] md:grid-cols-2"><section className="overflow-auto p-5"><div className="relative mb-4"><Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2" /><Input className="pl-9" value={memberQuery} onChange={(event) => setMemberQuery(event.target.value)} placeholder="搜索策略组或内置动作" /></div><div className="space-y-2">{memberCandidates.map((candidate) => { const selected = Boolean(memberPickerGroup?.policies.includes(candidate)); return <button type="button" key={candidate} className="flex w-full items-center gap-3 rounded-lg border p-3 text-left hover:border-primary/50" onClick={() => { if (memberPickerIndex === null) return; const policies = selected ? (memberPickerGroup?.policies || []).filter((item) => item !== candidate) : [...(memberPickerGroup?.policies || []), candidate]; updateGroup(memberPickerIndex, { policies }); }}><span className="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] text-primary">{builtIns.includes(candidate) ? "BUILT-IN" : "GROUP"}</span><span className="flex-1">{candidate}</span>{selected ? "已选" : <Plus className="size-4" />}</button>; })}</div></section><section className="overflow-auto border-t bg-muted/15 p-5 md:border-l md:border-t-0"><div className="mb-3 flex justify-between"><strong>已选成员</strong><span>{memberPickerGroup?.policies.length || 0} 项</span></div><div className="space-y-2">{memberPickerGroup?.policies.map((member, position, members) => <div key={`${member}-${position}`} className="flex items-center gap-2 rounded border bg-card p-3"><GripVertical className="size-4 text-muted-foreground" /><span className="min-w-0 flex-1 truncate">{member}</span><Button variant="ghost" size="icon" className="size-7" disabled={!position} onClick={() => { if (memberPickerIndex === null) return; const policies = members.map((item, current) => current === position ? members[position - 1] : current === position - 1 ? members[position] : item); updateGroup(memberPickerIndex, { policies }); }}><ChevronUp className="size-4" /></Button><Button variant="ghost" size="icon" className="size-7" disabled={position === members.length - 1} onClick={() => { if (memberPickerIndex === null) return; const policies = members.map((item, current) => current === position ? members[position + 1] : current === position + 1 ? members[position] : item); updateGroup(memberPickerIndex, { policies }); }}><ChevronDown className="size-4" /></Button></div>)}</div></section></div><DialogFooter className="border-t px-6 py-4"><Button onClick={() => setMemberPickerIndex(null)}>确认成员</Button></DialogFooter></DialogContent></Dialog><LoonRuleDialog editor={ruleEditor} targets={proxyTargets} ruleSets={ruleSets} onChange={setRuleEditor} onSave={saveRule} /></section>;
 }

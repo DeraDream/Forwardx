@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.4.46] - 2026-11-16
+
+### Improved
+
+- Loon 模板编辑器重构为与 Egern 一致的策略组、流量规则、规则集和插件工作区体验。
+- Loon 策略组支持成员选择弹窗、搜索与排序，以及原生 `url-test`、`fallback`、`load-balance` 的测速、间隔、容差、超时和负载算法字段。
+- Loon 流量规则支持原生规则类型、RULE-SET 选择与跳转、策略目标选择、CIDR/端口/GeoIP 校验、拖拽排序及 INI 变更定位。
+
+Agent 保持 `2.2.231`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.4.45] - 2026-11-16
 
 ### Fixed
