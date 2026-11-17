@@ -103,6 +103,35 @@ export const landingRouter = router({
     }
     return result;
   }),
+  references: protectedProcedure.input(z.object({ hostId: z.number().int().positive() })).query(async ({ input, ctx }) => {
+    const marker = await db.getLandingHostByHostId(input.hostId) as any;
+    if (!marker) throw new Error("该主机尚未标记为落地机");
+    if (!isAdmin(ctx.user) && Number(marker.userId) !== Number(ctx.user.id)) throw new Error("无权查看该落地机");
+    const [allServices, rules, groups] = await Promise.all([
+      db.getLandingServices(isAdmin(ctx.user) ? undefined : ctx.user.id),
+      db.getForwardRules(isAdmin(ctx.user) ? undefined : ctx.user.id),
+      db.getForwardGroups(isAdmin(ctx.user) ? undefined : ctx.user.id),
+    ]);
+    const services = allServices.filter((service: any) => Number(service.hostId) === input.hostId);
+    const groupModes = new Map<number, string>(groups.map((group: any) => [Number(group.id), String(group.groupMode || "").toLowerCase()]));
+    const groupsById = new Map<number, any>(groups.map((group: any) => [Number(group.id), group]));
+    const serviceIds = new Set(services.map((service: any) => Number(service.id)));
+    const referenced = rules.filter((rule: any) => serviceIds.has(Number(rule.targetLandingServiceId || 0)) && !rule.pendingDelete);
+    const hostIds: number[] = [...new Set<number>(referenced.map((rule: any) => Number(rule.hostId)).filter(Boolean))];
+    const hosts = await Promise.all(hostIds.map(async (id) => [id, await db.getHostById(id)] as const));
+    const hostNames = new Map(hosts.map(([id, host]: any) => [id, host?.name || `主机 #${id}`]));
+    const ruleDetail = (rule: any) => ({
+      id: Number(rule.id), name: String(rule.name || `转发 #${rule.id}`), isEnabled: !!rule.isEnabled, isRunning: !!rule.isRunning,
+      protocol: String(rule.protocol || "both").toUpperCase(), sourcePort: Number(rule.sourcePort), targetIp: String(rule.targetIp || "-"), targetPort: Number(rule.targetPort || 0),
+      sourceHost: hostNames.get(Number(rule.hostId)) || `主机 #${rule.hostId}`,
+      groupName: Number(rule.forwardGroupId || 0) ? String(groupsById.get(Number(rule.forwardGroupId))?.name || `转发组 #${rule.forwardGroupId}`) : "",
+    });
+    return {
+      services: services.map((service: any) => ({ id: Number(service.id), name: service.name, protocol: String(service.protocol || "ss").toUpperCase(), method: service.method, port: Number(service.port), endpoint: service.endpoint, isEnabled: !!service.isEnabled, status: service.status, latestLatencyMs: service.latestLatencyMs })),
+      portForwards: referenced.filter((rule: any) => landingReferenceKind(rule, groupModes) === "port").map(ruleDetail),
+      forwardChains: referenced.filter((rule: any) => landingReferenceKind(rule, groupModes) === "chain").map(ruleDetail),
+    };
+  }),
   markHost: protectedProcedure.input(z.object({ hostId: z.number().int().positive() })).mutation(async ({ input, ctx }) => {
     const host = await db.getHostById(input.hostId) as any;
     if (!host) throw new Error("主机不存在");
