@@ -49,6 +49,7 @@ import { LoonVisualEditor } from "@/components/subscriptions/LoonVisualEditor";
 import { RuleSetVisualEditor } from "@/components/subscriptions/RuleSetVisualEditor";
 import { ModuleVisualEditor } from "@/components/subscriptions/ModuleVisualEditor";
 import { usePointerListSort } from "@/components/subscriptions/usePointerListSort";
+import { RenameConfirmationDialog } from "@/components/subscriptions/RenameConfirmationDialog";
 import { applyCodeSearchSelection } from "@/components/subscriptions/codeSearchSelection";
 
 type Group = {
@@ -748,6 +749,8 @@ export function TemplateVisualEditorDialog({
   } | null>(null);
   const [memberPickerIndex, setMemberPickerIndex] = useState<number | null>(null);
   const [memberQuery, setMemberQuery] = useState("");
+  const [groupRename, setGroupRename] = useState<{ index: number; previous: string; next: string; error?: string; references: Array<{ label: string; count: number }> } | null>(null);
+  const groupNameInputs = useRef(new Map<number, HTMLInputElement>());
   const [closeConfirmOpen, setCloseConfirmOpen] = useState(false);
   const [visualSaveConfirmOpen, setVisualSaveConfirmOpen] = useState(false);
   const [externalVisualDirty, setExternalVisualDirty] = useState(false);
@@ -817,17 +820,37 @@ export function TemplateVisualEditorDialog({
     }
     onClose();
   };
+  const applyGroupRename = (index: number, previousName: string, nextName: string) => {
+    setRules((items) => items.map((rule) => rule.target === previousName ? { ...rule, target: nextName } : rule));
+    setGroups((items) => items.map((item, position) => ({ ...item, ...(position === index ? { name: nextName } : {}), proxies: item.proxies.map((proxy) => proxy === previousName ? nextName : proxy) })));
+  };
+  const checkGroupRename = (index: number, previous: string, next: string) => {
+    const trimmed = next.trim();
+    if (previous === trimmed) { setGroups((items) => items.map((item, position) => position === index ? { ...item, name: previous } : item)); return; }
+    const duplicate = groups.some((group, position) => position !== index && group.name.trim() === trimmed);
+    setGroupRename({ index, previous, next: trimmed, error: !trimmed ? "名称不能为空" : duplicate ? "名称已被另一个策略组使用" : undefined, references: [
+      { label: "流量规则", count: rules.filter((rule) => rule.target === previous).length },
+      { label: "策略组成员（嵌套策略组）", count: groups.reduce((total, group) => total + group.proxies.filter((proxy) => proxy === previous).length, 0) },
+    ] });
+  };
   const update = (index: number, patch: Partial<Group>) => {
     const previousName = groups[index]?.name;
     const nextName = patch.name;
     if (nextName !== undefined && previousName !== undefined && nextName !== previousName) {
       setRules((items) => items.map((rule) => rule.target === previousName ? { ...rule, target: nextName } : rule));
+      setGroups((items) => items.map((item, position) => ({
+        ...item,
+        ...(position === index ? patch : {}),
+        proxies: item.proxies.map((proxy) => proxy === previousName ? nextName : proxy),
+      })));
+      return;
     }
-    setGroups((items) =>
-      items.map((item, position) =>
-        position === index ? { ...item, ...patch } : item,
-      ),
-    );
+    setGroups((items) => items.map((item, position) => position === index ? { ...item, ...patch } : item));
+  };
+  const removeGroup = (index: number) => {
+    const name = groups[index]?.name;
+    setGroups((items) => items.filter((_, position) => position !== index).map((item) => ({ ...item, proxies: item.proxies.filter((proxy) => proxy !== name) })));
+    setRules((items) => items.filter((rule) => rule.target !== name));
   };
   const move = (index: number, amount: number) =>
     setGroups((items) => {
@@ -1150,7 +1173,16 @@ export function TemplateVisualEditorDialog({
                   value={source}
                   focusName={ruleSetFocus}
                   focusNonce={ruleSetFocusNonce}
-                  onChange={setSource}
+                  onChange={(next) => {
+                    setSource(next);
+                    // Clash keeps groups and rules in visual state. Refresh it so
+                    // a RULE-SET rename is retained when returning to this tab.
+                    if (templateKind === "clash") {
+                      const parsed = parseTemplate(next);
+                      setGroups(parsed.groups);
+                      setRules(parsed.rules);
+                    }
+                  }}
                   onDirtyChange={setExternalVisualDirty}
                   onError={(message) => { if (message) toast.error(message); }}
                 />
@@ -1352,13 +1384,7 @@ export function TemplateVisualEditorDialog({
                                 variant="ghost"
                                 size="icon"
                                 className="h-7 w-7 text-rose-300 hover:bg-rose-500/10 hover:text-rose-200"
-                                onClick={() =>
-                                  setGroups((items) =>
-                                    items.filter(
-                                      (_, itemIndex) => itemIndex !== index,
-                                    ),
-                                  )
-                                }
+                                onClick={() => removeGroup(index)}
                               >
                                 <Trash2 className="h-4 w-4" />
                               </Button>
@@ -1370,12 +1396,11 @@ export function TemplateVisualEditorDialog({
                                     策略组名称
                                     <Input
                                       className={editorFieldClass}
+                                      ref={(element) => { if (element) groupNameInputs.current.set(index, element); else groupNameInputs.current.delete(index); }}
                                       value={group.name}
-                                      onChange={(event) =>
-                                        update(index, {
-                                          name: event.target.value,
-                                        })
-                                      }
+                                      onFocus={(event) => { event.currentTarget.dataset.previousName = group.name; }}
+                                      onChange={(event) => setGroups((items) => items.map((item, position) => position === index ? { ...item, name: event.target.value } : item))}
+                                      onBlur={(event) => checkGroupRename(index, event.currentTarget.dataset.previousName || group.name, event.target.value)}
                                     />
                                   </label>
                                   <label className="grid gap-1.5 text-xs font-medium">
@@ -1427,7 +1452,7 @@ export function TemplateVisualEditorDialog({
                                 </div>}
                                 <div className="grid gap-3 sm:grid-cols-2">
                                   <label className="grid gap-1.5 text-xs font-medium">图标（icon）<Input className={editorFieldClass} value={group.icon || ""} onChange={(event) => update(index, { icon: event.target.value })} placeholder="https://example.com/icon.png" /></label>
-                                  <label className="flex items-end gap-2 pb-2 text-xs font-medium">
+                                  <label className="flex h-10 self-end items-center gap-2 rounded border border-border bg-background px-3 text-xs font-medium">
                                     <Switch checked={Boolean(group.hidden)} onCheckedChange={(hidden) => update(index, { hidden })} />
                                     隐藏策略组
                                   </label>
@@ -1661,6 +1686,7 @@ export function TemplateVisualEditorDialog({
           <div className="flex justify-end gap-2 bg-muted/15 px-6 py-4"><Button variant="outline" onClick={() => setVisualSaveConfirmOpen(false)}>返回代码编辑</Button><Button onClick={() => { setVisualSaveConfirmOpen(false); void performSave(); }}>仍然保存</Button></div>
         </DialogContent>
       </Dialog>
+      {groupRename && <RenameConfirmationDialog open kind="策略组" previous={groupRename.previous} next={groupRename.next} error={groupRename.error} references={groupRename.references} onReturn={() => { const pending = groupRename; setGroupRename(null); requestAnimationFrame(() => groupNameInputs.current.get(pending.index)?.focus()); }} onCancel={() => { const pending = groupRename; setGroups((items) => items.map((item, position) => position === pending.index ? { ...item, name: pending.previous } : item)); setGroupRename(null); }} onConfirm={() => { const pending = groupRename; applyGroupRename(pending.index, pending.previous, pending.next); setGroupRename(null); }} />}
     </>
   );
 }

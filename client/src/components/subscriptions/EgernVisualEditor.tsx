@@ -8,6 +8,7 @@ import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ruleSetDisplayName } from "./ruleSetName";
 import { usePointerListSort } from "./usePointerListSort";
+import { RenameConfirmationDialog } from "./RenameConfirmationDialog";
 
 type Group = {
   name: string;
@@ -214,6 +215,8 @@ export function EgernVisualEditor({ value, view = "groups", onChange, onError, o
   const [ruleEditor, setRuleEditor] = useState<{ index: number | null; rule: Rule } | null>(null);
   const [memberPickerIndex, setMemberPickerIndex] = useState<number | null>(null);
   const [memberQuery, setMemberQuery] = useState("");
+  const [groupRename, setGroupRename] = useState<{ index: number; previous: string; next: string; error?: string; references: Array<{ label: string; count: number }> } | null>(null);
+  const groupNameInputs = useRef(new Map<number, HTMLInputElement>());
   const [rulesDirty, setRulesDirty] = useState(false);
   const previousOutput = useRef("");
   const groupDragIndex = useRef<number | null>(null);
@@ -293,12 +296,35 @@ export function EgernVisualEditor({ value, view = "groups", onChange, onError, o
     rules
       .map((rule, index) => ({ rule, index }))
       .filter((item) => item.rule.policy === name);
-  const renameGroup = (index: number, name: string) => {
-    const previous = groups[index]?.name;
-    setGroups((items) => items.map((item, position) => position === index ? { ...item, name } : item));
-    if (previous !== undefined && previous !== name) {
-      setRules((items) => items.map((rule) => rule.policy === previous ? { ...rule, policy: name } : rule));
-    }
+  const renameGroup = (index: number, name: string, previousOverride?: string) => {
+    const previous = previousOverride ?? groups[index]?.name;
+    if (previous === undefined || previous === name) { setGroups((items) => items.map((item, position) => position === index ? { ...item, name } : item)); return; }
+    // Egern allows policies in nested conditional rules too; update every
+    // policy-bearing field while retaining unknown native settings.
+    const renameReferences = (value: unknown): unknown => {
+      if (Array.isArray(value)) return value.map(renameReferences);
+      if (!value || typeof value !== "object") return value;
+      const record = value as Record<string, unknown>;
+      return Object.fromEntries(Object.entries(record).map(([key, current]) => [key,
+        key === "policies" && Array.isArray(current) ? current.map((policy) => policy === previous ? name : policy) :
+        (key === "policy" || key === "default_policy") && current === previous ? name : renameReferences(current),
+      ]));
+    };
+    setGroups((items) => items.map((item, position) => {
+      const renamed = renameReferences(item) as Group;
+      return position === index ? { ...renamed, name } : renamed;
+    }));
+    setRules((items) => items.map((rule) => renameReferences(rule) as Rule));
+  };
+  const checkGroupRename = (index: number, previous: string, next: string) => {
+    const trimmed = next.trim();
+    if (previous === trimmed) { setGroups((items) => items.map((item, position) => position === index ? { ...item, name: previous } : item)); return; }
+    const duplicate = groups.some((group, position) => position !== index && group.name.trim() === trimmed);
+    setGroupRename({ index, previous, next: trimmed, error: !trimmed ? "名称不能为空" : duplicate ? "名称已被另一个策略组使用" : undefined, references: [
+      { label: "流量规则", count: rules.filter((rule) => rule.type !== "rule_set" && rule.policy === previous).length },
+      { label: "规则集的命中策略", count: rules.filter((rule) => rule.type === "rule_set" && rule.policy === previous).length },
+      { label: "策略组成员（嵌套策略组）", count: groups.reduce((total, group) => total + group.policies.filter((policy) => policy === previous).length, 0) },
+    ] });
   };
   const moveGroup = (index: number, amount: number) =>
     setGroups((items) => {
@@ -323,7 +349,7 @@ export function EgernVisualEditor({ value, view = "groups", onChange, onError, o
   const removeGroup = (index: number) => {
     markDirty();
     const name = groups[index]?.name;
-    setGroups((items) => items.filter((_, position) => position !== index));
+    setGroups((items) => items.filter((_, position) => position !== index).map((group) => ({ ...group, policies: group.policies.filter((policy) => policy !== name) })));
     setRules((items) => items.filter((rule) => rule.policy !== name));
     setExpanded((items) => items.filter((position) => position !== index).map((position) => position > index ? position - 1 : position));
     setExpandedRules((items) => items.filter((position) => position !== index).map((position) => position > index ? position - 1 : position));
@@ -393,7 +419,10 @@ export function EgernVisualEditor({ value, view = "groups", onChange, onError, o
                 <label className="grid gap-1.5 text-xs font-medium">策略组名称<Input
                   value={group.name}
                   placeholder="策略组名称"
-                  onChange={(event) => renameGroup(index, event.target.value)}
+                  ref={(element) => { if (element) groupNameInputs.current.set(index, element); else groupNameInputs.current.delete(index); }}
+                  onFocus={(event) => { event.currentTarget.dataset.previousName = group.name; }}
+                  onChange={(event) => setGroups((items) => items.map((item, position) => position === index ? { ...item, name: event.target.value } : item))}
+                  onBlur={(event) => checkGroupRename(index, event.currentTarget.dataset.previousName || group.name, event.target.value)}
                 /></label>
                 <label className="grid gap-1.5 text-xs font-medium">组类型<Select
                   value={group.type}
@@ -425,13 +454,12 @@ export function EgernVisualEditor({ value, view = "groups", onChange, onError, o
                 <label className="order-1 grid gap-1 text-xs font-medium">图标（icon）<Input value={String(group.icon || "")} onChange={(event) => { markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, icon: event.target.value || undefined } : item)); }} placeholder="SF Symbol 或 URL" /></label>
                 <label className="order-3 grid gap-1 text-xs font-medium">筛选关键词（filter）<Input value={String(group.filter || "")} onChange={(event) => { markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, filter: event.target.value || undefined } : item)); }} placeholder="例如：香港|HK|Hong Kong" /></label>
                 <label className="order-4 grid gap-1 text-xs font-medium">排除关键词（exclude_filter）<Input value={String(group.exclude_filter || "")} onChange={(event) => { markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, exclude_filter: event.target.value || undefined } : item)); }} placeholder="例如：游戏|IPLC|Traffic" /></label>
-                <label className="order-2 flex items-center justify-between rounded border border-border bg-background px-3 py-2 text-xs"><span>在 Egern UI 隐藏（hidden）</span><Switch checked={group.hidden === true} onCheckedChange={(hidden) => { markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, hidden } : item)); }} /></label>
+                <label className="order-2 flex h-10 self-end items-center justify-between rounded border border-border bg-background px-3 text-xs"><span>在 Egern UI 隐藏（hidden）</span><Switch checked={group.hidden === true} onCheckedChange={(hidden) => { markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, hidden } : item)); }} /></label>
               </section>}
               {group.type === "conditional" && <section className="order-2 grid gap-3 rounded-lg border border-border bg-muted/15 p-3 sm:grid-cols-2"><label className="grid gap-1 text-xs font-medium">环境规则（rules，JSON 数组）<Input value={Array.isArray(group.rules) ? JSON.stringify(group.rules) : ""} onChange={(event) => { try { const rules = event.target.value ? JSON.parse(event.target.value) : []; if (!Array.isArray(rules)) return; markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, rules } : item)); } catch { /* 仅在 JSON 有效时写入 */ } }} placeholder='[{"ssid":{"match":"Home-*","policy":"DIRECT"}}]' /></label><label className="grid gap-1 text-xs font-medium">默认策略（default_policy）<Input value={String(group.default_policy || "DIRECT")} onChange={(event) => { markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, default_policy: event.target.value } : item)); }} /></label><label className="grid gap-1 text-xs font-medium">图标（icon）<Input value={String(group.icon || "")} onChange={(event) => { markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, icon: event.target.value || undefined } : item)); }} /></label><label className="flex items-center justify-between rounded border border-border bg-background px-3 py-2 text-xs"><span>在 Egern UI 隐藏（hidden）</span><Switch checked={group.hidden === true} onCheckedChange={(hidden) => { markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, hidden } : item)); }} /></label></section>}
               {group.type === "external" && <label className="order-2 grid gap-1 text-xs font-medium">订阅节点选择策略（type）<Select value={String((group as any).externalType || "select")} onValueChange={(externalType) => { markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, externalType } : item)); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{["select", "auto_test", "smart", "fallback", "load_balance"].map((type) => <SelectItem key={type} value={type}>{typeLabels[type]}</SelectItem>)}</SelectContent></Select></label>}
               {(group.type === "auto_test" || (group.type === "external" && (group as any).externalType === "auto_test")) && <div className="order-2 grid gap-3 sm:grid-cols-2"><label className="grid gap-1 text-xs font-medium">测速 URL<Input value={getLatencyTestURL(group)} placeholder={defaultLatencyTestURL} onChange={(event) => { markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, latency_test_url: event.target.value } : item)); }} /></label><label className="grid gap-1 text-xs font-medium">检查间隔（interval）<Input inputMode="numeric" value={group.interval === undefined ? "" : String(group.interval)} onChange={(event) => { markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, interval: event.target.value === "" ? undefined : Number(event.target.value) } : item)); }} placeholder="600" /></label></div>}
               {(group.type === "load_balance" || (group.type === "external" && (group as any).externalType === "load_balance")) && <label className="order-4 grid gap-1 text-xs font-medium">负载均衡算法<Select value={String(group.algorithm || "hash")} onValueChange={(algorithm) => { markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, algorithm } : item)); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="hash">hash（按目标固定）</SelectItem><SelectItem value="round_robin">round_robin（轮询）</SelectItem></SelectContent></Select></label>}
-              {(group.type === "smart" || (group.type === "external" && (group as any).externalType === "smart")) && <label className="order-4 grid gap-1 text-xs font-medium">优先级系数（priorities，JSON 对象）<Input value={group.priorities ? JSON.stringify(group.priorities) : ""} onChange={(event) => { try { const priorities = event.target.value ? JSON.parse(event.target.value) : undefined; markDirty(); setGroups((items) => items.map((item, position) => position === index ? { ...item, priorities } : item)); } catch { /* 仅在 JSON 有效时写入 */ } }} placeholder='{"^HK Premium$": 0.8}' /></label>}
               <section className="order-5 border-t border-border/70 pt-3">
                 <div className="mb-3 flex items-center justify-between gap-2">
                   <button
@@ -496,6 +524,7 @@ export function EgernVisualEditor({ value, view = "groups", onChange, onError, o
         setRules((items) => ruleEditor.index === null ? [...items, ruleEditor.rule] : items.map((item, position) => position === ruleEditor.index ? ruleEditor.rule : item));
         setRuleEditor(null);
       }} />
+      {groupRename && <RenameConfirmationDialog open kind="策略组" previous={groupRename.previous} next={groupRename.next} error={groupRename.error} references={groupRename.references} onReturn={() => { const pending = groupRename; setGroupRename(null); requestAnimationFrame(() => groupNameInputs.current.get(pending.index)?.focus()); }} onCancel={() => { const pending = groupRename; setGroups((items) => items.map((item, position) => position === pending.index ? { ...item, name: pending.previous } : item)); setGroupRename(null); }} onConfirm={() => { const pending = groupRename; renameGroup(pending.index, pending.next, pending.previous); setGroupRename(null); }} />}
     </section>
   );
 }
