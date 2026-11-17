@@ -50,6 +50,39 @@ rules: []
 	}
 }
 
+func TestEncodeClashPreservesTemplateTopLevelOrder(t *testing.T) {
+	templatePath := filepath.Join(t.TempDir(), "clash.yaml")
+	template := `unified-delay: true
+mixed-port: 7890
+proxies: []
+proxy-groups:
+  - name: Proxy
+    type: select
+    proxies: [DIRECT]
+rules: []
+`
+	if err := os.WriteFile(templatePath, []byte(template), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	output, err := EncodeClash([]string{testSSLink("Node A")}, SqlConfig{Clash: templatePath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(output)
+	for _, key := range []string{"unified-delay:", "mixed-port:", "proxies:", "proxy-groups:", "rules:"} {
+		if !strings.Contains(text, key) {
+			t.Fatalf("output missing %q:\n%s", key, text)
+		}
+	}
+	if strings.Index(text, "unified-delay:") > strings.Index(text, "mixed-port:") ||
+		strings.Index(text, "mixed-port:") > strings.Index(text, "proxies:") ||
+		strings.Index(text, "proxies:") > strings.Index(text, "proxy-groups:") ||
+		strings.Index(text, "proxy-groups:") > strings.Index(text, "rules:") {
+		t.Fatalf("top-level key order changed:\n%s", text)
+	}
+}
+
 func TestEncodeSurgeInjectsBeforeParametersAndSkipsSubnet(t *testing.T) {
 	templatePath := filepath.Join(t.TempDir(), "surge.conf")
 	template := `[General]

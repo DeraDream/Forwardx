@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -351,6 +352,38 @@ func TestEncodeEgernDefaultsAutoUpdateToOneDay(t *testing.T) {
 	autoUpdate := profile["auto_update"].(map[string]interface{})
 	if autoUpdate["interval"] != 86400 {
 		t.Fatalf("auto_update.interval = %#v, want 86400", autoUpdate["interval"])
+	}
+}
+
+func TestEncodeEgernPreservesTemplateTopLevelOrder(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "egern.yaml")
+	template := `version: 1
+ipv6: false
+proxies: []
+policy_groups:
+  - select:
+      name: Proxy
+      policies: [DIRECT]
+rules: []
+`
+	if err := os.WriteFile(path, []byte(template), 0600); err != nil {
+		t.Fatal(err)
+	}
+	output, err := EncodeEgern([]string{testSSLink("Node A")}, SqlConfig{Egern: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(output)
+	for _, key := range []string{"version:", "ipv6:", "proxies:", "policy_groups:", "rules:"} {
+		if !strings.Contains(text, key) {
+			t.Fatalf("output missing %q:\n%s", key, text)
+		}
+	}
+	if strings.Index(text, "version:") > strings.Index(text, "ipv6:") ||
+		strings.Index(text, "ipv6:") > strings.Index(text, "proxies:") ||
+		strings.Index(text, "proxies:") > strings.Index(text, "policy_groups:") ||
+		strings.Index(text, "policy_groups:") > strings.Index(text, "rules:") {
+		t.Fatalf("top-level key order changed:\n%s", text)
 	}
 }
 

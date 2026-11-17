@@ -354,69 +354,129 @@ func EncodeClash(urls []string, sqlconfig SqlConfig) ([]byte, error) {
 	return DecodeClash(proxys, sqlconfig)
 }
 
-// DecodeClash 用于解析 Clash 配置文件
+func mappingValue(node *yaml.Node, key string) (*yaml.Node, bool) {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil, false
+	}
+	for index := 0; index+1 < len(node.Content); index += 2 {
+		if node.Content[index].Value == key {
+			return node.Content[index+1], true
+		}
+	}
+	return nil, false
+}
+
+func setMappingValue(node *yaml.Node, key string, value interface{}) error {
+	var encoded yaml.Node
+	if err := encoded.Encode(value); err != nil {
+		return err
+	}
+	if current, ok := mappingValue(node, key); ok {
+		*current = encoded
+		return nil
+	}
+	node.Content = append(node.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}, &encoded)
+	return nil
+}
+
+func deleteMappingValue(node *yaml.Node, key string) {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return
+	}
+	for index := 0; index+1 < len(node.Content); index += 2 {
+		if node.Content[index].Value == key {
+			node.Content = append(node.Content[:index], node.Content[index+2:]...)
+			return
+		}
+	}
+}
+
+func ensureMappingSequence(node *yaml.Node, key string) *yaml.Node {
+	if value, ok := mappingValue(node, key); ok {
+		if value.Kind == yaml.SequenceNode {
+			return value
+		}
+		if value.Kind == yaml.ScalarNode && value.Tag == "!!null" {
+			value.Kind, value.Tag, value.Value = yaml.SequenceNode, "!!seq", ""
+			return value
+		}
+		return nil
+	}
+	value := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+	node.Content = append(node.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}, value)
+	return value
+}
+
+func appendProxyNames(node *yaml.Node, names []string) {
+	existing := make(map[string]bool, len(node.Content))
+	for _, item := range node.Content {
+		if item.Kind == yaml.ScalarNode {
+			existing[item.Value] = true
+		}
+	}
+	for _, name := range names {
+		if !existing[name] {
+			node.Content = append(node.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: name})
+			existing[name] = true
+		}
+	}
+}
+
+// DecodeClash injects generated proxies while retaining the template's YAML key order.
 func DecodeClash(proxys []Proxy, sqlconfig SqlConfig) ([]byte, error) {
-	// 读取 YAML 文件
 	data, err := ReadTemplateSource(sqlconfig.Clash)
 	if err != nil {
 		log.Printf("error: %v", err)
 		return nil, err
 	}
-	// 解析 YAML 文件
-	config := make(map[interface{}]interface{})
-	err = yaml.Unmarshal(data, &config)
-	if err != nil {
+	var document yaml.Node
+	if err := yaml.Unmarshal(data, &document); err != nil {
 		log.Printf("error: %v", err)
 		return nil, err
 	}
-
-	// 检查 "proxies" 键是否存在于 config 中
-	proxies, ok := config["proxies"].([]interface{})
-	if !ok {
-		// 如果 "proxies" 键不存在，创建一个新的切片
-		proxies = []interface{}{}
+	if len(document.Content) == 0 || document.Content[0].Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("Clash template must be a YAML mapping")
 	}
-	// 定义一个代理列表名字
-	ProxiesNameList := []string{}
-	// 添加新代理
-	for _, p := range proxys {
-		ProxiesNameList = append(ProxiesNameList, p.Name)
-		proxies = append(proxies, p)
+	config := document.Content[0]
+	proxies := ensureMappingSequence(config, "proxies")
+	if proxies == nil {
+		return nil, fmt.Errorf("Clash template proxies must be a list")
 	}
-	// proxies = append(proxies, newProxy)
-	config["proxies"] = proxies
-	rawProxyGroups, ok := config["proxy-groups"].([]interface{})
-	if !ok {
+	proxyNames := make([]string, 0, len(proxys))
+	for _, proxy := range proxys {
+		proxyNames = append(proxyNames, proxy.Name)
+		var encoded yaml.Node
+		if err := encoded.Encode(proxy); err != nil {
+			return nil, err
+		}
+		proxies.Content = append(proxies.Content, &encoded)
+	}
+	proxyGroups, ok := mappingValue(config, "proxy-groups")
+	if !ok || proxyGroups.Kind != yaml.SequenceNode {
 		return nil, fmt.Errorf("Clash template must contain a proxy-groups list")
 	}
-	for i, pg := range rawProxyGroups {
-		proxyGroup, ok := pg.(map[string]interface{})
-		if !ok {
+	for _, group := range proxyGroups.Content {
+		if group.Kind != yaml.MappingNode {
 			continue
 		}
-		groupName, _ := proxyGroup["name"].(string)
-		// 如果为链式代理的话则跳过当前组
-		// log.Print("代理类型为:", proxyGroup["type"])
-		if proxyGroup["type"] == "relay" {
+		nameNode, _ := mappingValue(group, "name")
+		typeNode, _ := mappingValue(group, "type")
+		groupName := ""
+		if nameNode != nil {
+			groupName = nameNode.Value
+		}
+		if typeNode != nil && typeNode.Value == "relay" {
 			continue
 		}
-		existingProxies, ok := proxyGroup["proxies"].([]interface{})
-		if proxyGroup["proxies"] == nil {
-			existingProxies = []interface{}{}
-		} else if !ok {
+		groupProxies := ensureMappingSequence(group, "proxies")
+		if groupProxies == nil {
 			return nil, fmt.Errorf("Clash policy group %q proxies must be a list", groupName)
 		}
-		groupProxyNames := selectedProxyNamesForGroup(groupName, ProxiesNameList, policyGroupRulesForTemplate(sqlconfig, sqlconfig.Clash))
-		proxyGroup["proxies"] = appendUniqueProxyNames(existingProxies, groupProxyNames)
-		rawProxyGroups[i] = proxyGroup
+		appendProxyNames(groupProxies, selectedProxyNamesForGroup(groupName, proxyNames, policyGroupRulesForTemplate(sqlconfig, sqlconfig.Clash)))
 	}
-
-	config["proxy-groups"] = rawProxyGroups
-
-	// 将修改后的内容写回文件
-	newData, err := yaml.Marshal(config)
+	newData, err := yaml.Marshal(&document)
 	if err != nil {
 		log.Printf("error: %v", err)
 	}
-	return newData, nil
+	return newData, err
 }

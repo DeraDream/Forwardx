@@ -231,77 +231,92 @@ func decodeEgern(proxies []interface{}, proxyNames []string, sqlconfig SqlConfig
 	if err != nil {
 		return nil, err
 	}
-
-	var config map[string]interface{}
-	if err := yaml.Unmarshal(template, &config); err != nil {
+	var document yaml.Node
+	if err := yaml.Unmarshal(template, &document); err != nil {
 		return nil, fmt.Errorf("invalid Egern template: %w", err)
 	}
+	if len(document.Content) == 0 || document.Content[0].Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("Egern template must be a YAML mapping")
+	}
+	config := document.Content[0]
 	if updateURL := strings.TrimSpace(sqlconfig.EgernUpdateURL); updateURL != "" {
 		intervalMinutes := sqlconfig.EgernUpdateIntervalMinutes
 		if intervalMinutes <= 0 {
 			intervalMinutes = DefaultEgernUpdateIntervalMinutes
 		}
-		config["auto_update"] = map[string]interface{}{
-			"url":      updateURL,
-			"interval": int64(intervalMinutes) * 60,
+		if err := setMappingValue(config, "auto_update", map[string]interface{}{"url": updateURL, "interval": int64(intervalMinutes) * 60}); err != nil {
+			return nil, err
 		}
 	}
-	config["proxies"] = proxies
-
-	groups, ok := config["policy_groups"].([]interface{})
-	if !ok {
+	proxyList := ensureMappingSequence(config, "proxies")
+	if proxyList == nil {
+		return nil, fmt.Errorf("Egern template proxies must be a list")
+	}
+	proxyList.Content = nil
+	for _, proxy := range proxies {
+		var encoded yaml.Node
+		if err := encoded.Encode(proxy); err != nil {
+			return nil, err
+		}
+		proxyList.Content = append(proxyList.Content, &encoded)
+	}
+	groups, ok := mappingValue(config, "policy_groups")
+	if !ok || groups.Kind != yaml.SequenceNode {
 		return nil, fmt.Errorf("Egern template must contain a policy_groups list")
 	}
 	rules := policyGroupRulesForTemplate(sqlconfig, sqlconfig.Egern)
-	for i, item := range groups {
-		group, ok := item.(map[string]interface{})
-		if !ok {
+	for _, group := range groups.Content {
+		if group.Kind != yaml.MappingNode {
 			continue
 		}
-		for groupType, rawSettings := range group {
-			groupType = strings.TrimSpace(groupType)
-			settings, ok := rawSettings.(map[string]interface{})
-			if !ok {
+		for index := 0; index+1 < len(group.Content); index += 2 {
+			groupType := strings.TrimSpace(group.Content[index].Value)
+			settings := group.Content[index+1]
+			if settings.Kind != yaml.MappingNode {
 				continue
 			}
 			if groupType == "external" {
-				localType, _ := settings["type"].(string)
-				localType = strings.TrimSpace(localType)
-				if !isEgernLocalPolicyGroupType(localType) {
+				localType, _ := mappingValue(settings, "type")
+				groupType = ""
+				if localType != nil {
+					groupType = strings.TrimSpace(localType.Value)
+				}
+				if !isEgernLocalPolicyGroupType(groupType) {
 					continue
 				}
-				delete(settings, "type")
-				delete(settings, "urls")
-				delete(settings, "update_interval")
-				delete(settings, "filter")
-				groupType = localType
-				group = map[string]interface{}{groupType: settings}
-				groups[i] = group
+				deleteMappingValue(settings, "type")
+				deleteMappingValue(settings, "urls")
+				deleteMappingValue(settings, "update_interval")
+				deleteMappingValue(settings, "filter")
+				group.Content[index].Value = groupType
 			}
 			if !isEgernLocalPolicyGroupType(groupType) {
 				continue
 			}
 			if groupType == "auto_test" {
-				// Egern requires urls to be a sequence when present. Older visual
-				// templates may serialize an empty value as null, which makes the
-				// entire profile invalid.
-				if urls, exists := settings["urls"]; exists && urls == nil {
-					delete(settings, "urls")
+				if urls, exists := mappingValue(settings, "urls"); exists && urls.Kind == yaml.ScalarNode && urls.Tag == "!!null" {
+					deleteMappingValue(settings, "urls")
 				}
-				latencyURL, _ := settings["latency_test_url"].(string)
-				if strings.TrimSpace(latencyURL) == "" {
-					settings["latency_test_url"] = DefaultEgernLatencyTestURL
+				latencyURL, _ := mappingValue(settings, "latency_test_url")
+				if latencyURL == nil || strings.TrimSpace(latencyURL.Value) == "" {
+					if err := setMappingValue(settings, "latency_test_url", DefaultEgernLatencyTestURL); err != nil {
+						return nil, err
+					}
 				}
 			}
-			name, _ := settings["name"].(string)
-			selected := selectedProxyNamesForGroup(name, proxyNames, rules)
-			existing, _ := settings["policies"].([]interface{})
-			settings["policies"] = appendUniqueProxyNames(existing, selected)
+			name, _ := mappingValue(settings, "name")
+			groupName := ""
+			if name != nil {
+				groupName = name.Value
+			}
+			policies := ensureMappingSequence(settings, "policies")
+			if policies == nil {
+				return nil, fmt.Errorf("Egern policy group %q policies must be a list", groupName)
+			}
+			appendProxyNames(policies, selectedProxyNamesForGroup(groupName, proxyNames, rules))
 		}
 	}
-	config["policy_groups"] = groups
-
-	return yaml.Marshal(config)
+	return yaml.Marshal(&document)
 }
 
 func isEgernLocalPolicyGroupType(groupType string) bool {

@@ -63,6 +63,36 @@ func TestEncodeLoonInjectsTemplate(t *testing.T) {
 	}
 }
 
+func TestEncodeLoonPreservesTemplateSectionOrder(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "loon.conf")
+	template := `[General]
+dns-server = system
+[Proxy]
+__LOON_PROXY_ENTRIES__
+[Proxy Group]
+Proxy = select,__LOON_ALL_NODES__,DIRECT
+[Rule]
+FINAL,Proxy
+`
+	if err := os.WriteFile(path, []byte(template), 0600); err != nil {
+		t.Fatal(err)
+	}
+	output, err := EncodeLoon([]string{testSSLink("Node A")}, SqlConfig{Loon: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, section := range []string{"[General]", "[Proxy]", "[Proxy Group]", "[Rule]"} {
+		if !strings.Contains(output, section) {
+			t.Fatalf("output missing %q:\n%s", section, output)
+		}
+	}
+	if strings.Index(output, "[General]") > strings.Index(output, "[Proxy]") ||
+		strings.Index(output, "[Proxy]") > strings.Index(output, "[Proxy Group]") ||
+		strings.Index(output, "[Proxy Group]") > strings.Index(output, "[Rule]") {
+		t.Fatalf("section order changed:\n%s", output)
+	}
+}
+
 func TestEncodeLoonRendersDynamicPolicyGroupNodes(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "loon.conf")
 	template := `[Proxy]
