@@ -2401,7 +2401,7 @@ function TunnelsContent() {
   });
   const tunnelSectionTabs = useMemo(() => {
     const groups = forwardGroupCountsQuery.data || [];
-    const count = (mode: string) => groups.filter((group: any) => normalizeGroupMode(group.groupMode) === mode).length;
+    const count = (mode: string) => groups.filter((group: any) => normalizeForwardGroupMode(group.groupMode) === mode).length;
     const counts: Record<TunnelSection, number> = {
       tunnels: Number(tunnelPageQuery.data?.totalItems || 0), ports: count("port"), chains: count("chain"), groups: count("failover"), entries: count("entry"), exits: count("exit"), landing: 0,
     };

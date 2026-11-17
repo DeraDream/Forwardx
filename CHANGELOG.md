@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.4.55] - 2026-11-17
+
+### Fixed
+
+- 修复链路管理页签全量统计中引用了错误的策略组模式归一化函数，导致 TypeScript 类型检查失败。
+
+Agent 保持 `2.2.231`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.4.54] - 2026-11-17
 
 ### Improved
