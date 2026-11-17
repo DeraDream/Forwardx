@@ -10,6 +10,7 @@ import { ruleSetDisplayName } from "./ruleSetName";
 import { usePointerListSort } from "./usePointerListSort";
 import { RenameConfirmationDialog } from "./RenameConfirmationDialog";
 import { DeletePolicyGroupDialog } from "./DeletePolicyGroupDialog";
+import { ReferenceDetailsDialog } from "./ReferenceDetailsDialog";
 
 type Group = {
   name: string;
@@ -218,6 +219,7 @@ export function EgernVisualEditor({ value, view = "groups", onChange, onError, o
   const [memberQuery, setMemberQuery] = useState("");
   const [groupRename, setGroupRename] = useState<{ index: number; previous: string; next: string; error?: string; references: Array<{ label: string; count: number }> } | null>(null);
   const [groupDelete, setGroupDelete] = useState<{ index: number; name: string; references: Array<{ label: string; count: number }> } | null>(null);
+  const [referenceGroupIndex, setReferenceGroupIndex] = useState<number | null>(null);
   const groupNameInputs = useRef(new Map<number, HTMLInputElement>());
   const [rulesDirty, setRulesDirty] = useState(false);
   const previousOutput = useRef("");
@@ -348,6 +350,7 @@ export function EgernVisualEditor({ value, view = "groups", onChange, onError, o
   };
   const groupPointerSort = usePointerListSort(reorderGroups, (index) => <div className="flex min-h-11 w-[min(900px,calc(100vw-3rem))] items-center gap-2 rounded-md border border-primary/70 bg-card px-3 py-2.5 text-sm font-semibold shadow-2xl"><GripVertical className="size-4 shrink-0 text-muted-foreground" /><span>{groups[index]?.name || `未命名策略组 ${index + 1}`}</span><span className="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] font-medium text-primary">{typeLabels[groups[index]?.type || "select"] || groups[index]?.type || "select"}</span></div>);
   const rulePointerSort = usePointerListSort(reorderRules, (index) => <div className="flex w-[min(640px,calc(100vw-3rem))] items-center gap-3 rounded-md border border-primary/70 bg-card px-3 py-2.5 shadow-2xl"><GripVertical className="size-4 shrink-0 text-muted-foreground" /><b className="font-mono text-xs">{rules[index]?.type || "RULE"}</b><span className="truncate text-sm">{ruleMatchLabel(rules[index] || { type: "", policy: "" })}</span></div>);
+  const groupReferenceDetails = (index: number) => { const name = groups[index]?.name || ""; return [{ label: "流量规则", items: rules.filter((rule) => rule.type !== "rule_set" && rule.policy === name).map((rule) => ({ primary: `${rule.type}: ${ruleMatchLabel(rule)} → ${name}`, onNavigate: () => { setReferenceGroupIndex(null); } })) }, { label: "规则集的命中策略", items: rules.filter((rule) => rule.type === "rule_set" && rule.policy === name).map((rule) => ({ primary: `${ruleSetName(rule)} → ${name}`, onNavigate: () => { setReferenceGroupIndex(null); onOpenRuleSet?.(ruleSetName(rule)); } })) }, { label: "策略组成员（嵌套策略组）", items: groups.filter((group) => group.policies.includes(name)).map((group) => ({ primary: `${group.name} 的成员包含 ${name}`, onNavigate: () => setReferenceGroupIndex(null) })) }]; };
   const requestRemoveGroup = (index: number) => { const name = groups[index]?.name || ""; setGroupDelete({ index, name, references: [{ label: "流量规则", count: rules.filter((rule) => rule.type !== "rule_set" && rule.policy === name).length }, { label: "规则集的命中策略", count: rules.filter((rule) => rule.type === "rule_set" && rule.policy === name).length }, { label: "策略组成员（嵌套策略组）", count: groups.reduce((total, group) => total + group.policies.filter((policy) => policy === name).length, 0) }] }); };
   const removeGroup = (direct: boolean) => {
     if (!groupDelete) return;
@@ -416,7 +419,7 @@ export function EgernVisualEditor({ value, view = "groups", onChange, onError, o
             </button>
             <Button variant="ghost" size="icon" className="size-7" disabled={!index} onClick={() => { markDirty(); moveGroup(index, -1); }}><ChevronUp className="size-4" /></Button>
             <Button variant="ghost" size="icon" className="size-7" disabled={index === groups.length - 1} onClick={() => { markDirty(); moveGroup(index, 1); }}><ChevronDown className="size-4" /></Button>
-            <Button variant="ghost" size="icon" className="size-7 text-destructive hover:text-destructive" onClick={() => requestRemoveGroup(index)}><Trash2 className="size-4" /></Button>
+            <Button variant="ghost" size="icon" className="size-7" title="查看引用关系" onClick={() => setReferenceGroupIndex(index)}><ArrowUpRight className="size-3.5" /></Button><Button variant="ghost" size="icon" className="size-7 text-destructive hover:text-destructive" onClick={() => requestRemoveGroup(index)}><Trash2 className="size-4" /></Button>
           </div>
           {expanded.includes(index) && (
             <div className="flex flex-col gap-4 border-t border-border bg-muted/20 p-4">
@@ -529,6 +532,7 @@ export function EgernVisualEditor({ value, view = "groups", onChange, onError, o
         setRules((items) => ruleEditor.index === null ? [...items, ruleEditor.rule] : items.map((item, position) => position === ruleEditor.index ? ruleEditor.rule : item));
         setRuleEditor(null);
       }} />
+      {referenceGroupIndex !== null && <ReferenceDetailsDialog open title="策略组引用关系" name={groups[referenceGroupIndex]?.name || ""} sections={groupReferenceDetails(referenceGroupIndex)} onOpenChange={() => setReferenceGroupIndex(null)} />}
       {groupDelete && <DeletePolicyGroupDialog open name={groupDelete.name} references={groupDelete.references} onCancel={() => setGroupDelete(null)} onRemoveRules={() => removeGroup(false)} onUseDirect={() => removeGroup(true)} />}
       {groupRename && <RenameConfirmationDialog open kind="策略组" previous={groupRename.previous} next={groupRename.next} error={groupRename.error} references={groupRename.references} onReturn={() => { const pending = groupRename; setGroupRename(null); requestAnimationFrame(() => groupNameInputs.current.get(pending.index)?.focus()); }} onCancel={() => { const pending = groupRename; setGroups((items) => items.map((item, position) => position === pending.index ? { ...item, name: pending.previous } : item)); setGroupRename(null); }} onConfirm={() => { const pending = groupRename; renameGroup(pending.index, pending.next, pending.previous); setGroupRename(null); }} />}
     </section>

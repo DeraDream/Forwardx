@@ -1,0 +1,11 @@
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { ArrowUpRight } from "lucide-react";
+
+export type ReferenceDetail = { primary: string; secondary?: string; onNavigate?: () => void };
+export type ReferenceSection = { label: string; items: ReferenceDetail[] };
+
+export function ReferenceDetailsDialog({ open, title, name, sections, onOpenChange }: { open: boolean; title: string; name: string; sections: ReferenceSection[]; onOpenChange: (open: boolean) => void }) {
+  const count = sections.reduce((total, section) => total + section.items.length, 0);
+  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="max-h-[min(680px,calc(100svh-3rem))] max-w-2xl overflow-y-auto"><DialogHeader><DialogTitle>{title}</DialogTitle><DialogDescription>「{name}」被以下内容引用。</DialogDescription></DialogHeader><p className="text-sm font-medium">共 {count} 处引用</p>{sections.filter((section) => section.items.length).map((section) => <section key={section.label} className="overflow-hidden rounded-lg border border-border"><div className="flex items-center justify-between border-b bg-muted/35 px-3 py-2 text-sm font-medium"><span>{section.label}</span><span className="text-muted-foreground">{section.items.length} 次</span></div><div className="divide-y">{section.items.slice(0, 3).map((item, index) => <div key={`${item.primary}-${index}`} className="flex min-h-12 items-center gap-3 px-3 py-2"><div className="min-w-0 flex-1"><div className="truncate font-mono text-xs">{item.primary}</div>{item.secondary && <div className="mt-0.5 truncate text-xs text-muted-foreground">{item.secondary}</div>}</div>{item.onNavigate && <Button variant="ghost" size="icon" className="size-7 shrink-0" title="定位" onClick={item.onNavigate}><ArrowUpRight className="size-3.5" /></Button>}</div>)}{section.items.length > 3 && <div className="px-3 py-2 text-center text-xs text-muted-foreground">其余 {section.items.length - 3} 条引用将在后续列表中显示</div>}</div></section>)}{!count && <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/5 p-4 text-sm text-emerald-700 dark:text-emerald-300">当前没有内容引用此项，可安全删除。</div>}<p className="text-xs text-muted-foreground">点击 ↗ 自动关闭弹窗并定位到对应项。</p></DialogContent></Dialog>;
+}

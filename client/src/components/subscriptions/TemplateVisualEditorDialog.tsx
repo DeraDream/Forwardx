@@ -51,6 +51,7 @@ import { ModuleVisualEditor } from "@/components/subscriptions/ModuleVisualEdito
 import { usePointerListSort } from "@/components/subscriptions/usePointerListSort";
 import { RenameConfirmationDialog } from "@/components/subscriptions/RenameConfirmationDialog";
 import { DeletePolicyGroupDialog } from "@/components/subscriptions/DeletePolicyGroupDialog";
+import { ReferenceDetailsDialog } from "@/components/subscriptions/ReferenceDetailsDialog";
 import { applyCodeSearchSelection } from "@/components/subscriptions/codeSearchSelection";
 
 type Group = {
@@ -929,6 +930,7 @@ export function TemplateVisualEditorDialog({
   }, [open, mode, templateKind, yaml]);
   const groupCycles = useMemo(() => findPolicyGroupCycles(groups), [groups]);
   const groupReferences = (index: number) => { const name = groups[index]?.name || ""; return [{ label: "流量规则", count: rules.filter((rule) => rule.target === name).length }, { label: "策略组成员（嵌套策略组）", count: groups.reduce((total, group) => total + group.proxies.filter((proxy) => proxy === name).length, 0) }]; };
+  const groupReferenceDetails = (index: number) => { const name = groups[index]?.name || ""; return [{ label: "流量规则", items: rules.filter((rule) => rule.target === name).map((rule) => ({ primary: `${rule.type}, ${rule.value || "*"} → ${name}`, onNavigate: () => { setReferenceGroupIndex(null); setMode("rules"); } })) }, { label: "策略组成员（嵌套策略组）", items: groups.map((group, groupIndex) => ({ group, groupIndex })).filter(({ group }) => group.proxies.includes(name)).map(({ group, groupIndex }) => ({ primary: `${group.name} 的成员包含 ${name}`, onNavigate: () => { setReferenceGroupIndex(null); setMode("visual"); setExpanded((items) => items.includes(groupIndex) ? items : [...items, groupIndex]); } })) }]; };
   const memberPickerGroup = memberPickerIndex === null ? null : groups[memberPickerIndex] || null;
   const memberCandidates = useMemo(() => {
     const keyword = memberQuery.trim().toLowerCase();
@@ -1423,7 +1425,7 @@ export function TemplateVisualEditorDialog({
                               >
                                 <ChevronDown className="h-4 w-4" />
                               </Button>
-                              <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => setReferenceGroupIndex(index)}>引用 {groupReferences(index).reduce((total, item) => total + item.count, 0)} 次</Button>
+                              <Button variant="ghost" size="icon" className="size-7" title={`引用 ${groupReferences(index).reduce((total, item) => total + item.count, 0)} 次`} onClick={() => setReferenceGroupIndex(index)}><Network className="size-3.5" /></Button>
                               <Button
                                 aria-label="删除策略组"
                                 variant="ghost"
@@ -1734,7 +1736,7 @@ export function TemplateVisualEditorDialog({
           <div className="flex justify-end gap-2 bg-muted/15 px-6 py-4"><Button variant="outline" onClick={() => setVisualSaveConfirmOpen(false)}>返回代码编辑</Button><Button onClick={() => { setVisualSaveConfirmOpen(false); void performSave(); }}>仍然保存</Button></div>
         </DialogContent>
       </Dialog>
-      {referenceGroupIndex !== null && <Dialog open onOpenChange={() => setReferenceGroupIndex(null)}><DialogContent className="max-w-md"><DialogHeader><DialogTitle>策略组引用关系</DialogTitle><DialogDescription>「{groups[referenceGroupIndex]?.name || ""}」被以下内容引用。</DialogDescription></DialogHeader><div className="space-y-2">{groupReferences(referenceGroupIndex).map((item) => <div key={item.label} className="flex justify-between rounded border bg-muted/20 px-3 py-2 text-sm"><span>{item.label}</span><b>{item.count} 次</b></div>)}</div></DialogContent></Dialog>}
+      {referenceGroupIndex !== null && <ReferenceDetailsDialog open title="策略组引用关系" name={groups[referenceGroupIndex]?.name || ""} sections={groupReferenceDetails(referenceGroupIndex)} onOpenChange={() => setReferenceGroupIndex(null)} />}
       {groupDelete && <DeletePolicyGroupDialog open name={groupDelete.name} references={groupDelete.references} onCancel={() => setGroupDelete(null)} onRemoveRules={() => removeGroup(false)} onUseDirect={() => removeGroup(true)} />}
       {groupRename && <RenameConfirmationDialog open kind="策略组" previous={groupRename.previous} next={groupRename.next} error={groupRename.error} references={groupRename.references} onReturn={() => { const pending = groupRename; setGroupRename(null); requestAnimationFrame(() => groupNameInputs.current.get(pending.index)?.focus()); }} onCancel={() => { const pending = groupRename; setGroups((items) => items.map((item, position) => position === pending.index ? { ...item, name: pending.previous } : item)); setGroupRename(null); }} onConfirm={() => { const pending = groupRename; applyGroupRename(pending.index, pending.previous, pending.next); setGroupRename(null); }} />}
     </>

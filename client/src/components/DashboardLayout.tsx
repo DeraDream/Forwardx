@@ -1143,9 +1143,11 @@ function DashboardLayoutContent({
     && (displayUpgradeJob.mode === "rollback"
       ? comparePanelVersions(currentPanelVersion, displayUpgradeJob.targetVersion) <= 0
       : comparePanelVersions(currentPanelVersion, displayUpgradeJob.targetVersion) >= 0);
+  // Once the new panel is serving, the persisted job is at its target version.
+  // Keep it visible while the scheduled 3→2→1 refresh is still pending.
   const isPanelVersionTaskVisible = !!displayUpgradeJob?.status
     && displayUpgradeJob.status !== "idle"
-    && !isPanelVersionTaskAtCurrentVersion;
+    && (upgradeRefreshScheduled || !isPanelVersionTaskAtCurrentVersion);
   const isPanelRollbackTask = displayUpgradeJob?.mode === "rollback";
   const panelVersionActionLabel = isPanelRollbackTask ? "回退" : "升级";
   const upgradeTargetVersion = isPanelVersionTaskVisible
@@ -1179,6 +1181,7 @@ function DashboardLayoutContent({
       displayUpgradeJob?.status === "running"
       || displayUpgradeJob?.status === "waiting_assets"
       || displayUpgradeJob?.status === "error"
+      || upgradeRefreshScheduled
     ))
   );
   const canDismissPanelUpdateNotice = hasPanelUpdate && !isPanelVersionTaskVisible && !!normalizedUpgradeTargetVersion;
