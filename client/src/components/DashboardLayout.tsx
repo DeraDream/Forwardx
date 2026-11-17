@@ -416,7 +416,7 @@ function DashboardLayoutContent({
   });
   const updateAutoCheckReady = !isAdmin || !!publicInfo;
   const updateAutoCheckEnabled = publicInfo?.updateAutoCheckEnabled !== false;
-  const { data: updateInfo } = trpc.system.checkUpdate.useQuery(undefined, {
+  const { data: updateInfo, refetch: refetchUpdateInfo } = trpc.system.checkUpdate.useQuery(undefined, {
     enabled: isAdmin && !deferBackgroundQueries && updateAutoCheckReady && updateAutoCheckEnabled,
     refetchInterval: updateAutoCheckEnabled ? UPDATE_AUTO_CHECK_REFETCH_MS : false,
     refetchOnWindowFocus: false,
@@ -1150,9 +1150,14 @@ function DashboardLayoutContent({
     && (upgradeRefreshScheduled || !isPanelVersionTaskAtCurrentVersion);
   const isPanelRollbackTask = displayUpgradeJob?.mode === "rollback";
   const panelVersionActionLabel = isPanelRollbackTask ? "回退" : "升级";
+  const advertisedUpgradeVersion = updateInfo?.latestVersion || upgradeStatus?.update?.latestVersion || "";
+  // Never put an equal or older version into the upgrade dialog. Cached check
+  // results can briefly survive a panel restart after an upgrade.
   const upgradeTargetVersion = isPanelVersionTaskVisible
     ? (displayUpgradeJob?.targetVersion || "")
-    : (updateInfo?.latestVersion || upgradeStatus?.update?.latestVersion || "");
+    : (currentPanelVersion && comparePanelVersions(advertisedUpgradeVersion, currentPanelVersion) > 0
+      ? advertisedUpgradeVersion
+      : "");
   const upgradeChangelogUrl = getPanelChangelogUrl(
     upgradeTargetVersion,
     isPanelVersionTaskVisible ? null : (updateInfo?.releaseUrl || upgradeStatus?.update?.releaseUrl),
@@ -1185,6 +1190,16 @@ function DashboardLayoutContent({
     ))
   );
   const canDismissPanelUpdateNotice = hasPanelUpdate && !isPanelVersionTaskVisible && !!normalizedUpgradeTargetVersion;
+  const isPanelUpgradeActionable = hasPanelUpdate || (isPanelVersionTaskVisible && (
+    displayUpgradeJob?.status === "running"
+    || displayUpgradeJob?.status === "waiting_assets"
+    || displayUpgradeJob?.status === "error"
+  ));
+  useEffect(() => {
+    // A dialog opened before the service restart must not linger as a false
+    // "new version" prompt once the restarted panel reports the same version.
+    if (showUpgradeDialog && !isPanelUpgradeActionable) setShowUpgradeDialog(false);
+  }, [isPanelUpgradeActionable, showUpgradeDialog]);
   const dismissPanelUpdateNotice = () => {
     if (!canDismissPanelUpdateNotice) return;
     setDismissedPanelUpgradeNoticeVersion(normalizedUpgradeTargetVersion);
@@ -1231,8 +1246,8 @@ function DashboardLayoutContent({
     }
     try {
       const latestInfo = await utils.system.checkUpdate.fetch({ force: true });
-      await refetchUpgradeStatus();
-      if (latestInfo?.hasUpdate) {
+      await Promise.all([refetchUpdateInfo(), refetchUpgradeStatus()]);
+      if (latestInfo?.hasUpdate && comparePanelVersions(latestInfo.latestVersion, latestInfo.currentVersion) > 0) {
         setShowUpgradeDialog(true);
       } else {
         toast.success("当前已是最新版本");
