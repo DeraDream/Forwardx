@@ -116,6 +116,7 @@ export const landingRouter = router({
     const groupModes = new Map<number, string>(groups.map((group: any) => [Number(group.id), String(group.groupMode || "").toLowerCase()]));
     const groupsById = new Map<number, any>(groups.map((group: any) => [Number(group.id), group]));
     const serviceIds = new Set(services.map((service: any) => Number(service.id)));
+    const servicesById = new Map<number, any>(services.map((service: any) => [Number(service.id), service]));
     const referenced = rules.filter((rule: any) => serviceIds.has(Number(rule.targetLandingServiceId || 0)) && !rule.pendingDelete);
     const hostIds: number[] = [...new Set<number>(referenced.map((rule: any) => Number(rule.hostId)).filter(Boolean))];
     const hosts = await Promise.all(hostIds.map(async (id) => [id, await db.getHostById(id)] as const));
@@ -125,6 +126,8 @@ export const landingRouter = router({
       protocol: String(rule.protocol || "both").toUpperCase(), sourcePort: Number(rule.sourcePort), targetIp: String(rule.targetIp || "-"), targetPort: Number(rule.targetPort || 0),
       sourceHost: hostNames.get(Number(rule.hostId)) || `主机 #${rule.hostId}`,
       groupName: Number(rule.forwardGroupId || 0) ? String(groupsById.get(Number(rule.forwardGroupId))?.name || `转发组 #${rule.forwardGroupId}`) : "",
+      targetServiceStatus: String(servicesById.get(Number(rule.targetLandingServiceId || 0))?.status || ""),
+      targetServiceEnabled: !!servicesById.get(Number(rule.targetLandingServiceId || 0))?.isEnabled,
     });
     return {
       services: services.map((service: any) => ({ id: Number(service.id), name: service.name, protocol: String(service.protocol || "ss").toUpperCase(), method: service.method, port: Number(service.port), endpoint: service.endpoint, isEnabled: !!service.isEnabled, status: service.status, latestLatencyMs: service.latestLatencyMs })),
