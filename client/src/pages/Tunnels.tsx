@@ -2394,6 +2394,19 @@ function TunnelsContent() {
     staleTime: 10_000,
     refetchOnWindowFocus: false,
   });
+  // Keep tab totals independent of the active page. The paged query only
+  // contains the current mode, which previously made inactive tab badges read 0.
+  const forwardGroupCountsQuery = trpc.forwardGroups.options.useQuery(undefined, {
+    refetchInterval: pollingInterval("normal"), staleTime: 10_000, refetchOnWindowFocus: false,
+  });
+  const tunnelSectionTabs = useMemo(() => {
+    const groups = forwardGroupCountsQuery.data || [];
+    const count = (mode: string) => groups.filter((group: any) => normalizeGroupMode(group.groupMode) === mode).length;
+    const counts: Record<TunnelSection, number> = {
+      tunnels: Number(tunnelPageQuery.data?.totalItems || 0), ports: count("port"), chains: count("chain"), groups: count("failover"), entries: count("entry"), exits: count("exit"), landing: 0,
+    };
+    return TUNNEL_SECTION_ITEMS.map((item) => ({ ...item, badge: counts[item.value] }));
+  }, [forwardGroupCountsQuery.data, tunnelPageQuery.data?.totalItems]);
   const relatedTunnelGroups = useMemo<any[]>(() => {
     const source = isTunnelGlobeView
       ? tunnelMapQuery.data?.pages.flatMap((page) => page.relatedGroups as any[]) || []
@@ -4003,7 +4016,7 @@ function TunnelsContent() {
       </div>
 
       <Tabs value={activeSection} onValueChange={(value) => setActiveSection(value as TunnelSection)} className="space-y-4">
-        <SlidingTabsList items={TUNNEL_SECTION_ITEMS} activeValue={activeSection} ariaLabel="链路管理" minItemWidthRem={7.75} />
+        <SlidingTabsList items={tunnelSectionTabs} activeValue={activeSection} ariaLabel="链路管理" minItemWidthRem={7.75} />
 
         <TabsContent value="tunnels" className="space-y-4">
           <div className="min-w-0">

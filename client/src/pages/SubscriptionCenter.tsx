@@ -45,10 +45,12 @@ type NodeSubscriptionRecord = Omit<SubscriptionRecord, "Config">;
 type TemplateRecord = { File: string; Text: string; CreateDate?: string };
 type TemplateApiRecord = TemplateRecord & { file?: string; text?: string; create_date?: string };
 type NodeListResponse = { items?: NodeRecord[] };
+type SubscriptionSummary = { subscriptions?: number; nodeSubscriptions?: number; nodes?: number; templates?: number };
 type IPEntry = { ID: number; Alias: string; Address: string; CreatedAt?: string };
 type EditorMode = "subscription" | "node-subscription" | "node" | "template-add" | "template-edit" | "template-import" | null;
 
 const SUBSCRIPTION_VIEW_MODE_STORAGE_KEY = "forwardx.subscriptionCenter.viewMode";
+const SUBSCRIPTION_SECTION_STORAGE_KEY = "forwardx.subscriptionCenter.section";
 
 const sections: readonly SlidingTabItem<SubscriptionSection>[] = [
   { value: "subscriptions", label: "订阅列表", icon: Link2 },
@@ -63,6 +65,18 @@ const sectionDescriptions: Record<SubscriptionSection, string> = {
   nodes: "管理可用于订阅输出的代理节点与分组。",
   templates: "管理客户端输出模板，并在发布前预览结果。",
 };
+
+function getStoredSection(): SubscriptionSection {
+  if (typeof window === "undefined") return "subscriptions";
+  try {
+    const value = window.localStorage.getItem(SUBSCRIPTION_SECTION_STORAGE_KEY);
+    return sections.some((section) => section.value === value) ? value as SubscriptionSection : "subscriptions";
+  } catch { return "subscriptions"; }
+}
+
+function storeSection(section: SubscriptionSection) {
+  try { window.localStorage.setItem(SUBSCRIPTION_SECTION_STORAGE_KEY, section); } catch { /* optional preference */ }
+}
 
 function getStoredViewMode(): SubscriptionViewMode {
   if (typeof window === "undefined") return "table";
@@ -254,7 +268,7 @@ function templatePolicyGroups(text: string, outputType: string) {
 }
 
 export default function SubscriptionCenterPage() {
-  const [activeSection, setActiveSection] = useState<SubscriptionSection>("subscriptions");
+  const [activeSection, setActiveSection] = useState<SubscriptionSection>(getStoredSection);
   const [viewMode, setViewMode] = useState<SubscriptionViewMode>(getStoredViewMode);
   const [subscriptions, setSubscriptions] = useState<SubscriptionRecord[]>([]);
   const [nodeSubscriptions, setNodeSubscriptions] = useState<NodeSubscriptionRecord[]>([]);
@@ -262,6 +276,7 @@ export default function SubscriptionCenterPage() {
   const [nodeGroups, setNodeGroups] = useState<string[]>([]);
   const nodeBackupInputRef = useRef<HTMLInputElement>(null);
   const [templates, setTemplates] = useState<TemplateRecord[]>([]);
+  const [summary, setSummary] = useState<SubscriptionSummary | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -311,6 +326,8 @@ export default function SubscriptionCenterPage() {
   const confirm = useConfirmDialog();
   const activeItem = sections.find((item) => item.value === activeSection)!;
   const ActiveIcon = activeItem.icon || Link2;
+  const sectionTabs = useMemo(() => sections.map((section) => ({ ...section, badge: section.value === "subscriptions" ? summary?.subscriptions ?? subscriptions.length : section.value === "node-subscriptions" ? summary?.nodeSubscriptions ?? nodeSubscriptions.length : section.value === "nodes" ? summary?.nodes ?? nodes.length : summary?.templates ?? templates.length })), [summary, subscriptions.length, nodeSubscriptions.length, nodes.length, templates.length]);
+  const handleSectionChange = (section: SubscriptionSection) => { setActiveSection(section); storeSection(section); };
   const selectedSubscriptionTemplateText = useMemo(() => {
     const defaultFile = editorOutputType === "loon" ? "loon.conf" : editorOutputType === "egern" ? "egern.yaml" : "clash.yaml";
     const requested = (subscriptionTemplate || `./template/${defaultFile}`).replace(/^\.\/template\//, "");
@@ -322,6 +339,10 @@ export default function SubscriptionCenterPage() {
     if (editorMode !== "subscription" || subscriptionStep !== 3) return;
     setPolicyGroups((current) => Object.fromEntries(selectedTemplatePolicyGroups.map((name) => [name, current[name] || { mode: "all" as const, nodes: [] }])));
   }, [editorMode, subscriptionStep, selectedTemplatePolicyGroups]);
+
+  const loadSubscriptionSummary = useCallback(async () => {
+    try { setSummary(await sublinkRequest<SubscriptionSummary>("/api/v1/subcription/summary")); } catch { /* List data remains a safe fallback for badge totals. */ }
+  }, []);
 
   const loadSubscriptions = useCallback(async () => {
     setIsLoading(true);
@@ -347,8 +368,9 @@ export default function SubscriptionCenterPage() {
       setLoadError(error instanceof Error ? error.message : "订阅列表加载失败");
     } finally {
       setIsLoading(false);
+      void loadSubscriptionSummary();
     }
-  }, []);
+  }, [loadSubscriptionSummary]);
 
   useEffect(() => {
     void loadSubscriptions();
@@ -806,8 +828,8 @@ export default function SubscriptionCenterPage() {
           </div>
         </div>
 
-        <Tabs value={activeSection} onValueChange={(value) => setActiveSection(value as SubscriptionSection)}>
-          <SlidingTabsList items={sections} activeValue={activeSection} ariaLabel="订阅" minItemWidthRem={7.5} />
+        <Tabs value={activeSection} onValueChange={(value) => handleSectionChange(value as SubscriptionSection)}>
+          <SlidingTabsList items={sectionTabs} activeValue={activeSection} ariaLabel="订阅" minItemWidthRem={7.5} />
         </Tabs>
 
         {activeSection === "subscriptions" ? (

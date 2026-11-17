@@ -50,6 +50,7 @@ import { RuleSetVisualEditor } from "@/components/subscriptions/RuleSetVisualEdi
 import { ModuleVisualEditor } from "@/components/subscriptions/ModuleVisualEditor";
 import { usePointerListSort } from "@/components/subscriptions/usePointerListSort";
 import { RenameConfirmationDialog } from "@/components/subscriptions/RenameConfirmationDialog";
+import { DeletePolicyGroupDialog } from "@/components/subscriptions/DeletePolicyGroupDialog";
 import { applyCodeSearchSelection } from "@/components/subscriptions/codeSearchSelection";
 
 type Group = {
@@ -187,7 +188,14 @@ function validateTemplate(kind: TemplateKind, value: string) {
     const sections = Array.from(value.matchAll(/^\s*\[([^\]]+)\]\s*$/gm)).map((match) => match[1].trim().toLowerCase());
     if (!sections.length) return { valid: false, message: "Loon 配置至少需要一个 INI 分段，例如 [Proxy Group]" };
     if (new Set(sections).size !== sections.length) return { valid: false, message: "Loon 配置存在重复的 INI 分段名称" };
-    return { valid: true, message: "Loon INI 结构有效" };
+    const section = (name: string) => { const match = value.match(new RegExp(`^\\s*\\[${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\]\\s*$([\\s\\S]*?)(?=^\\s*\\[|$)`, "im")); return match?.[1]?.split("\n") || []; };
+    const groups = section("Proxy Group").flatMap((line) => { const match = line.match(/^\s*([^=;#]+?)\s*=/); return match?.[1]?.trim() ? [match[1].trim()] : []; });
+    if (groups.some((name) => !name) || new Set(groups).size !== groups.length) return { valid: false, message: "Loon 策略组名称必须非空且唯一" };
+    const proxies = section("Proxy").flatMap((line) => { const match = line.match(/^\s*([^=;#]+?)\s*=/); return match?.[1]?.trim() ? [match[1].trim()] : []; });
+    const targets = new Set(["DIRECT", "REJECT", "PROXY", ...groups, ...proxies]);
+    const tags = new Set(section("Remote Rule").flatMap((line) => { const match = line.match(/(?:^|,)\s*tag\s*=\s*([^,]+)/i); return match?.[1]?.trim() ? [match[1].trim()] : []; }));
+    for (const line of section("Rule")) { const text = line.replace(/^\s*#\s*/, "").trim(); if (!text || /^;/.test(text)) continue; const parts = text.split(",").map((part) => part.trim()); if (!parts.length) continue; const target = [...parts].reverse().find((part) => part && !["no-resolve", "extended-matching", "force-remote-dns"].includes(part.toLowerCase())); if (target && !targets.has(target)) return { valid: false, message: `Loon 规则指向不存在的策略「${target}」` }; if (parts[0]?.toUpperCase() === "RULE-SET" && !tags.has(parts[1] || "")) return { valid: false, message: `Loon RULE-SET 引用了不存在的规则集「${parts[1] || ""}」` }; }
+    return { valid: true, message: "Loon INI 结构及引用有效" };
   }
   const document = parseYamlDocument(value, { prettyErrors: false, strict: true });
   if (document.errors.length) {
@@ -201,10 +209,22 @@ function validateTemplate(kind: TemplateKind, value: string) {
   if (kind === "clash") {
     if (fields["proxy-groups"] !== undefined && !Array.isArray(fields["proxy-groups"])) return { valid: false, message: "Clash 的 proxy-groups 必须是数组" };
     if (fields.rules !== undefined && !Array.isArray(fields.rules)) return { valid: false, message: "Clash 的 rules 必须是数组" };
+    const groups = (Array.isArray(fields["proxy-groups"]) ? fields["proxy-groups"] : []).flatMap((group) => group && typeof group === "object" && typeof (group as Record<string, unknown>).name === "string" ? [String((group as Record<string, unknown>).name).trim()] : []);
+    if (groups.some((name) => !name) || new Set(groups).size !== groups.length) return { valid: false, message: "Clash 策略组名称必须非空且唯一" };
+    const proxies = (Array.isArray(fields.proxies) ? fields.proxies : []).flatMap((proxy) => proxy && typeof proxy === "object" && typeof (proxy as Record<string, unknown>).name === "string" ? [String((proxy as Record<string, unknown>).name).trim()] : []);
+    const targets = new Set(["DIRECT", "REJECT", ...groups, ...proxies]); const providers = new Set(Object.keys((fields["rule-providers"] || {}) as Record<string, unknown>));
+    for (const rule of Array.isArray(fields.rules) ? fields.rules : []) { if (typeof rule !== "string") continue; const parts = rule.split(",").map((part) => part.trim()); const target = parts.at(-1) || ""; if (target && !targets.has(target)) return { valid: false, message: `Clash 规则指向不存在的策略「${target}」` }; if (parts[0]?.toUpperCase() === "RULE-SET" && !providers.has(parts[1] || "")) return { valid: false, message: `Clash RULE-SET 引用了不存在的规则集「${parts[1] || ""}」` }; }
   }
   if (kind === "egern" && fields.policy_groups !== undefined && !Array.isArray(fields.policy_groups)) return { valid: false, message: "Egern 的 policy_groups 必须是数组" };
   if (kind === "egern" && fields.modules !== undefined && !Array.isArray(fields.modules)) return { valid: false, message: "Egern 的 modules 必须是数组" };
-  return { valid: true, message: kind === "unknown" ? "YAML 语法有效；尚未识别为 Clash、Egern 或 Loon" : `${kind === "clash" ? "Clash" : "Egern"} YAML 语法有效` };
+  if (kind === "egern") {
+    const groups = (Array.isArray(fields.policy_groups) ? fields.policy_groups : []).flatMap((entry) => { if (!entry || typeof entry !== "object" || Array.isArray(entry)) return []; const settings = Object.values(entry as Record<string, unknown>)[0]; return settings && typeof settings === "object" && typeof (settings as Record<string, unknown>).name === "string" ? [String((settings as Record<string, unknown>).name).trim()] : []; });
+    if (groups.some((name) => !name) || new Set(groups).size !== groups.length) return { valid: false, message: "Egern 策略组名称必须非空且唯一" };
+    const proxies = (Array.isArray(fields.proxies) ? fields.proxies : []).flatMap((entry) => entry && typeof entry === "object" ? Object.values(entry as Record<string, unknown>).flatMap((settings) => settings && typeof settings === "object" && typeof (settings as Record<string, unknown>).name === "string" ? [String((settings as Record<string, unknown>).name).trim()] : []) : []);
+    const targets = new Set(["DIRECT", "REJECT", ...groups, ...proxies]);
+    for (const entry of Array.isArray(fields.rules) ? fields.rules : []) { if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue; const settings = Object.values(entry as Record<string, unknown>)[0]; const policy = settings && typeof settings === "object" ? (settings as Record<string, unknown>).policy : undefined; if (typeof policy === "string" && !targets.has(policy)) return { valid: false, message: `Egern 规则指向不存在的策略「${policy}」` }; }
+  }
+  return { valid: true, message: kind === "unknown" ? "YAML 语法有效；尚未识别为 Clash、Egern 或 Loon" : `${kind === "clash" ? "Clash" : "Egern"} YAML 语法及引用有效` };
 }
 
 function highlightLine(line: string, language: CodeLanguage): ReactNode[] {
@@ -496,6 +516,15 @@ function rulesFromSource(source: string): Rule[] | null {
   }
   return rules;
 }
+function findPolicyGroupCycles(groups: Group[]): string[][] {
+  const names = new Set(groups.map((group) => group.name.trim()).filter(Boolean));
+  const edges = new Map(groups.map((group) => [group.name.trim(), group.proxies.filter((proxy) => names.has(proxy))]));
+  const cycles: string[][] = []; const visiting = new Set<string>(); const visited = new Set<string>();
+  const visit = (name: string, path: string[]) => { if (visiting.has(name)) { const start = path.indexOf(name); cycles.push([...path.slice(start), name]); return; } if (visited.has(name)) return; visiting.add(name); for (const next of edges.get(name) || []) visit(next, [...path, name]); visiting.delete(name); visited.add(name); };
+  for (const name of names) visit(name, []);
+  return cycles;
+}
+
 function rulesYamlLines(rules: Rule[], indent = "  ") {
   return rules.length
     ? rules.map((rule) => `${indent}${rule.enabled ? "-" : "# -"} ${ruleText(rule)}`)
@@ -750,9 +779,12 @@ export function TemplateVisualEditorDialog({
   const [memberPickerIndex, setMemberPickerIndex] = useState<number | null>(null);
   const [memberQuery, setMemberQuery] = useState("");
   const [groupRename, setGroupRename] = useState<{ index: number; previous: string; next: string; error?: string; references: Array<{ label: string; count: number }> } | null>(null);
+  const [groupDelete, setGroupDelete] = useState<{ index: number; name: string; references: Array<{ label: string; count: number }> } | null>(null);
+  const [referenceGroupIndex, setReferenceGroupIndex] = useState<number | null>(null);
   const groupNameInputs = useRef(new Map<number, HTMLInputElement>());
   const [closeConfirmOpen, setCloseConfirmOpen] = useState(false);
   const [visualSaveConfirmOpen, setVisualSaveConfirmOpen] = useState(false);
+  const [saveDiffOpen, setSaveDiffOpen] = useState(false);
   const [externalVisualDirty, setExternalVisualDirty] = useState(false);
   const initialOutputRef = useRef(initialText);
   const previousVisualYamlRef = useRef("");
@@ -847,10 +879,13 @@ export function TemplateVisualEditorDialog({
     }
     setGroups((items) => items.map((item, position) => position === index ? { ...item, ...patch } : item));
   };
-  const removeGroup = (index: number) => {
-    const name = groups[index]?.name;
+  const requestRemoveGroup = (index: number) => { const name = groups[index]?.name || ""; setGroupDelete({ index, name, references: [{ label: "流量规则", count: rules.filter((rule) => rule.target === name).length }, { label: "策略组成员（嵌套策略组）", count: groups.reduce((total, group) => total + group.proxies.filter((proxy) => proxy === name).length, 0) }] }); };
+  const removeGroup = (direct: boolean) => {
+    if (!groupDelete) return;
+    const { index, name } = groupDelete;
     setGroups((items) => items.filter((_, position) => position !== index).map((item) => ({ ...item, proxies: item.proxies.filter((proxy) => proxy !== name) })));
-    setRules((items) => items.filter((rule) => rule.target !== name));
+    setRules((items) => direct ? items.map((rule) => rule.target === name ? { ...rule, target: "DIRECT" } : rule) : items.filter((rule) => rule.target !== name));
+    setGroupDelete(null);
   };
   const move = (index: number, amount: number) =>
     setGroups((items) => {
@@ -892,6 +927,8 @@ export function TemplateVisualEditorDialog({
     const changed = after.findIndex((line, index) => line !== before[index]);
     setVisualYamlFocus({ line: Math.max(1, changed + 1), nonce: Date.now() });
   }, [open, mode, templateKind, yaml]);
+  const groupCycles = useMemo(() => findPolicyGroupCycles(groups), [groups]);
+  const groupReferences = (index: number) => { const name = groups[index]?.name || ""; return [{ label: "流量规则", count: rules.filter((rule) => rule.target === name).length }, { label: "策略组成员（嵌套策略组）", count: groups.reduce((total, group) => total + group.proxies.filter((proxy) => proxy === name).length, 0) }]; };
   const memberPickerGroup = memberPickerIndex === null ? null : groups[memberPickerIndex] || null;
   const memberCandidates = useMemo(() => {
     const keyword = memberQuery.trim().toLowerCase();
@@ -948,13 +985,19 @@ export function TemplateVisualEditorDialog({
     if (!validation.valid) return toast.error(`配置校验失败：${validation.message}`);
     await onSave(filename.trim(), currentOutput);
   };
-  const save = () => {
-    if (visualRewriteRisk) {
-      setVisualSaveConfirmOpen(true);
-      return;
-    }
-    return performSave();
+  const save = () => setSaveDiffOpen(true);
+  const confirmSaveDiff = () => {
+    setSaveDiffOpen(false);
+    if (visualRewriteRisk) { setVisualSaveConfirmOpen(true); return; }
+    void performSave();
   };
+  const saveDiff = useMemo(() => {
+    const before = initialOutputRef.current.replace(/\r/g, "").split("\n");
+    const after = currentOutput.replace(/\r/g, "").split("\n");
+    const removed = before.filter((line) => line.trim() && !after.includes(line));
+    const added = after.filter((line) => line.trim() && !before.includes(line));
+    return { added, removed };
+  }, [currentOutput]);
   const toggle = (
     list: number[],
     value: number,
@@ -1323,6 +1366,7 @@ export function TemplateVisualEditorDialog({
                     </div>
                   ) : (
                     <div className="min-h-0 flex-1 overflow-auto p-3" onPointerMove={groupPointerSort.move} onPointerUp={groupPointerSort.end} onPointerCancel={groupPointerSort.end}>
+                      {groupCycles.length > 0 && <div className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">⚠ 检测到 {groupCycles.length} 个策略组循环引用：{groupCycles.map((cycle) => cycle.join(" → ")).join("；")}</div>}
                       {groups.length === 0 ? (
                         <div className="grid h-48 place-items-center text-sm text-muted-foreground">
                           暂无策略组，点击“添加策略组”开始配置
@@ -1379,12 +1423,13 @@ export function TemplateVisualEditorDialog({
                               >
                                 <ChevronDown className="h-4 w-4" />
                               </Button>
+                              <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => setReferenceGroupIndex(index)}>引用 {groupReferences(index).reduce((total, item) => total + item.count, 0)} 次</Button>
                               <Button
                                 aria-label="删除策略组"
                                 variant="ghost"
                                 size="icon"
                                 className="h-7 w-7 text-rose-300 hover:bg-rose-500/10 hover:text-rose-200"
-                                onClick={() => removeGroup(index)}
+                                onClick={() => requestRemoveGroup(index)}
                               >
                                 <Trash2 className="h-4 w-4" />
                               </Button>
@@ -1677,6 +1722,9 @@ export function TemplateVisualEditorDialog({
           </div>
         </DialogContent>
       </Dialog>
+      <Dialog open={saveDiffOpen} onOpenChange={setSaveDiffOpen}>
+        <DialogContent className="max-w-2xl"><DialogHeader><DialogTitle>保存前确认</DialogTitle><DialogDescription>模板：{filename} · 新增 {saveDiff.added.length} 行 · 删除 {saveDiff.removed.length} 行</DialogDescription></DialogHeader><div className="max-h-80 space-y-3 overflow-auto rounded-lg border bg-muted/20 p-3 font-mono text-xs">{saveDiff.added.slice(0, 80).map((line, index) => <div key={`add-${index}`} className="text-emerald-700 dark:text-emerald-300">+ {line}</div>)}{saveDiff.removed.slice(0, 80).map((line, index) => <div key={`remove-${index}`} className="text-rose-700 dark:text-rose-300">− {line}</div>)}{!saveDiff.added.length && !saveDiff.removed.length && <div className="text-muted-foreground">没有可见的文本差异。</div>}</div><div className="text-xs text-muted-foreground">此确认会在每次保存时显示。</div><div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setSaveDiffOpen(false)}>返回继续编辑</Button><Button onClick={confirmSaveDiff}>确认保存</Button></div></DialogContent>
+      </Dialog>
       <Dialog open={visualSaveConfirmOpen} onOpenChange={setVisualSaveConfirmOpen}>
         <DialogContent className="max-w-[460px] gap-0 overflow-hidden border border-border bg-card p-0 text-card-foreground shadow-2xl sm:p-0 [&>button]:hidden">
           <DialogHeader className="border-b border-border bg-muted/25 px-6 py-5">
@@ -1686,6 +1734,8 @@ export function TemplateVisualEditorDialog({
           <div className="flex justify-end gap-2 bg-muted/15 px-6 py-4"><Button variant="outline" onClick={() => setVisualSaveConfirmOpen(false)}>返回代码编辑</Button><Button onClick={() => { setVisualSaveConfirmOpen(false); void performSave(); }}>仍然保存</Button></div>
         </DialogContent>
       </Dialog>
+      {referenceGroupIndex !== null && <Dialog open onOpenChange={() => setReferenceGroupIndex(null)}><DialogContent className="max-w-md"><DialogHeader><DialogTitle>策略组引用关系</DialogTitle><DialogDescription>「{groups[referenceGroupIndex]?.name || ""}」被以下内容引用。</DialogDescription></DialogHeader><div className="space-y-2">{groupReferences(referenceGroupIndex).map((item) => <div key={item.label} className="flex justify-between rounded border bg-muted/20 px-3 py-2 text-sm"><span>{item.label}</span><b>{item.count} 次</b></div>)}</div></DialogContent></Dialog>}
+      {groupDelete && <DeletePolicyGroupDialog open name={groupDelete.name} references={groupDelete.references} onCancel={() => setGroupDelete(null)} onRemoveRules={() => removeGroup(false)} onUseDirect={() => removeGroup(true)} />}
       {groupRename && <RenameConfirmationDialog open kind="策略组" previous={groupRename.previous} next={groupRename.next} error={groupRename.error} references={groupRename.references} onReturn={() => { const pending = groupRename; setGroupRename(null); requestAnimationFrame(() => groupNameInputs.current.get(pending.index)?.focus()); }} onCancel={() => { const pending = groupRename; setGroups((items) => items.map((item, position) => position === pending.index ? { ...item, name: pending.previous } : item)); setGroupRename(null); }} onConfirm={() => { const pending = groupRename; applyGroupRename(pending.index, pending.previous, pending.next); setGroupRename(null); }} />}
     </>
   );

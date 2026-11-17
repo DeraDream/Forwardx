@@ -121,7 +121,7 @@ export const REPO_URL = "https://github.com/DeraDream/Forwardx";
 export const TELEGRAM_BOT_URL = "https://t.me/miyin_private_bot";
 const ANDROID_APK_DOWNLOAD_URL =
   `${REPO_URL}/releases/download/v${ANDROID_APK_RELEASE_VERSION}/forwardx-android-v${ANDROID_APP_VERSION}.apk`;
-const UPDATE_CHECK_COOLDOWN_MS = 60 * 1000;
+const UPDATE_CHECK_COOLDOWN_MS = 10 * 1000;
 const UPGRADE_ASSETS_PENDING_EXIT_CODE = 12;
 const DEFAULT_DOCKER_IMAGE = "ghcr.io/deradream/forwardx:latest";
 const forwardProtocolSettingsSchema = z.object(
