@@ -4,9 +4,9 @@ export type TopologyPoint = { x: number; y: number };
 export type TopologyBox = { x: number; y: number; width: number; height: number };
 
 /**
- * Routes every edge through a distinct horizontal track above the cards and
- * distinct vertical channels in the gaps between columns. Lines may cross at
- * right angles, but never share a segment or enter a card's interior.
+ * Routes every edge through dedicated channels above and between cards. The
+ * resulting polyline is rendered with rounded corners so links bend around VPS
+ * cards instead of cutting through them.
  */
 export function routeTopologyGraph(nodes: TopologyRoutingNode[], inputEdges: TopologyRoutingEdge[], directOnly: Set<string>) {
   const byId = new Map(nodes.map((node) => [node.id, node]));
@@ -71,5 +71,20 @@ export function routeTopologyGraph(nodes: TopologyRoutingNode[], inputEdges: Top
 }
 
 export function topologyRoutePath(points: TopologyPoint[]) {
-  return points.map((point, index) => `${index ? "L" : "M"} ${point.x} ${point.y}`).join(" ");
+  if (points.length < 3) return points.map((point, index) => `${index ? "L" : "M"} ${point.x} ${point.y}`).join(" ");
+  const distance = (a: TopologyPoint, b: TopologyPoint) => Math.hypot(b.x - a.x, b.y - a.y);
+  const toward = (from: TopologyPoint, to: TopologyPoint, amount: number) => {
+    const length = distance(from, to) || 1;
+    return { x: from.x + (to.x - from.x) * amount / length, y: from.y + (to.y - from.y) * amount / length };
+  };
+  let path = `M ${points[0].x} ${points[0].y}`;
+  for (let index = 1; index < points.length - 1; index += 1) {
+    const previous = points[index - 1], current = points[index], next = points[index + 1];
+    const radius = Math.min(16, distance(previous, current) / 2, distance(current, next) / 2);
+    const before = toward(current, previous, radius);
+    const after = toward(current, next, radius);
+    path += ` L ${before.x} ${before.y} Q ${current.x} ${current.y} ${after.x} ${after.y}`;
+  }
+  const last = points[points.length - 1];
+  return `${path} L ${last.x} ${last.y}`;
 }

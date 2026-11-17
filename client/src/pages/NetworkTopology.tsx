@@ -622,12 +622,10 @@ function NetworkTopologyContent() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedPathId, setSelectedPathId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
-  // null means the first available entry; "all" explicitly shows the full graph.
-  const [entryFilter, setEntryFilter] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<"paths" | "graph">("paths");
+  // Start with the complete network; operators can narrow the graph to one entry VPS.
+  const [entryFilter, setEntryFilter] = useState<string | null>("all");
   const [zoom, setZoom] = useState(1);
   const canvasRef = useRef<HTMLDivElement>(null);
-  const pathRowRefs = useRef(new Map<string, HTMLDivElement>());
   const dragRef = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
   const [showMinimap, setShowMinimap] = useState(false);
   const [qualityTarget, setQualityTarget] = useState<LinkQualityTarget | null>(null);
@@ -727,7 +725,7 @@ function NetworkTopologyContent() {
     setZoom(nextZoom);
     const frame = requestAnimationFrame(() => canvas.scrollTo({ left: 0, top: Math.max(0, graph.centerY * nextZoom - height / 2) }));
     return () => cancelAnimationFrame(frame);
-  }, [activeEntry, canvasHeight, canvasWidth, category, graph.centerY, graph.nodes.length, isLoading, viewMode]);
+  }, [activeEntry, canvasHeight, canvasWidth, category, graph.centerY, graph.nodes.length, isLoading]);
 
   const handleRefresh = async () => {
     await Promise.all([
@@ -808,37 +806,6 @@ function NetworkTopologyContent() {
         {topology.truncated && ` 候选组合过多，单项最多显示 ${MAX_TOPOLOGY_VARIANTS} 条；请筛选或查看原始规则。`}
       </div>}
 
-      {!isLoading && entryGroups.length > 0 && (
-        <Card className="border-border/45 bg-card/45">
-          <CardContent className="space-y-3 p-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm font-medium">按入口查看</span>
-              <Button size="sm" variant={activeEntry === "all" ? "secondary" : "ghost"} onClick={() => { setEntryFilter("all"); setSelectedPathId(null); setSelectedNodeId(null); setSelectedEdgeId(null); }}>全部入口</Button>
-              {entryGroups.map((group) => (
-                <Button key={group.entry.id} size="sm" variant={activeEntry === group.entry.id ? "secondary" : "ghost"} onClick={() => { setEntryFilter(group.entry.id); setSelectedPathId(null); setSelectedNodeId(null); setSelectedEdgeId(null); }}>
-                  {group.entry.label} <span className="ml-1 text-muted-foreground">({group.paths.length})</span>
-                </Button>
-              ))}
-            </div>
-            <p className="text-xs text-muted-foreground">默认只展示一个入口；展开路径列表并选择规则，可高亮其完整路径。统计按当前筛选的路径角色计算，同一主机可能兼任多个角色。</p>
-            <div className="flex flex-wrap items-center gap-2"><span className="text-xs font-medium text-muted-foreground">展示方式</span><Button size="sm" variant={viewMode === "paths" ? "secondary" : "outline"} onClick={() => setViewMode("paths")}>按路径分行</Button><Button size="sm" variant={viewMode === "graph" ? "secondary" : "outline"} onClick={() => setViewMode("graph")}>汇总拓扑</Button></div>
-            {entryGroups.filter((group) => activeEntry === "all" || activeEntry === group.entry.id).map((group) => (
-              <details key={group.entry.id} className="rounded-lg border border-border/45 bg-card/50">
-                <summary className="cursor-pointer px-3 py-2 text-sm font-medium">{group.entry.label} · {group.paths.length} 条路径</summary>
-                <div className="max-h-72 space-y-1 overflow-auto border-t border-border/40 p-2">
-                  {group.paths.map((path) => (
-                    <button key={path.id} type="button" onClick={() => { setEntryFilter(group.entry.id); setSelectedPathId(path.id); setSelectedNodeId(null); setSelectedEdgeId(null); requestAnimationFrame(() => (viewMode === "paths" ? pathRowRefs.current.get(path.id) : canvasRef.current)?.scrollIntoView({ behavior: "smooth", block: "nearest" })); }} className={cn("w-full rounded-md px-2 py-2 text-left text-xs hover:bg-accent", selectedPathId === path.id && "bg-accent ring-1 ring-primary/40")}>
-                      <span className="font-medium">{path.name}</span> <span className="text-muted-foreground">· {categoryLabel(path.category)}</span>
-                      <span className="mt-1 block break-words text-muted-foreground">{[path.entry, ...path.relays, path.landing].map((node) => node.label).join(" → ")}</span>
-                    </button>
-                  ))}
-                </div>
-              </details>
-            ))}
-          </CardContent>
-        </Card>
-      )}
-
       {isLoading ? (
         <DataSectionLoading label="正在加载网络拓扑" />
       ) : graph.nodes.length === 0 ? (
@@ -851,29 +818,15 @@ function NetworkTopologyContent() {
         </Card>
       ) : (
         <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_280px]">
-          {viewMode === "paths" ? <Card className="overflow-hidden border-border/45 bg-card/45">
-            <CardContent className="space-y-3 p-3">
-              <p className="text-xs text-muted-foreground">每条路径独立一行；同一台主机可能重复显示，但不会新增主机或转发。点击节点或连线查看关联信息。</p>
-              {visiblePaths.map((path) => {
-                const nodes = [path.entry, ...path.relays, path.landing];
-                return <div key={path.id} data-topology-path={path.id} ref={(element) => { if (element) pathRowRefs.current.set(path.id, element); else pathRowRefs.current.delete(path.id); }} className={cn("rounded-lg border border-border/45 bg-background/40 p-3", selectedPathId === path.id && "ring-2 ring-primary/40")}>
-                  <button type="button" className="mb-2 max-w-full truncate text-left text-xs font-semibold hover:text-primary" onClick={() => { setSelectedPathId(path.id); setSelectedNodeId(null); setSelectedEdgeId(null); }}>{path.name} <span className="font-normal text-muted-foreground">· {categoryLabel(path.category)}</span></button>
-                  <div className="overflow-x-auto pb-1"><div className="flex w-max items-center">
-                    {nodes.map((node, index) => <div key={`${path.id}:${index}`} className="flex items-center">
-                      {index > 0 && (nodes[index - 1].id === node.id ? <span className="w-14 shrink-0 text-center text-[10px] text-muted-foreground">本机</span> : <button type="button" data-path-edge={`${nodes[index - 1].id}=>${node.id}`} aria-label={`查看 ${nodes[index - 1].label} 到 ${node.label} 的关联路径`} onClick={() => { setSelectedPathId(path.id); setSelectedNodeId(null); setSelectedEdgeId(`${nodes[index - 1].id}=>${node.id}`); }} className="relative flex h-10 w-14 shrink-0 items-center justify-center text-muted-foreground hover:text-primary"><span className="h-px w-full bg-current" /><ArrowRight className="absolute right-0 h-3 w-3" /></button>)}
-                      <button type="button" data-path-node={node.id} onClick={() => { setSelectedPathId(path.id); setSelectedNodeId(node.id); setSelectedEdgeId(null); }} className={cn("flex h-[58px] w-[188px] shrink-0 flex-col justify-center rounded-lg border px-3 text-left shadow-sm hover:shadow-md", nodeTone(node), selectedNodeId === node.id && "ring-2 ring-primary/40")}>
-                        <span className="flex min-w-0 items-center gap-1.5"><span className="shrink-0 text-muted-foreground">{nodeIcon(node.kind)}</span><span className="truncate text-xs font-semibold">{node.label}</span>{node.online != null && <span className={cn("ml-auto h-2 w-2 shrink-0 rounded-full", node.online ? "bg-emerald-500" : "bg-destructive")} />}</span>
-                        <span className="mt-1 truncate text-[10px] text-muted-foreground">{node.subtitle || node.detail || "—"}</span>
-                      </button>
-                    </div>)}
-                  </div></div>
-                </div>;
-              })}
-            </CardContent>
-          </Card> : <Card className="overflow-hidden border-border/45 bg-card/45">
+          <Card className="overflow-hidden border-border/45 bg-card/45">
             <CardContent className="p-0">
               <div className="flex flex-wrap items-center gap-2 border-b border-border/40 p-2">
-                <span className="mr-auto text-xs text-muted-foreground">{activeEntry === "all" ? "全部入口" : entryGroups.find((group) => group.entry.id === activeEntry)?.entry.label} · {visiblePaths.length} 条路径</span>
+                <div className="mr-auto flex min-w-0 flex-wrap items-center gap-1">
+                  <span className="mr-1 text-xs text-muted-foreground">入口机</span>
+                  <Button size="sm" variant={activeEntry === "all" ? "secondary" : "ghost"} onClick={() => { setEntryFilter("all"); setSelectedPathId(null); setSelectedNodeId(null); setSelectedEdgeId(null); }}>全部</Button>
+                  {entryGroups.map((group) => <Button key={group.entry.id} size="sm" variant={activeEntry === group.entry.id ? "secondary" : "ghost"} onClick={() => { setEntryFilter(group.entry.id); setSelectedPathId(null); setSelectedNodeId(null); setSelectedEdgeId(null); }}>{group.entry.label}</Button>)}
+                  <span className="ml-1 text-xs text-muted-foreground">· {visiblePaths.length} 条路径</span>
+                </div>
                 {selectedPath && <Button size="sm" variant="ghost" onClick={() => setSelectedPathId(null)}>取消高亮</Button>}
                 <Button size="sm" variant="outline" aria-label="缩小拓扑" onClick={() => setZoom((value) => Math.max(0.2, Math.round((value - 0.1) * 10) / 10))}>−</Button>
                 <Button size="sm" variant="ghost" onClick={() => setZoom(1)}>{Math.round(zoom * 100)}%</Button>
@@ -903,27 +856,6 @@ function NetworkTopologyContent() {
                 <div style={{ width: canvasWidth * zoom, height: canvasHeight * zoom }}>
                 <div className="relative origin-top-left" style={{ width: canvasWidth, height: canvasHeight, transform: `scale(${zoom})` }}>
                 <div className="absolute top-0" style={{ left: 0, width: graph.width, height: graph.height }}>
-                  <div
-                    className="absolute left-0 top-0 h-11 border-b border-border/35 bg-muted/10"
-                    style={{ width: graph.width }}
-                  />
-                  <div className="absolute top-3 text-xs font-medium text-muted-foreground" style={{ left: graph.columnX.get(0) }}>入口</div>
-                  {Array.from({ length: graph.maxRelays }).map((_, index) => (
-                    <div
-                      key={"relay-title-" + index}
-                      className="absolute top-3 text-xs font-medium text-muted-foreground"
-                      style={{ left: graph.columnX.get(index + 1) }}
-                    >
-                      中转 {index + 1}
-                    </div>
-                  ))}
-                  <div
-                    className="absolute top-3 text-xs font-medium text-muted-foreground"
-                    style={{ left: graph.columnX.get(graph.landingColumn) }}
-                  >
-                    落地 / 最终目标
-                  </div>
-
                   <svg data-topology-edges className="absolute inset-0 h-full w-full" width={graph.width} height={graph.height} style={{ pointerEvents: "none" }}>
                     {[...graph.edges].sort((a, b) => Number(selectedEdgeId === a.id || highlightedEdges.has(a.id)) - Number(selectedEdgeId === b.id || highlightedEdges.has(b.id))).map((edge) => {
                       const points = graph.edgeRoutes.get(edge.id);
@@ -980,7 +912,7 @@ function NetworkTopologyContent() {
                 </div>
               </div>
             </CardContent>
-          </Card>}
+          </Card>
 
           <Card className="h-fit border-border/45 bg-card/60 xl:sticky xl:top-4">
             <CardContent className="space-y-4 p-4">
