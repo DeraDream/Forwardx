@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -120,6 +120,24 @@ function templateFormat(template: TemplateRecord) {
   if (/^\s*#.*\bLoon\b/im.test(source) || /^\s*\[(?:Remote Proxy|Rewrite|Script|Plugin)\]\s*$/im.test(source)) return "Loon INI";
   if (/^\s*(?:proxy-groups|proxies|proxy-providers|rule-providers|mixed-port|tun)\s*:/m.test(source)) return "Clash YAML";
   return "未识别格式";
+}
+
+function previewLine(line: string): ReactNode {
+  if (/^\s*[#;]/.test(line)) return <span className="text-emerald-700/85 dark:text-emerald-300/85">{line}</span>;
+  if (/^\s*\[[^\]]+\]\s*$/.test(line)) return <span className="text-violet-700 dark:text-violet-300">{line}</span>;
+  const match = line.match(/^(\s*(?:-\s*)?)([\w-]+)(\s*:.*)$/);
+  return match ? <>{match[1]}<span className="text-blue-700 dark:text-blue-300">{match[2]}</span>{match[3]}</> : line;
+}
+
+function TemplatePreviewSurface({ value }: { value: string }) {
+  const [query, setQuery] = useState(""); const [cursor, setCursor] = useState(0); const inputRef = useRef<HTMLInputElement>(null); const lineRefs = useRef(new Map<number, HTMLDivElement>());
+  const lines = value.replace(/\r/g, "").split("\n");
+  const matches = useMemo(() => query.trim() ? lines.flatMap((line, index) => line.toLowerCase().includes(query.trim().toLowerCase()) ? [index] : []) : [], [lines, query]);
+  const active = matches.length ? matches[cursor % matches.length] : -1;
+  useEffect(() => { setCursor(0); }, [query]);
+  useEffect(() => { if (active >= 0) lineRefs.current.get(active)?.scrollIntoView({ behavior: "smooth", block: "center" }); }, [active]);
+  useEffect(() => { const handler = (event: KeyboardEvent) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") { event.preventDefault(); inputRef.current?.focus(); } }; window.addEventListener("keydown", handler); return () => window.removeEventListener("keydown", handler); }, []);
+  return <div className="relative min-h-0 flex-1 overflow-hidden rounded-lg border border-border/70 bg-[linear-gradient(90deg,hsl(var(--muted)/.55)_0,hsl(var(--muted)/.55)_3.5rem,transparent_3.5rem)] font-mono text-xs leading-6"><div className="absolute right-3 top-3 z-10 flex h-8 items-center gap-1 rounded-md border border-border bg-card px-2 shadow-lg"><Search className="size-3.5 text-muted-foreground" /><Input ref={inputRef} value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && matches.length) setCursor((item) => item + 1); }} placeholder="Ctrl+F 查找" className="h-6 w-40 border-0 bg-transparent px-1 text-xs shadow-none focus-visible:ring-0" /><span className="text-[10px] text-muted-foreground">{query ? `${matches.length ? cursor % matches.length + 1 : 0}/${matches.length}` : ""}</span></div><div className="h-full overflow-auto py-4">{lines.map((line, index) => <div ref={(element) => { if (element) lineRefs.current.set(index, element); else lineRefs.current.delete(index); }} key={index} className={`grid min-h-6 grid-cols-[3.5rem_minmax(0,1fr)] whitespace-pre ${index === active ? "bg-primary/15 shadow-[inset_3px_0_0_hsl(var(--primary))]" : ""}`}><span className="select-none border-r border-border/70 pr-3 text-right text-[11px] text-muted-foreground/70">{index + 1}</span><code className="min-w-0 px-4 text-foreground">{previewLine(line) || " "}</code></div>)}</div></div>;
 }
 
 function formatDate(value?: string | null) {
@@ -275,6 +293,7 @@ export default function SubscriptionCenterPage() {
   const [nodes, setNodes] = useState<NodeRecord[]>([]);
   const [nodeGroups, setNodeGroups] = useState<string[]>([]);
   const nodeBackupInputRef = useRef<HTMLInputElement>(null);
+  const templateFileInputRef = useRef<HTMLInputElement>(null);
   const [templates, setTemplates] = useState<TemplateRecord[]>([]);
   const [summary, setSummary] = useState<SubscriptionSummary | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -339,6 +358,18 @@ export default function SubscriptionCenterPage() {
     if (editorMode !== "subscription" || subscriptionStep !== 3) return;
     setPolicyGroups((current) => Object.fromEntries(selectedTemplatePolicyGroups.map((name) => [name, current[name] || { mode: "all" as const, nodes: [] }])));
   }, [editorMode, subscriptionStep, selectedTemplatePolicyGroups]);
+
+  const importTemplateFile = async (file?: File) => {
+    if (!file) return;
+    try {
+      const text = await file.text();
+      if (!text.trim()) return toast.error("模板文件不能为空");
+      if (!/\.(yaml|yml|conf|list)$/i.test(file.name)) return toast.error("请选择 .yaml、.yml、.conf 或 .list 模板文件");
+      const body = new FormData(); body.set("file", file.name); body.set("text", text);
+      await sublinkRequest("/api/v1/template/add", { method: "POST", body });
+      toast.success("模板文件已导入"); await loadSubscriptions();
+    } catch (error) { toast.error(error instanceof Error ? error.message : "模板文件导入失败"); }
+  };
 
   const loadSubscriptionSummary = useCallback(async () => {
     try { setSummary(await sublinkRequest<SubscriptionSummary>("/api/v1/subcription/summary")); } catch { /* List data remains a safe fallback for badge totals. */ }
@@ -821,7 +852,7 @@ export default function SubscriptionCenterPage() {
                 <List className="h-4 w-4" />
               </Button>
             </div>
-            <Button className="gap-2" onClick={() => openEditor(activeSection === "subscriptions" ? "subscription" : activeSection === "node-subscriptions" ? "node-subscription" : activeSection === "nodes" ? "node" : "template-add")}>
+            <Button className="gap-2" onClick={() => openEditor(activeSection === "subscriptions" ? "subscription" : activeSection === "node-subscriptions" ? "node-subscription" : activeSection === "nodes" ? "node" : "template-import")}>
               <Plus className="h-4 w-4" />
               新建
             </Button>
@@ -911,7 +942,7 @@ export default function SubscriptionCenterPage() {
               <div><CardTitle className="flex items-center gap-2 text-lg"><ActiveIcon className="h-5 w-5 text-primary" />{activeItem.label}</CardTitle><CardDescription className="mt-1.5">{activeSection === "node-subscriptions" ? `原始节点订阅入口 · 共 ${nodeSubscriptions.length} 条 · 可用节点 ${nodeSubscriptions.reduce((sum, item) => sum + (item.Nodes?.filter((node) => !node.Disabled).length || 0), 0)} 个` : sectionDescriptions[activeSection]}</CardDescription></div>
               <div className="flex shrink-0 gap-2">
                 {activeSection === "node-subscriptions" && <div className="relative hidden w-64 sm:block"><Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" /><Input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="搜索节点订阅或 Token…" className="h-8 pl-8 text-xs" /></div>}
-                {activeSection === "templates" && <Button variant="outline" size="sm" className="gap-2" onClick={() => openEditor("template-import")}><FileText className="h-4 w-4" />导入模板</Button>}
+                {activeSection === "templates" && <Button variant="outline" size="sm" className="gap-2" onClick={() => templateFileInputRef.current?.click()}><FileText className="h-4 w-4" />导入模板</Button>}
               </div>
             </CardHeader>
             <CardContent className={cn("p-0", viewMode === "table" && "overflow-hidden rounded-lg border border-border/40 bg-card/60 backdrop-blur-md")}>
@@ -985,7 +1016,7 @@ export default function SubscriptionCenterPage() {
           name={editorName} setName={setEditorName}
           expireAt={editorExpireAt} setExpireAt={setEditorExpireAt}
           accessLimit={editorAccessLimit} setAccessLimit={setEditorAccessLimit}
-          nodes={nodes} selectedNodeIds={editorNodeIds} toggleNode={toggleEditorNode}
+          nodes={nodes} selectedNodeIds={editorNodeIds} setSelectedNodeIds={setEditorNodeIds} toggleNode={toggleEditorNode}
           saving={isSavingEditor} onSave={() => void saveEditor()} onClose={() => setEditorMode(null)}
         /> : isNodeAddDialogOpen ? <NodeAddDialog
           open title={editingNode ? "编辑节点" : undefined} name={editorName} setName={setEditorName} link={editorLink} setLink={setEditorLink}
@@ -1029,10 +1060,10 @@ export default function SubscriptionCenterPage() {
           </DialogContent>
         </Dialog>
         <Dialog open={!!templatePreview} onOpenChange={(open) => { if (!open) setTemplatePreview(null); }}>
-          <DialogContent className="max-w-3xl">
-            <DialogHeader><DialogTitle>{templatePreview?.File || "订阅模板"}</DialogTitle><DialogDescription>模板内容预览；可随时关闭预览并进入可视化编辑器修改。</DialogDescription></DialogHeader>
-            <pre className="max-h-[60svh] overflow-auto rounded-lg border border-border/60 bg-muted/20 p-4 font-mono text-xs leading-6 text-foreground">{templatePreview?.Text || ""}</pre>
-            <DialogFooter><Button variant="outline" onClick={() => setTemplatePreview(null)}>关闭</Button></DialogFooter>
+          <DialogContent className="flex h-[min(88svh,980px)] max-w-[min(96vw,1280px)] flex-col gap-4">
+            <DialogHeader className="border-b border-border/70 pb-4"><DialogTitle>{templatePreview?.File || "订阅模板"}</DialogTitle><DialogDescription>模板内容预览；支持 Ctrl+F 查找，可随时关闭预览并进入可视化编辑器修改。</DialogDescription></DialogHeader>
+            <TemplatePreviewSurface value={templatePreview?.Text || ""} />
+            <DialogFooter className="border-t border-border/70 pt-4"><Button variant="outline" onClick={() => setTemplatePreview(null)}>关闭</Button></DialogFooter>
           </DialogContent>
         </Dialog>
         <IpLibraryDialog open={ipLibraryOpen} onClose={() => setIpLibraryOpen(false)} entries={ipEntries} form={ipForm} setForm={setIpForm} saving={isSavingIp} onSave={() => void saveIpEntry()} onDelete={(entry) => void removeIpEntry(entry)} />
@@ -1056,6 +1087,7 @@ export default function SubscriptionCenterPage() {
           </DialogContent>
         </Dialog>
         <input ref={nodeBackupInputRef} className="hidden" type="file" accept="application/json,.json" onChange={(event) => void importNodeBackup(event.target.files?.[0])} />
+        <input ref={templateFileInputRef} className="hidden" type="file" accept=".yaml,.yml,.conf,.list,text/yaml,text/plain" onChange={(event) => { void importTemplateFile(event.target.files?.[0]); event.currentTarget.value = ""; }} />
       </div>
     </DashboardLayout>
   );

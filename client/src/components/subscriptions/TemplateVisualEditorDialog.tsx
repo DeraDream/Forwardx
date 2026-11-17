@@ -184,6 +184,22 @@ function detectTemplateKind(value: string): TemplateKind {
   return "unknown";
 }
 
+function stableTemplateValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableTemplateValue);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right)).map(([key, item]) => [key, stableTemplateValue(item)]));
+}
+
+function comparableTemplate(kind: TemplateKind, value: string) {
+  if (kind === "loon") return value.replace(/\r/g, "").split("\n").map((line) => line.trim()).filter((line) => line && !/^[#;]/.test(line)).map((line) => {
+    const heading = line.match(/^\[([^\]]+)\]$/); if (heading) return `[${heading[1].trim().toLowerCase()}]`;
+    const equal = line.indexOf("="); if (equal < 0) return line;
+    const left = line.slice(0, equal).trim(); const right = line.slice(equal + 1).split(",").map((part) => part.trim()).join(",");
+    return `${left}=${right}`;
+  }).join("\n");
+  try { return JSON.stringify(stableTemplateValue(parseYamlDocument(value, { prettyErrors: false, strict: false }).toJS())); } catch { return value; }
+}
+
 function validateTemplate(kind: TemplateKind, value: string) {
   if (kind === "loon") {
     const sections = Array.from(value.matchAll(/^\s*\[([^\]]+)\]\s*$/gm)).map((match) => match[1].trim().toLowerCase());
@@ -214,7 +230,7 @@ function validateTemplate(kind: TemplateKind, value: string) {
     if (groups.some((name) => !name) || new Set(groups).size !== groups.length) return { valid: false, message: "Clash 策略组名称必须非空且唯一" };
     const proxies = (Array.isArray(fields.proxies) ? fields.proxies : []).flatMap((proxy) => proxy && typeof proxy === "object" && typeof (proxy as Record<string, unknown>).name === "string" ? [String((proxy as Record<string, unknown>).name).trim()] : []);
     const targets = new Set(["DIRECT", "REJECT", ...groups, ...proxies]); const providers = new Set(Object.keys((fields["rule-providers"] || {}) as Record<string, unknown>));
-    for (const rule of Array.isArray(fields.rules) ? fields.rules : []) { if (typeof rule !== "string") continue; const parts = rule.split(",").map((part) => part.trim()); const target = parts.at(-1) || ""; if (target && !targets.has(target)) return { valid: false, message: `Clash 规则指向不存在的策略「${target}」` }; if (parts[0]?.toUpperCase() === "RULE-SET" && !providers.has(parts[1] || "")) return { valid: false, message: `Clash RULE-SET 引用了不存在的规则集「${parts[1] || ""}」` }; }
+    for (const rule of Array.isArray(fields.rules) ? fields.rules : []) { if (typeof rule !== "string") continue; const parts = rule.split(",").map((part) => part.trim()); const target = [...parts].reverse().find((part) => part && part.toLowerCase() !== "no-resolve") || ""; if (target && !targets.has(target)) return { valid: false, message: `Clash 规则指向不存在的策略「${target}」` }; if (parts[0]?.toUpperCase() === "RULE-SET" && !providers.has(parts[1] || "")) return { valid: false, message: `Clash RULE-SET 引用了不存在的规则集「${parts[1] || ""}」` }; }
   }
   if (kind === "egern" && fields.policy_groups !== undefined && !Array.isArray(fields.policy_groups)) return { valid: false, message: "Egern 的 policy_groups 必须是数组" };
   if (kind === "egern" && fields.modules !== undefined && !Array.isArray(fields.modules)) return { valid: false, message: "Egern 的 modules 必须是数组" };
@@ -842,10 +858,14 @@ export function TemplateVisualEditorDialog({
       ? Object.keys(providers as Record<string, unknown>).sort()
       : [];
   }, [source]);
+  const persistedOutput = detectTemplateKind(source) === "clash" && mode !== "code" ? yaml : source;
+  // Visual editors may normalize harmless YAML/INI whitespace or key ordering.
+  // Compare canonical content so changing a value and restoring it does not
+  // incorrectly trigger the unsaved-changes confirmation.
   const hasUnsavedChanges =
     filename !== initialFilename ||
     externalVisualDirty ||
-    (detectTemplateKind(source) === "clash" && mode !== "code" ? yaml : source) !== initialOutputRef.current;
+    comparableTemplate(detectTemplateKind(source), persistedOutput) !== comparableTemplate(detectTemplateKind(source), initialOutputRef.current);
   const requestClose = () => {
     if (hasUnsavedChanges) {
       setCloseConfirmOpen(true);

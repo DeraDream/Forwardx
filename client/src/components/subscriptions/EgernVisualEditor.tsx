@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUpRight, ChevronDown, ChevronUp, Code2, GripVertical, ImageIcon, Plus, Search, Trash2 } from "lucide-react";
+import { ArrowUpRight, ChevronDown, ChevronUp, Code2, GripVertical, ImageIcon, Network, Plus, Search, Trash2 } from "lucide-react";
 import { parseDocument, stringify } from "yaml";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -419,7 +419,7 @@ export function EgernVisualEditor({ value, view = "groups", onChange, onError, o
             </button>
             <Button variant="ghost" size="icon" className="size-7" disabled={!index} onClick={() => { markDirty(); moveGroup(index, -1); }}><ChevronUp className="size-4" /></Button>
             <Button variant="ghost" size="icon" className="size-7" disabled={index === groups.length - 1} onClick={() => { markDirty(); moveGroup(index, 1); }}><ChevronDown className="size-4" /></Button>
-            <Button variant="ghost" size="icon" className="size-7" title="查看引用关系" onClick={() => setReferenceGroupIndex(index)}><ArrowUpRight className="size-3.5" /></Button><Button variant="ghost" size="icon" className="size-7 text-destructive hover:text-destructive" onClick={() => requestRemoveGroup(index)}><Trash2 className="size-4" /></Button>
+            <Button variant="ghost" size="icon" className="size-7" title="查看引用关系" onClick={() => setReferenceGroupIndex(index)}><Network className="size-3.5" /></Button><Button variant="ghost" size="icon" className="size-7 text-destructive hover:text-destructive" onClick={() => requestRemoveGroup(index)}><Trash2 className="size-4" /></Button>
           </div>
           {expanded.includes(index) && (
             <div className="flex flex-col gap-4 border-t border-border bg-muted/20 p-4">
