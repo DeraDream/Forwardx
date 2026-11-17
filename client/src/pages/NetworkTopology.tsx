@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { topologyPathEdgeIds } from "./networkTopologyPaths";
 import { topologyRuleHref } from "./topologyRuleLink";
 import { improveTopologyOrder } from "./topologyLayout";
-import { routeTopologyGraph, topologyRoutePath } from "./topologyRouting";
+import { routeNaturalTopologyGraph, topologyRoutePath } from "./topologyRouting";
 import { topologyEnabledFlag, visibleTopologyTunnelVariants } from "./topologyTunnelVariants";
 import { combineTopologyHostVariants, joinTopologyHostPaths, MAX_TOPOLOGY_VARIANTS, type TopologyExpansionState } from "./topologyExpansion";
 import {
@@ -588,14 +588,8 @@ function buildGraph(paths: PhysicalPath[]) {
   improveTopologyOrder(columns, edges, directOnlySinkIds);
 
   const maxColumn = Math.max(landingColumn, ...Array.from(columns.keys()));
-  const routed = routeTopologyGraph(positionedNodes, edges, directOnlySinkIds);
-  return {
-    nodes: positionedNodes,
-    edges,
-    ...routed,
-    maxRelays: Math.max(0, maxColumn - 1),
-    landingColumn: maxColumn,
-  };
+  const routed = routeNaturalTopologyGraph(positionedNodes, edges);
+  return { nodes: positionedNodes, edges, ...routed };
 }
 
 function nodeIcon(kind: PhysicalNodeKind) {
@@ -817,7 +811,7 @@ function NetworkTopologyContent() {
           </CardContent>
         </Card>
       ) : (
-        <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_280px]">
+        <div>
           <Card className="overflow-hidden border-border/45 bg-card/45">
             <CardContent className="p-0">
               <div className="flex flex-wrap items-center gap-2 border-b border-border/40 p-2">
@@ -914,7 +908,7 @@ function NetworkTopologyContent() {
             </CardContent>
           </Card>
 
-          <Card className="h-fit border-border/45 bg-card/60 xl:sticky xl:top-4">
+          <Card className="hidden h-fit border-border/45 bg-card/60 xl:sticky xl:top-4">
             <CardContent className="space-y-4 p-4">
               {selectedEdge && !selectedNode && (
                 <div className="space-y-2 border-b border-border/40 pb-3 text-xs">
@@ -987,7 +981,7 @@ function NetworkTopologyContent() {
         <span className="inline-flex items-center gap-1"><Waypoints className="h-3 w-3" />入口</span>
         <span className="inline-flex items-center gap-1"><Server className="h-3 w-3" />中转节点</span>
         <span className="inline-flex items-center gap-1"><Route className="h-3 w-3" />落地 / 最终目标</span>
-        <span className="inline-flex items-center gap-1"><ArrowRight className="h-3 w-3" />从左向右为实际转发方向</span>
+        <span className="inline-flex items-center gap-1"><ArrowRight className="h-3 w-3" />曲线箭头为实际转发方向</span>
         <span className="ml-auto">纯展示：不修改规则、不下发 Agent、不切换链路。</span>
       </div>
 

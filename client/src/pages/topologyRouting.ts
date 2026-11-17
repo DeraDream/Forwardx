@@ -1,12 +1,11 @@
 export type TopologyRoutingNode = { id: string; column: number; row: number };
 export type TopologyRoutingEdge = { id: string; from: string; to: string };
-export type TopologyPoint = { x: number; y: number };
+export type TopologyPoint = { x: number; y: number; curve?: boolean };
 export type TopologyBox = { x: number; y: number; width: number; height: number };
 
 /**
- * Routes every edge through dedicated channels above and between cards. The
- * resulting polyline is rendered with rounded corners so links bend around VPS
- * cards instead of cutting through them.
+ * Orthogonal router retained for dense/minimap tests and fallback layouts.
+ * Every edge gets a separate channel, so no segment enters a VPS card.
  */
 export function routeTopologyGraph(nodes: TopologyRoutingNode[], inputEdges: TopologyRoutingEdge[], directOnly: Set<string>) {
   const byId = new Map(nodes.map((node) => [node.id, node]));
@@ -70,7 +69,98 @@ export function routeTopologyGraph(nodes: TopologyRoutingNode[], inputEdges: Top
   return { positions, edgeRoutes, columnX, width, height, centerY };
 }
 
+function stableNumber(value: string) {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) hash = Math.imul(hash ^ value.charCodeAt(index), 16777619);
+  return (hash >>> 0) / 0xffffffff;
+}
+
+/** A deterministic force layout for the VPS relationship canvas. */
+export function routeNaturalTopologyGraph(nodes: TopologyRoutingNode[], inputEdges: TopologyRoutingEdge[]) {
+  const edges = inputEdges.filter((edge) => edge.from !== edge.to && nodes.some((node) => node.id === edge.from) && nodes.some((node) => node.id === edge.to));
+  const count = Math.max(1, nodes.length);
+  const width = Math.max(960, Math.min(1720, 620 + count * 105));
+  const height = Math.max(600, Math.min(1060, 420 + count * 58));
+  const cardWidth = 176, cardHeight = 58, padding = 90;
+  const degree = new Map(nodes.map((node) => [node.id, 0]));
+  for (const edge of edges) { degree.set(edge.from, (degree.get(edge.from) || 0) + 1); degree.set(edge.to, (degree.get(edge.to) || 0) + 1); }
+  const points = new Map<string, { x: number; y: number }>();
+  const center = { x: width / 2, y: height / 2 };
+  const radius = Math.min(width, height) * 0.32;
+  nodes.forEach((node, index) => {
+    const angle = Math.PI * 2 * ((index / count) + stableNumber(node.id) * 0.18);
+    const nodeRadius = Math.max(110, radius - (degree.get(node.id) || 0) * 18);
+    points.set(node.id, { x: center.x + Math.cos(angle) * nodeRadius, y: center.y + Math.sin(angle) * nodeRadius });
+  });
+  for (let step = 0; step < 180; step += 1) {
+    const force = new Map(nodes.map((node) => [node.id, { x: 0, y: 0 }]));
+    for (let a = 0; a < nodes.length; a += 1) for (let b = a + 1; b < nodes.length; b += 1) {
+      const pa = points.get(nodes[a].id)!, pb = points.get(nodes[b].id)!;
+      const dx = pa.x - pb.x, dy = pa.y - pb.y, distance = Math.max(1, Math.hypot(dx, dy));
+      const strength = 42000 / (distance * distance);
+      force.get(nodes[a].id)!.x += dx / distance * strength; force.get(nodes[a].id)!.y += dy / distance * strength;
+      force.get(nodes[b].id)!.x -= dx / distance * strength; force.get(nodes[b].id)!.y -= dy / distance * strength;
+    }
+    for (const edge of edges) {
+      const from = points.get(edge.from)!, to = points.get(edge.to)!;
+      const dx = to.x - from.x, dy = to.y - from.y, distance = Math.max(1, Math.hypot(dx, dy));
+      const strength = (distance - 235) * 0.018;
+      force.get(edge.from)!.x += dx / distance * strength; force.get(edge.from)!.y += dy / distance * strength;
+      force.get(edge.to)!.x -= dx / distance * strength; force.get(edge.to)!.y -= dy / distance * strength;
+    }
+    for (const node of nodes) {
+      const point = points.get(node.id)!, next = force.get(node.id)!;
+      next.x += (center.x - point.x) * 0.008; next.y += (center.y - point.y) * 0.008;
+      point.x = Math.max(padding + cardWidth / 2, Math.min(width - padding - cardWidth / 2, point.x + Math.max(-18, Math.min(18, next.x))));
+      point.y = Math.max(padding + cardHeight / 2, Math.min(height - padding - cardHeight / 2, point.y + Math.max(-18, Math.min(18, next.y))));
+    }
+    // Card collision resolution keeps labels readable even for hub-heavy graphs.
+    for (let a = 0; a < nodes.length; a += 1) for (let b = a + 1; b < nodes.length; b += 1) {
+      const pa = points.get(nodes[a].id)!, pb = points.get(nodes[b].id)!;
+      const dx = pa.x - pb.x, dy = pa.y - pb.y;
+      const overlapX = cardWidth + 28 - Math.abs(dx), overlapY = cardHeight + 28 - Math.abs(dy);
+      if (overlapX <= 0 || overlapY <= 0) continue;
+      if (overlapX < overlapY) {
+        const move = overlapX / 2 * (dx >= 0 ? 1 : -1); pa.x += move; pb.x -= move;
+      } else {
+        const move = overlapY / 2 * (dy >= 0 ? 1 : -1); pa.y += move; pb.y -= move;
+      }
+    }
+  }
+  const positions = new Map<string, TopologyBox>();
+  for (const node of nodes) {
+    const point = points.get(node.id)!;
+    positions.set(node.id, { x: point.x - cardWidth / 2, y: point.y - cardHeight / 2, width: cardWidth, height: cardHeight });
+  }
+  const edgeRoutes = new Map<string, TopologyPoint[]>();
+  const edgeAnchor = (box: TopologyBox, target: { x: number; y: number }) => {
+    const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
+    const dx = target.x - cx, dy = target.y - cy;
+    const scale = 1 / Math.max(Math.abs(dx) / (box.width / 2), Math.abs(dy) / (box.height / 2), 1);
+    return { x: cx + dx * scale, y: cy + dy * scale };
+  };
+  for (const edge of edges) {
+    const from = positions.get(edge.from)!, to = positions.get(edge.to)!;
+    const fromCenter = { x: from.x + from.width / 2, y: from.y + from.height / 2 };
+    const toCenter = { x: to.x + to.width / 2, y: to.y + to.height / 2 };
+    const dx = toCenter.x - fromCenter.x, dy = toCenter.y - fromCenter.y, distance = Math.max(1, Math.hypot(dx, dy));
+    const start = edgeAnchor(from, toCenter), end = edgeAnchor(to, fromCenter);
+    const bend = (stableNumber(edge.id) - 0.5) * Math.min(88, Math.max(24, distance * 0.22));
+    const px = -dy / distance * bend, py = dx / distance * bend;
+    edgeRoutes.set(edge.id, [
+      start,
+      { x: start.x + dx * 0.34 + px, y: start.y + dy * 0.34 + py, curve: true },
+      { x: end.x - dx * 0.34 + px, y: end.y - dy * 0.34 + py, curve: true },
+      end,
+    ]);
+  }
+  return { positions, edgeRoutes, width, height, centerY: height / 2 };
+}
+
 export function topologyRoutePath(points: TopologyPoint[]) {
+  if (points.length === 4 && points[1]?.curve && points[2]?.curve) {
+    return `M ${points[0].x} ${points[0].y} C ${points[1].x} ${points[1].y} ${points[2].x} ${points[2].y} ${points[3].x} ${points[3].y}`;
+  }
   if (points.length < 3) return points.map((point, index) => `${index ? "L" : "M"} ${point.x} ${point.y}`).join(" ");
   const distance = (a: TopologyPoint, b: TopologyPoint) => Math.hypot(b.x - a.x, b.y - a.y);
   const toward = (from: TopologyPoint, to: TopologyPoint, amount: number) => {
@@ -81,8 +171,7 @@ export function topologyRoutePath(points: TopologyPoint[]) {
   for (let index = 1; index < points.length - 1; index += 1) {
     const previous = points[index - 1], current = points[index], next = points[index + 1];
     const radius = Math.min(16, distance(previous, current) / 2, distance(current, next) / 2);
-    const before = toward(current, previous, radius);
-    const after = toward(current, next, radius);
+    const before = toward(current, previous, radius), after = toward(current, next, radius);
     path += ` L ${before.x} ${before.y} Q ${current.x} ${current.y} ${after.x} ${after.y}`;
   }
   const last = points[points.length - 1];
