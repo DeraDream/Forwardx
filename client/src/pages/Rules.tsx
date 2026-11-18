@@ -566,7 +566,6 @@ const RULE_GLOBE_PATH_MIN_ALTITUDE = 0.04;
 const RULE_GLOBE_PATH_MAX_ALTITUDE = 0.11;
 const RULE_GLOBE_PATH_LAYER_ALTITUDE_STEP = 0.006;
 const RULE_GLOBE_PATH_LAYER_ALTITUDE_MAX = 0.018;
-const RULE_GLOBE_TARGET_OFFSET_DEGREES = 5.8;
 const RULE_GLOBE_COLORS = [
   "#334155",
   "#4ade80",
@@ -1967,26 +1966,6 @@ function createRuleGlobeRouteCoords(
   return coords;
 }
 
-function ruleGlobeTargetOffset(
-  anchor: RuleGlobePoint,
-  rule: any,
-  targetText: string,
-) {
-  const hash = hashText(`${rule?.id}:${targetText}`);
-  const angle = ((hash % 360) * Math.PI) / 180;
-  const ring = Math.floor((hash / 360) % 3);
-  const distance = RULE_GLOBE_TARGET_OFFSET_DEGREES + ring * 1.6;
-  const lat = Math.max(
-    -82,
-    Math.min(82, anchor.lat + Math.sin(angle) * distance),
-  );
-  const lngScale = Math.max(0.45, Math.cos((anchor.lat * Math.PI) / 180));
-  const lng = normalizeLongitude(
-    anchor.lng + (Math.cos(angle) * distance) / lngScale,
-  );
-  return { lat, lng };
-}
-
 function renderRuleGlobePointTooltip(point: RuleGlobePoint) {
   const rows = [
     { label: "类型", value: point.kind === "target" ? "目标端口" : "转发节点" },
@@ -2246,40 +2225,37 @@ function buildRuleGlobeData(
       normalizeAddressKey(resolvedRoute.targetIp),
     );
     const targetGeoCoord = microGeoCoordinate(targetGeo);
-    const shouldOffsetTargetHost =
-      !!targetHostPoint && targetHostPoint.id === lastRoutePoint.id;
+    const targetUsesExitLocation =
+      (!targetHostPoint && !targetGeoCoord) ||
+      targetHostPoint?.id === lastRoutePoint.id;
     if (!targetHostPoint && !targetGeoCoord && !targetGeoLookupReady) {
       skipped += 1;
       return;
     }
-    const targetCoord = shouldOffsetTargetHost
-      ? ruleGlobeTargetOffset(lastRoutePoint, rule, targetText)
+    // Globe coordinates describe physical locations only. Do not spread targets
+    // around their exit node: that puts same-location hosts into the sea.
+    const targetCoord = targetUsesExitLocation
+      ? { lat: lastRoutePoint.lat, lng: lastRoutePoint.lng }
       : targetHostPoint
         ? { lat: targetHostPoint.lat, lng: targetHostPoint.lng }
-        : targetGeoCoord
-          ? targetGeoCoord
-          : ruleGlobeTargetOffset(lastRoutePoint, rule, targetText);
-    const targetRegionText = shouldOffsetTargetHost
+        : targetGeoCoord!;
+    const targetRegionText = targetUsesExitLocation
       ? lastRoutePoint.regionText
       : targetHostPoint
         ? targetHostPoint.regionText
-        : targetGeoCoord
-          ? targetGeoRegionText(targetGeo)
-          : "";
-    const targetCountryCode = shouldOffsetTargetHost
+        : targetGeoRegionText(targetGeo);
+    const targetCountryCode = targetUsesExitLocation
       ? lastRoutePoint.countryCode
       : targetHostPoint
         ? targetHostPoint.countryCode
-        : targetGeoCoord
-          ? targetGeoCountryCode(targetGeo)
-          : "";
-    const targetNote = shouldOffsetTargetHost
-      ? "目标端口位于出口节点，已偏移显示末跳"
+        : targetGeoCountryCode(targetGeo);
+    const targetNote = targetUsesExitLocation
+      ? targetHostPoint
+        ? "目标地址匹配出口节点"
+        : "目标地址未定位，显示在出口节点"
       : targetHostPoint
         ? "目标地址匹配已登记主机"
-        : targetGeoCoord
-          ? `目标地址已定位${targetGeo?.resolvedAddress && normalizeAddressKey(targetGeo.resolvedAddress) !== normalizeAddressKey(resolvedRoute.targetIp) ? `，解析到 ${targetGeo.resolvedAddress}` : ""}`
-          : resolvedRoute.referenced ? "引用出口的最终地址未定位，临时放置在末跳附近" : "目标地址未定位，临时放置在出口附近";
+        : `目标地址已定位${targetGeo?.resolvedAddress && normalizeAddressKey(targetGeo.resolvedAddress) !== normalizeAddressKey(resolvedRoute.targetIp) ? `，解析到 ${targetGeo.resolvedAddress}` : ""}`;
     const targetPoint: RuleGlobePoint = {
       id: `target:${rule.id}`,
       kind: "target",
@@ -3240,6 +3216,24 @@ function RulesContent() {
       staleTime: 10_000,
       refetchOnWindowFocus: false,
       placeholderData: (previousData) => previousData,
+    },
+  );
+  // Tab badges must always be based on an unfiltered category request. Keeping
+  // this independent from the selected tab avoids stale/selected-only badges.
+  const ruleCategoryCountsQuery = trpc.rules.listPage.useQuery(
+    {
+      ...(effectiveRulesQuery || {}),
+      page: 1,
+      pageSize: 1,
+      resourceType: rulePageResource.type,
+      resourceId: rulePageResource.id,
+      category: "all",
+      search: ruleSearchQuery,
+    },
+    {
+      refetchInterval: pollingInterval("normal"),
+      staleTime: 10_000,
+      refetchOnWindowFocus: false,
     },
   );
   const isRuleGlobeView = effectiveViewMode === "globe";
@@ -5755,6 +5749,9 @@ function RulesContent() {
     });
   }, [ruleCategoryCountsCacheKey]);
   const liveRuleCategoryCounts = useMemo<RuleCategoryCounts>(() => {
+    if (ruleCategoryCountsQuery.data?.categoryCounts) {
+      return normalizeRuleCategoryCounts(ruleCategoryCountsQuery.data.categoryCounts);
+    }
     if (rulePageQuery.data?.categoryCounts) {
       return normalizeRuleCategoryCounts(rulePageQuery.data.categoryCounts);
     }
@@ -5779,12 +5776,15 @@ function RulesContent() {
     forwardGroupById,
     needsFullRuleList,
     ruleFilters,
+    ruleCategoryCountsQuery.data?.categoryCounts,
     rulePageQuery.data?.categoryCounts,
     selectedScopeQueryEnabled,
     selectedScopedRules,
   ]);
   const hasFreshRuleCategoryCounts =
-    rulePageQuery.data !== undefined && !rulePageQuery.isPlaceholderData;
+    (ruleCategoryCountsQuery.data !== undefined &&
+      !ruleCategoryCountsQuery.isPlaceholderData) ||
+    (rulePageQuery.data !== undefined && !rulePageQuery.isPlaceholderData);
   useEffect(() => {
     if (!hasFreshRuleCategoryCounts) return;
     setStableRuleCategoryCounts((previous) =>
