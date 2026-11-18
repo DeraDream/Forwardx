@@ -42,6 +42,7 @@ type PhysicalNode = {
 
 type PhysicalPath = {
   id: string;
+  ruleId?: number;
   name: string;
   category: Exclude<TopologyCategory, "all">;
   entry: PhysicalNode;
@@ -358,6 +359,7 @@ export function buildPhysicalPaths(
 
       paths.push({
         id: pathId,
+        ruleId: Number(rule.id),
         name: String(rule?.name || "规则 #" + rule.id),
         category: currentCategory,
         entry,
@@ -610,6 +612,104 @@ function nodeTone(node: PhysicalNode) {
     : "border-amber-500/30 bg-amber-500/5";
 }
 
+function formatTopologyBytes(value: number) {
+  const bytes = Math.max(0, Number(value) || 0);
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let amount = bytes / 1024;
+  let unit = 0;
+  while (amount >= 1024 && unit < units.length - 1) {
+    amount /= 1024;
+    unit += 1;
+  }
+  return `${amount >= 100 ? amount.toFixed(0) : amount >= 10 ? amount.toFixed(1) : amount.toFixed(2)} ${units[unit]}`;
+}
+
+type TopologyPathMetrics = {
+  bytesIn: number;
+  bytesOut: number;
+  bytesInPerSecond: number;
+  bytesOutPerSecond: number;
+  latestLatencyMs: number | null;
+  latestLatencyIsTimeout: boolean;
+};
+
+function TopologyLane({
+  path,
+  metrics,
+  selected,
+  onSelectPath,
+  onSelectNode,
+}: {
+  path: PhysicalPath;
+  metrics?: TopologyPathMetrics;
+  selected: boolean;
+  onSelectPath: () => void;
+  onSelectNode: (node: PhysicalNode) => void;
+}) {
+  const nodes = [path.entry, ...path.relays, path.landing];
+  return (
+    <section
+      className={cn(
+        "rounded-xl border bg-card/40 p-3 transition-colors sm:p-4",
+        selected ? "border-primary/50 ring-1 ring-primary/20" : "border-border/45",
+      )}
+    >
+      <button
+        type="button"
+        className="flex w-full flex-wrap items-center gap-2 text-left"
+        onClick={onSelectPath}
+      >
+        <Route className="h-4 w-4 shrink-0 text-primary" />
+        <span className="truncate text-sm font-semibold">{path.name}</span>
+        <Badge variant="outline" className="ml-auto h-5 shrink-0 text-[10px]">
+          {categoryLabel(path.category)}
+        </Badge>
+        <span className="text-xs text-muted-foreground">{nodes.length} 跳</span>
+        {metrics && <span className="text-xs tabular-nums text-muted-foreground">24H ↓{formatTopologyBytes(metrics.bytesIn)} ↑{formatTopologyBytes(metrics.bytesOut)}</span>}
+        {metrics && <span className="text-xs tabular-nums text-muted-foreground">实时 ↓{formatTopologyBytes(metrics.bytesInPerSecond)}/s ↑{formatTopologyBytes(metrics.bytesOutPerSecond)}/s</span>}
+        {metrics?.latestLatencyIsTimeout ? <Badge variant="outline" className="h-5 border-destructive/35 text-[10px] text-destructive">链路延迟超时</Badge> : metrics?.latestLatencyMs != null ? <Badge variant="outline" className="h-5 border-primary/30 text-[10px] tabular-nums">链路延迟 {Math.round(metrics.latestLatencyMs)} ms</Badge> : <Badge variant="outline" className="h-5 text-[10px] text-muted-foreground">链路延迟未测试</Badge>}
+      </button>
+      <div className="mt-3 overflow-x-auto pb-1">
+        <div className="flex min-w-max items-stretch gap-0">
+          {nodes.map((node, index) => (
+            <div key={`${path.id}:${node.id}:${index}`} className="flex items-center">
+              {index > 0 && (
+                <div className="flex w-20 shrink-0 items-center px-2">
+                  <span className="h-0 flex-1 border-t-2 border-dashed border-primary/65" />
+                  <ArrowRight className="-ml-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={() => onSelectNode(node)}
+                className={cn(
+                  "w-52 rounded-xl border p-3 text-left shadow-sm transition hover:border-primary/55 hover:shadow-md",
+                  nodeTone(node),
+                )}
+              >
+                <div className="flex items-center gap-2">
+                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 border-primary/80 text-primary">
+                    {node.online === false ? "!" : ""}
+                  </span>
+                  <span className="truncate text-sm font-semibold">{node.label}</span>
+                </div>
+                <div className="mt-2 text-xs text-muted-foreground">
+                  {index === 0 ? "入口" : index === nodes.length - 1 ? "落地 / 最终目标" : "中转"}
+                </div>
+                <div className="mt-1 truncate text-xs text-foreground/80">{node.subtitle || node.detail || "—"}</div>
+                <div className="mt-2 text-[10px] text-muted-foreground">
+                  {node.online === true ? "节点在线" : node.online === false ? "节点离线" : "状态未知"}
+                </div>
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function NetworkTopologyContent() {
   const [category, setCategory] = useState<TopologyCategory>("all");
   const [search, setSearch] = useState("");
@@ -622,6 +722,7 @@ function NetworkTopologyContent() {
   const canvasRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
   const [showMinimap, setShowMinimap] = useState(false);
+  const [layoutMode, setLayoutMode] = useState<"lanes" | "graph">("lanes");
   const [qualityTarget, setQualityTarget] = useState<LinkQualityTarget | null>(null);
 
   const hostsQuery = trpc.hosts.options.useQuery(undefined, {
@@ -669,6 +770,70 @@ function NetworkTopologyContent() {
     [rulesQuery.data, hostsQuery.data, tunnelsQuery.data, groupsQuery.data, landingQuery.data, fullChainsQuery.data, category, search],
   );
   const paths = topology.paths;
+  const topologyRuleIds = useMemo(
+    () => Array.from(new Set(paths.map((path) => Number(path.ruleId || 0)).filter((id) => id > 0))),
+    [paths],
+  );
+  const trafficQuery = trpc.rules.trafficSummary.useQuery(
+    { hours: 24, range: "24h", ruleIds: topologyRuleIds },
+    {
+      enabled: topologyRuleIds.length > 0,
+      refetchInterval: pollingInterval("normal"),
+      staleTime: 5_000,
+      refetchOnWindowFocus: false,
+      placeholderData: (previousData) => previousData,
+    },
+  );
+  const rateRuleIds = useMemo(() => topologyRuleIds.slice(0, 100), [topologyRuleIds]);
+  const trafficRateQuery = trpc.rules.trafficRateBatch.useQuery(
+    { ruleIds: rateRuleIds },
+    {
+      enabled: rateRuleIds.length > 0,
+      refetchInterval: pollingInterval("normal"),
+      staleTime: 5_000,
+      refetchOnWindowFocus: false,
+    },
+  );
+  const trafficByRule = useMemo(() => {
+    const metrics = new Map<number, TopologyPathMetrics>();
+    topologyRuleIds.forEach((ruleId) => metrics.set(ruleId, {
+      bytesIn: 0,
+      bytesOut: 0,
+      bytesInPerSecond: 0,
+      bytesOutPerSecond: 0,
+      latestLatencyMs: null,
+      latestLatencyIsTimeout: false,
+    }));
+    (trafficQuery.data || []).forEach((row: any) => {
+      const ruleId = Number(row.ruleId || 0);
+      if (ruleId <= 0) return;
+      const current = metrics.get(ruleId) || {
+        bytesIn: 0,
+        bytesOut: 0,
+        bytesInPerSecond: 0,
+        bytesOutPerSecond: 0,
+        latestLatencyMs: null,
+        latestLatencyIsTimeout: false,
+      };
+      current.bytesIn += Math.max(0, Number(row.bytesIn) || 0);
+      current.bytesOut += Math.max(0, Number(row.bytesOut) || 0);
+      const updatedAt = row.latestLatencyAt ? new Date(row.latestLatencyAt).getTime() : 0;
+      const currentAt = (current as any)._latestAt || 0;
+      if (updatedAt >= currentAt) {
+        current.latestLatencyMs = row.latestLatencyMs == null ? null : Number(row.latestLatencyMs);
+        current.latestLatencyIsTimeout = !!row.latestLatencyIsTimeout;
+        (current as any)._latestAt = updatedAt;
+      }
+      metrics.set(ruleId, current);
+    });
+    (trafficRateQuery.data || []).forEach((row: any) => {
+      const metric = metrics.get(Number(row.ruleId || 0));
+      if (!metric) return;
+      metric.bytesInPerSecond = Math.max(0, Number(row.bytesInPerSecond) || 0);
+      metric.bytesOutPerSecond = Math.max(0, Number(row.bytesOutPerSecond) || 0);
+    });
+    return metrics;
+  }, [topologyRuleIds, trafficQuery.data, trafficRateQuery.data]);
 
   const entryGroups = useMemo(() => {
     const groups = new Map<string, { entry: PhysicalNode; paths: PhysicalPath[] }>();
@@ -786,9 +951,15 @@ function NetworkTopologyContent() {
             </Button>
           ))}
         </div>
-        <div className="relative w-full sm:w-72">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-          <Input value={search} onChange={(event) => { setSearch(event.target.value); setSelectedPathId(null); setSelectedNodeId(null); setSelectedEdgeId(null); setEntryFilter("all"); }} placeholder="搜索规则、入口、节点或落地" className="h-8 pl-8 text-xs" />
+        <div className="flex w-full gap-2 sm:w-auto">
+          <div className="inline-flex shrink-0 rounded-md border border-border/50 p-0.5">
+            <Button size="sm" variant={layoutMode === "lanes" ? "secondary" : "ghost"} className="h-7 px-2 text-xs" onClick={() => setLayoutMode("lanes")}>链路视图</Button>
+            <Button size="sm" variant={layoutMode === "graph" ? "secondary" : "ghost"} className="h-7 px-2 text-xs" onClick={() => setLayoutMode("graph")}>关系总览</Button>
+          </div>
+          <div className="relative min-w-0 flex-1 sm:w-72">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input value={search} onChange={(event) => { setSearch(event.target.value); setSelectedPathId(null); setSelectedNodeId(null); setSelectedEdgeId(null); setEntryFilter("all"); }} placeholder="搜索规则、入口、节点或落地" className="h-8 pl-8 text-xs" />
+          </div>
         </div>
       </div>
 
@@ -811,7 +982,24 @@ function NetworkTopologyContent() {
           </CardContent>
         </Card>
       ) : (
-        <div>
+        <div className="space-y-4">
+          {layoutMode === "lanes" ? (
+            <div className="space-y-3">
+              <div className="grid grid-cols-[13rem_minmax(5rem,1fr)_13rem] gap-3 px-4 text-xs font-medium text-muted-foreground">
+                <span>入口</span><span className="text-center">中转</span><span className="text-right">落地</span>
+              </div>
+              {visiblePaths.map((path) => (
+                <TopologyLane
+                  key={path.id}
+                  path={path}
+                  metrics={path.ruleId ? trafficByRule.get(path.ruleId) : undefined}
+                  selected={selectedPathId === path.id}
+                  onSelectPath={() => { setSelectedPathId(path.id); setSelectedNodeId(null); setSelectedEdgeId(null); }}
+                  onSelectNode={(node) => { setSelectedPathId(path.id); setSelectedNodeId(node.id); setSelectedEdgeId(null); }}
+                />
+              ))}
+            </div>
+          ) : (
           <Card className="overflow-hidden border-border/45 bg-card/45">
             <CardContent className="p-0">
               <div className="flex flex-wrap items-center gap-2 border-b border-border/40 p-2">
@@ -907,8 +1095,9 @@ function NetworkTopologyContent() {
               </div>
             </CardContent>
           </Card>
+          )}
 
-          <Card className="hidden h-fit border-border/45 bg-card/60 xl:sticky xl:top-4">
+          <Card className="h-fit border-border/45 bg-card/60">
             <CardContent className="space-y-4 p-4">
               {selectedEdge && !selectedNode && (
                 <div className="space-y-2 border-b border-border/40 pb-3 text-xs">

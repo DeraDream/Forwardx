@@ -121,6 +121,41 @@ export const trafficRulesRouter = router({
           }),
       );
     }),
+  trafficRateBatch: protectedProcedure
+    .input(z.object({ ruleIds: z.array(z.number().int().positive()).max(100) }))
+    .query(async ({ input, ctx }) => {
+      const requestedIds = Array.from(new Set(input.ruleIds)).sort((a, b) => a - b);
+      if (requestedIds.length === 0) return [];
+      const visibleRules = await db.getForwardRules(ctx.user.role === "admin" ? undefined : ctx.user.id);
+      const visibleIds = new Set((visibleRules || []).map((rule: any) => Number(rule.id)).filter((id: number) => id > 0));
+      const ruleIds = requestedIds.filter((id) => visibleIds.has(id));
+      const now = Date.now();
+      return trafficQueryCache.get(
+        `rate:${ctx.user.id}:${ruleIds.join(",")}:${Math.floor(now / 30_000)}`,
+        { ttlMs: 10_000, staleMs: 0 },
+        async () => {
+          const result: Array<{ ruleId: number; bytesInPerSecond: number; bytesOutPerSecond: number }> = [];
+          // Keep the per-rule historical aggregation bounded; topology only asks
+          // for visible paths and must not stampede the metrics database.
+          for (let offset = 0; offset < ruleIds.length; offset += 8) {
+            const batch = await Promise.all(ruleIds.slice(offset, offset + 8).map(async (ruleId) => {
+              const rows = await db.getTrafficSeriesByRule(ruleId, {
+                bucketMinutes: 1,
+                since: new Date(now - 3 * 60_000),
+              });
+              const latest = rows[rows.length - 1];
+              return {
+                ruleId,
+                bytesInPerSecond: latest ? Math.max(0, Number(latest.bytesIn) || 0) / 60 : 0,
+                bytesOutPerSecond: latest ? Math.max(0, Number(latest.bytesOut) || 0) / 60 : 0,
+              };
+            }));
+            result.push(...batch);
+          }
+          return result;
+        },
+      );
+    }),
   trafficSeries: protectedProcedure
     .input(
       z.object({
