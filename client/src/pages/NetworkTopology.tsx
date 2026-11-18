@@ -667,43 +667,52 @@ function TopologyLane({
         </Badge>
         <span className="text-xs text-muted-foreground">{nodes.length} 跳</span>
         {metrics && <span className="text-xs tabular-nums text-muted-foreground">24H ↓{formatTopologyBytes(metrics.bytesIn)} ↑{formatTopologyBytes(metrics.bytesOut)}</span>}
-        {metrics && <span className="text-xs tabular-nums text-muted-foreground">实时 ↓{formatTopologyBytes(metrics.bytesInPerSecond)}/s ↑{formatTopologyBytes(metrics.bytesOutPerSecond)}/s</span>}
         {metrics?.latestLatencyIsTimeout ? <Badge variant="outline" className="h-5 border-destructive/35 text-[10px] text-destructive">链路延迟超时</Badge> : metrics?.latestLatencyMs != null ? <Badge variant="outline" className="h-5 border-primary/30 text-[10px] tabular-nums">链路延迟 {Math.round(metrics.latestLatencyMs)} ms</Badge> : <Badge variant="outline" className="h-5 text-[10px] text-muted-foreground">链路延迟未测试</Badge>}
       </button>
       <div className="mt-3 overflow-x-auto pb-1">
         <div className="flex min-w-max items-stretch gap-0">
-          {nodes.map((node, index) => (
+          {nodes.map((node, index) => {
+            const isManagedVps = node.id.startsWith("host:");
+            return (
             <div key={`${path.id}:${node.id}:${index}`} className="flex items-center">
               {index > 0 && (
-                <div className="flex w-20 shrink-0 items-center px-2">
-                  <span className="h-0 flex-1 border-t-2 border-dashed border-primary/65" />
-                  <ArrowRight className="-ml-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
+                <div className="flex w-14 shrink-0 items-center px-1.5">
+                  <span className="h-0 flex-1 border-t border-dashed border-primary/65" />
+                  <ArrowRight className="-ml-0.5 h-3 w-3 shrink-0 text-primary" />
                 </div>
               )}
               <button
                 type="button"
                 onClick={() => onSelectNode(node)}
                 className={cn(
-                  "w-52 rounded-xl border p-3 text-left shadow-sm transition hover:border-primary/55 hover:shadow-md",
+                  "w-44 rounded-lg border p-2.5 text-left shadow-sm transition hover:border-primary/55 hover:shadow-md",
                   nodeTone(node),
                 )}
               >
                 <div className="flex items-center gap-2">
-                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 border-primary/80 text-primary">
+                  <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2 border-primary/80 text-[9px] text-primary">
                     {node.online === false ? "!" : ""}
                   </span>
-                  <span className="truncate text-sm font-semibold">{node.label}</span>
+                  <span className="truncate text-[13px] font-semibold">{node.label}</span>
                 </div>
-                <div className="mt-2 text-xs text-muted-foreground">
+                <div className="mt-1.5 text-[11px] text-muted-foreground">
                   {index === 0 ? "入口" : index === nodes.length - 1 ? "落地 / 最终目标" : "中转"}
                 </div>
-                <div className="mt-1 truncate text-xs text-foreground/80">{node.subtitle || node.detail || "—"}</div>
-                <div className="mt-2 text-[10px] text-muted-foreground">
-                  {node.online === true ? "节点在线" : node.online === false ? "节点离线" : "状态未知"}
-                </div>
+                <div className="mt-0.5 truncate text-[11px] text-foreground/80">{node.subtitle || node.detail || "—"}</div>
+                {metrics && isManagedVps ? (
+                  <div className="mt-2 flex items-center justify-between border-t border-border/35 pt-1.5 text-[10px] tabular-nums">
+                    <span className="text-emerald-600 dark:text-emerald-400">↓ {formatTopologyBytes(metrics.bytesInPerSecond)}/s</span>
+                    <span className="text-amber-600 dark:text-amber-400">↑ {formatTopologyBytes(metrics.bytesOutPerSecond)}/s</span>
+                  </div>
+                ) : (
+                  <div className="mt-2 text-[10px] text-muted-foreground">
+                    {node.online === true ? "节点在线" : node.online === false ? "节点离线" : "状态未知"}
+                  </div>
+                )}
               </button>
             </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </section>
