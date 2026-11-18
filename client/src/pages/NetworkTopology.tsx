@@ -697,7 +697,7 @@ function TopologyLane({
                 return <div className="relative flex w-14 shrink-0 items-center px-1.5">
                   <span className="h-0 flex-1 border-t border-dashed border-primary/65" />
                   <ArrowRight className="-ml-0.5 h-3 w-3 shrink-0 text-primary" />
-                  {segment && <span title={segment.sampleCount ? `近 ${segment.sampleCount} 次成功率 ${Math.round((segment.successRate || 0) * 100)}%${segment.jitterMs == null ? "" : `，抖动 ${Math.round(segment.jitterMs)} ms`}` : undefined} className={cn("absolute -top-4 left-1/2 -translate-x-1/2 whitespace-nowrap rounded border bg-background px-1 text-[9px] tabular-nums", segment.isTimeout ? "border-destructive/35 text-destructive" : stale ? "border-amber-500/35 text-amber-700 dark:text-amber-300" : "border-border/50 text-muted-foreground")}>{segment.isTimeout ? (segment.method === "ping" ? "Ping 超时" : "超时") : stale ? `${Math.round(Number(segment.latencyMs) || 0)} ms · 过期` : `${segment.method === "ping" ? "Ping " : ""}${Math.round(Number(segment.latencyMs) || 0)} ms · ${Math.round((segment.successRate || 0) * 100)}%`}</span>}
+                  <span title={segment?.sampleCount ? `近 ${segment.sampleCount} 次成功率 ${Math.round((segment.successRate || 0) * 100)}%${segment.jitterMs == null ? "" : `，抖动 ${Math.round(segment.jitterMs)} ms`}` : undefined} className={cn("absolute -top-4 left-1/2 -translate-x-1/2 whitespace-nowrap rounded border bg-background px-1 text-[9px] tabular-nums", !segment ? "border-border/50 text-muted-foreground" : segment.isTimeout ? "border-destructive/35 text-destructive" : stale ? "border-amber-500/35 text-amber-700 dark:text-amber-300" : "border-border/50 text-muted-foreground")}>{!segment ? "待探测" : segment.isTimeout ? (segment.method === "ping" ? "Ping 超时" : "超时") : stale ? `${Math.round(Number(segment.latencyMs) || 0)} ms · 过期` : `${segment.method === "ping" ? "Ping " : ""}${Math.round(Number(segment.latencyMs) || 0)} ms · ${Math.round((segment.successRate || 0) * 100)}%`}</span>
                 </div>;
               })()}
               <button
@@ -709,9 +709,6 @@ function TopologyLane({
                 )}
               >
                 <div className="flex items-center gap-2">
-                  <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2 border-primary/80 text-[9px] text-primary">
-                    {node.online === false ? "!" : ""}
-                  </span>
                   <span className="truncate text-[13px] font-semibold">{node.label}</span>
                 </div>
                 <div className="mt-1.5 text-[11px] text-muted-foreground">
@@ -814,6 +811,15 @@ function NetworkTopologyContent() {
     },
   );
   const rateRuleIds = useMemo(() => topologyRuleIds.slice(0, 100), [topologyRuleIds]);
+  const topologyProbeKeyRef = useRef("");
+  useEffect(() => {
+    const key = rateRuleIds.join(",");
+    if (!key || topologyProbeKeyRef.current === key) return;
+    topologyProbeKeyRef.current = key;
+    // Request one immediate collection when this view opens. Subsequent edge
+    // values still come from the normal Agent collector, not browser probes.
+    probeTopologySegments.mutate({ ruleIds: rateRuleIds });
+  }, [probeTopologySegments, rateRuleIds]);
   const topologySegmentQuery = trpc.rules.topologySegmentLatency.useQuery(
     { ruleIds: rateRuleIds },
     { enabled: rateRuleIds.length > 0, refetchInterval: pollingInterval("active"), staleTime: 0, refetchOnWindowFocus: false },
