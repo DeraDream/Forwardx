@@ -560,6 +560,7 @@ const EMPTY_RULE_CATEGORY_COUNTS: RuleCategoryCounts = {
 const RULE_CATEGORY_COUNTS_CACHE_PREFIX = "forwardx.rules.categoryCounts.";
 const RULE_GLOBE_EARTH_IMAGE_URL = "/globe/earth-dark.jpg";
 const RULE_GLOBE_COUNTRIES_URL = "/globe/ne_110m_admin_0_countries.geojson";
+const RULE_GLOBE_AUTO_ROTATE_STORAGE_KEY = "forwardx.rules.globe.auto-rotate";
 const RULE_GLOBE_PATH_SURFACE_ALTITUDE = 0.028;
 const RULE_GLOBE_PATH_MIN_ALTITUDE = 0.04;
 const RULE_GLOBE_PATH_MAX_ALTITUDE = 0.11;
@@ -2091,8 +2092,46 @@ function ruleGlobeRouteHostIds(
   return [Number(rule.hostId || 0)].filter((id) => id > 0);
 }
 
+/** Expand the actual exit chosen by a port-forward rule. A referenced completed
+ * forward contributes its complete chain; a landing service contributes its host. */
+function resolveRuleGlobeRoute(
+  rule: any,
+  tunnelById: Map<number, any>,
+  forwardGroupById: Map<number, any>,
+  ruleById: Map<number, any>,
+  landingById: Map<number, any>,
+) {
+  const hostIds = ruleGlobeRouteHostIds(rule, tunnelById, forwardGroupById);
+  const seen = new Set<number>([Number(rule?.id || 0)]);
+  let terminalRule = rule;
+  let targetLandingServiceId = Number(rule?.targetLandingServiceId || 0);
+  while (Number(terminalRule?.targetRuleId || 0) > 0) {
+    const targetRuleId = Number(terminalRule.targetRuleId);
+    if (seen.has(targetRuleId)) break;
+    const referenced = ruleById.get(targetRuleId);
+    if (!referenced) break;
+    seen.add(targetRuleId);
+    hostIds.push(...ruleGlobeRouteHostIds(referenced, tunnelById, forwardGroupById));
+    terminalRule = referenced;
+    targetLandingServiceId = Number(referenced?.targetLandingServiceId || targetLandingServiceId || 0);
+  }
+  const landing = landingById.get(targetLandingServiceId);
+  if (Number(landing?.hostId || 0) > 0) hostIds.push(Number(landing.hostId));
+  return {
+    hostIds: hostIds.filter(
+      (hostId: number, index: number) =>
+        hostId > 0 && (index === 0 || hostId !== hostIds[index - 1]),
+    ),
+    targetIp: String(terminalRule?.targetIp || rule?.targetIp || ""),
+    targetPort: Number(terminalRule?.targetPort || rule?.targetPort || 0),
+    referenced: seen.size > 1 || !!landing,
+  };
+}
+
 function buildRuleGlobeData(
   rules: any[],
+  referenceRules: any[],
+  landingServices: any[],
   hosts: any[],
   tunnels: any[],
   forwardGroups: any[],
@@ -2109,6 +2148,9 @@ function buildRuleGlobeData(
   const forwardGroupById = new Map<number, any>(
     (forwardGroups || []).map((group: any) => [Number(group.id), group]),
   );
+  const ruleById = new Map<number, any>((referenceRules || []).map((rule: any) => [Number(rule.id), rule]));
+  (rules || []).forEach((rule: any) => ruleById.set(Number(rule.id), rule));
+  const landingById = new Map<number, any>((landingServices || []).map((service: any) => [Number(service.id), service]));
   (forwardGroups || []).forEach((group: any) => {
     const entryGroup = group?.entryGroup;
     const entryGroupId = Number(entryGroup?.id || group?.entryGroupId || 0);
@@ -2177,12 +2219,14 @@ function buildRuleGlobeData(
       normalizeForwardGroupModeForRule(chainEntryGroup) === "entry"
         ? enabledHostMembers(chainEntryGroup)
         : [];
-    const routeHostIds = ruleGlobeRouteHostIds(
+    const resolvedRoute = resolveRuleGlobeRoute(
       rule,
       tunnelById,
       forwardGroupById,
+      ruleById,
+      landingById,
     );
-    const routePoints = routeHostIds
+    const routePoints = resolvedRoute.hostIds
       .map((hostId: number) => pointForHostId(hostId))
       .filter(Boolean) as RuleGlobePoint[];
     if (routePoints.length === 0) {
@@ -2190,16 +2234,16 @@ function buildRuleGlobeData(
       return;
     }
     const targetText = formatAddressWithPort(
-      String(rule.targetIp || "-"),
-      Number(rule.targetPort || 0) || "-",
+      resolvedRoute.targetIp || "-",
+      resolvedRoute.targetPort || "-",
     );
     const color = ruleGlobeColor(rule);
     const targetHostPoint = hostByAddress.get(
-      normalizeAddressKey(rule.targetIp),
+      normalizeAddressKey(resolvedRoute.targetIp),
     );
     const lastRoutePoint = routePoints[routePoints.length - 1];
     const targetGeo = targetGeoByAddress.get(
-      normalizeAddressKey(rule.targetIp),
+      normalizeAddressKey(resolvedRoute.targetIp),
     );
     const targetGeoCoord = microGeoCoordinate(targetGeo);
     const shouldOffsetTargetHost =
@@ -2234,8 +2278,8 @@ function buildRuleGlobeData(
       : targetHostPoint
         ? "目标地址匹配已登记主机"
         : targetGeoCoord
-          ? `目标地址已定位${targetGeo?.resolvedAddress && normalizeAddressKey(targetGeo.resolvedAddress) !== normalizeAddressKey(rule.targetIp) ? `，解析到 ${targetGeo.resolvedAddress}` : ""}`
-          : "目标地址未定位，临时放置在出口附近";
+          ? `目标地址已定位${targetGeo?.resolvedAddress && normalizeAddressKey(targetGeo.resolvedAddress) !== normalizeAddressKey(resolvedRoute.targetIp) ? `，解析到 ${targetGeo.resolvedAddress}` : ""}`
+          : resolvedRoute.referenced ? "引用出口的最终地址未定位，临时放置在末跳附近" : "目标地址未定位，临时放置在出口附近";
     const targetPoint: RuleGlobePoint = {
       id: `target:${rule.id}`,
       kind: "target",
@@ -2358,6 +2402,8 @@ function buildRuleGlobeData(
 
 function RuleTrafficGlobe({
   rules,
+  referenceRules,
+  landingServices,
   hosts,
   tunnels,
   forwardGroups,
@@ -2368,6 +2414,8 @@ function RuleTrafficGlobe({
   onEditRule,
 }: {
   rules: any[];
+  referenceRules: any[];
+  landingServices: any[];
   hosts: any[];
   tunnels: any[];
   forwardGroups: any[];
@@ -2383,11 +2431,20 @@ function RuleTrafficGlobe({
   const [size, setSize] = useState({ width: 1400, height: 780 });
   const [hoveredPath, setHoveredPath] = useState<RuleGlobePath | null>(null);
   const [hoveredPoint, setHoveredPoint] = useState<RuleGlobePoint | null>(null);
+  const [autoRotate, setAutoRotate] = useState(() => {
+    try {
+      return window.localStorage.getItem(RULE_GLOBE_AUTO_ROTATE_STORAGE_KEY) !== "false";
+    } catch {
+      return true;
+    }
+  });
   const [countries, setCountries] = useState<RuleGlobeCountryFeature[]>([]);
   const globeData = useMemo(
     () =>
       buildRuleGlobeData(
         rules,
+        referenceRules,
+        landingServices,
         hosts,
         tunnels,
         forwardGroups,
@@ -2398,6 +2455,8 @@ function RuleTrafficGlobe({
     [
       forwardGroups,
       hosts,
+      landingServices,
+      referenceRules,
       rules,
       targetGeoByAddress,
       targetGeoLookupReady,
@@ -2464,7 +2523,7 @@ function RuleTrafficGlobe({
     if (!globeReady || !globeRef.current) return;
     const globe = globeRef.current;
     const controls = globe.controls();
-    controls.autoRotate = true;
+    controls.autoRotate = autoRotate;
     controls.autoRotateSpeed = 0.32;
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
@@ -2474,13 +2533,19 @@ function RuleTrafficGlobe({
     controls.minDistance = 105;
     controls.maxDistance = 500;
     globe.pointOfView({ lat: 18, lng: 108, altitude: 1.28 }, 0);
-  }, [globeReady]);
+  }, [autoRotate, globeReady]);
 
-  useEffect(() => {
-    const controls = globeRef.current?.controls();
-    if (!controls) return;
-    controls.autoRotate = !(hoveredPath || hoveredPoint);
-  }, [hoveredPath, hoveredPoint]);
+  const toggleAutoRotate = () => {
+    setAutoRotate((enabled) => {
+      const next = !enabled;
+      try {
+        window.localStorage.setItem(RULE_GLOBE_AUTO_ROTATE_STORAGE_KEY, String(next));
+      } catch {
+        // This preference is optional; the in-memory setting still takes effect.
+      }
+      return next;
+    });
+  };
 
   return (
     <>
@@ -2619,8 +2684,14 @@ function RuleTrafficGlobe({
             />
           </Suspense>
 
-          <div className="pointer-events-none absolute left-4 top-4 rounded-md border border-white/10 bg-black/35 px-3 py-2 text-xs text-white shadow-lg backdrop-blur-md">
-            <div className="font-medium">流量转发图</div>
+          <div className="pointer-events-auto absolute left-4 top-4 rounded-md border border-white/10 bg-black/35 px-3 py-2 text-xs text-white shadow-lg backdrop-blur-md">
+            <div className="flex items-center justify-between gap-3">
+              <div className="font-medium">流量转发图</div>
+              <button type="button" onClick={toggleAutoRotate} className={cn("inline-flex items-center gap-1 rounded border px-1.5 py-1 text-[11px] transition-colors", autoRotate ? "border-cyan-300/35 bg-cyan-300/15 text-cyan-100" : "border-white/15 bg-white/5 text-white/65 hover:bg-white/10")} title={autoRotate ? "关闭地球自动旋转" : "开启地球自动旋转"}>
+                <RotateCcw className={cn("h-3 w-3", autoRotate && "animate-spin")} />
+                自动旋转 {autoRotate ? "开" : "关"}
+              </button>
+            </div>
             <div className="mt-1 text-white/70">
               规则 {rules.length} 条 · 已定位 {globeData.summaries.length} 条
             </div>
@@ -3223,7 +3294,7 @@ function RulesContent() {
   // The rule editor needs the complete rule list to populate saved chain targets.
   // Without this, "引用已完成转发" always has zero options when creating/editing a rule.
   const needsFullRuleList =
-    showDialog || showCopyDialog || showExportDialog || showImportDialog;
+    isRuleGlobeView || showDialog || showCopyDialog || showExportDialog || showImportDialog;
   const fullRulesQuery = trpc.rules.list.useQuery(effectiveRulesQuery as any, {
     enabled: needsFullRuleList,
     refetchInterval: pollingInterval("normal"),
@@ -3231,8 +3302,9 @@ function RulesContent() {
     refetchOnWindowFocus: false,
     placeholderData: (previousData: any) => previousData,
   });
+  // Keep the landing tab count available even before its panel is opened.
   const landingServicesQuery = trpc.landing.list.useQuery(undefined, {
-    enabled: needsFullRuleList,
+    enabled: true,
     refetchInterval: pollingInterval("normal"),
     staleTime: 10_000,
   });
@@ -5767,9 +5839,14 @@ function RulesContent() {
         icon: Layers3,
         badge: ruleCategoryCountsReady ? ruleCategoryCounts.group : null,
       },
-      { value: "landing", label: "落地 SS", icon: Server, badge: null },
+      {
+        value: "landing",
+        label: "落地 SS",
+        icon: Server,
+        badge: landingServicesQuery.isSuccess ? (landingServicesQuery.data || []).length : null,
+      },
     ],
-    [ruleCategoryCounts, ruleCategoryCountsReady],
+    [landingServicesQuery.data, landingServicesQuery.isSuccess, ruleCategoryCounts, ruleCategoryCountsReady],
   );
   const visibleRuleIdsForMetrics = useMemo(
     () =>
@@ -9917,6 +9994,8 @@ function RulesContent() {
               ) : (
                 <RuleTrafficGlobe
                   rules={filteredRules}
+                  referenceRules={(fullRulesQuery.data || mapRules || []) as any[]}
+                  landingServices={(landingServicesQuery.data || []) as any[]}
                   hosts={hosts || []}
                   tunnels={tunnels || []}
                   forwardGroups={forwardGroups || []}
