@@ -1,4 +1,5 @@
 import { useAuth } from "@/_core/hooks/useAuth";
+import { APP_VERSION } from "@shared/versions";
 import { Progress } from "@/components/ui/progress";
 import {
   DropdownMenu,
@@ -678,8 +679,13 @@ function DashboardLayoutContent({
 
   useEffect(() => {
     if (upgradeStatus?.job?.status !== "success") return;
-    scheduleUpgradeRefresh();
-  }, [scheduleUpgradeRefresh, upgradeStatus?.job?.status]);
+    // The upgrade job remains persisted after the new panel starts. Refresh
+    // only an older browser bundle; otherwise every page load schedules a
+    // fresh 3-second reload forever.
+    if (normalizePanelVersion(upgradeStatus.job.targetVersion) !== normalizePanelVersion(APP_VERSION)) {
+      scheduleUpgradeRefresh();
+    }
+  }, [scheduleUpgradeRefresh, upgradeStatus?.job?.status, upgradeStatus?.job?.targetVersion]);
 
   useEffect(() => {
     if (!backgroundUpgrade?.targetVersion || !upgradeStatus?.currentVersion) return;
@@ -700,7 +706,9 @@ function DashboardLayoutContent({
 
     clearPanelUpgradeSession();
     setBackgroundUpgrade(null);
-    scheduleUpgradeRefresh();
+    if (normalizePanelVersion(backgroundUpgrade.targetVersion) !== normalizePanelVersion(APP_VERSION)) {
+      scheduleUpgradeRefresh();
+    }
   }, [
     backgroundUpgrade?.startedAt,
     backgroundUpgrade?.mode,
