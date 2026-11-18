@@ -37,7 +37,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.232"
+var Version = "2.2.233"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -2582,10 +2582,11 @@ type agentRefreshEvent struct {
 // agentDesiredStatePush 是服务端经 SSE 下发的 desiredState 推送载荷，
 // 包含运行规则及其延迟探测配置，让 Agent 无需等待下一个心跳即可立即执行。
 type agentDesiredStatePush struct {
-	DesiredState      *desiredState      `json:"desiredState,omitempty"`
-	RunningRules      []runningRule      `json:"runningRules,omitempty"`
-	RuleLatencyProbes []ruleLatencyProbe `json:"ruleLatencyProbes,omitempty"`
-	StateSignatures   map[string]string  `json:"stateSignatures,omitempty"`
+	DesiredState          *desiredState          `json:"desiredState,omitempty"`
+	RunningRules          []runningRule          `json:"runningRules,omitempty"`
+	RuleLatencyProbes     []ruleLatencyProbe     `json:"ruleLatencyProbes,omitempty"`
+	TopologySegmentProbes []topologySegmentProbe `json:"topologySegmentProbes,omitempty"`
+	StateSignatures       map[string]string      `json:"stateSignatures,omitempty"`
 }
 
 type desiredStatePushJob struct {
@@ -2618,7 +2619,7 @@ func (scheduler *desiredStatePushScheduler) schedule(cfg Config, push agentDesir
 			if push.DesiredState != nil {
 				actionCount = len(push.DesiredState.Actions)
 			}
-			logf("desired state push coalesced actions=%d runningRules=%d latencyProbes=%d", actionCount, len(push.RunningRules), len(push.RuleLatencyProbes))
+			logf("desired state push coalesced actions=%d runningRules=%d latencyProbes=%d topologySegments=%d", actionCount, len(push.RunningRules), len(push.RuleLatencyProbes), len(push.TopologySegmentProbes))
 		}
 		return
 	}
@@ -2629,7 +2630,7 @@ func (scheduler *desiredStatePushScheduler) schedule(cfg Config, push agentDesir
 		if push.DesiredState != nil {
 			actionCount = len(push.DesiredState.Actions)
 		}
-		logf("desired state push accepted actions=%d runningRules=%d latencyProbes=%d", actionCount, len(push.RunningRules), len(push.RuleLatencyProbes))
+		logf("desired state push accepted actions=%d runningRules=%d latencyProbes=%d topologySegments=%d", actionCount, len(push.RunningRules), len(push.RuleLatencyProbes), len(push.TopologySegmentProbes))
 	}
 	go scheduler.run(job)
 }
@@ -4876,7 +4877,7 @@ func runAgentEventStream(cfg Config) error {
 								actionCount = len(push.DesiredState.Actions)
 								revision = push.DesiredState.ConfigRevision
 							}
-							logf("event stream desired state received revision=%d actions=%d runningRules=%d latencyProbes=%d", revision, actionCount, len(push.RunningRules), len(push.RuleLatencyProbes))
+							logf("event stream desired state received revision=%d actions=%d runningRules=%d latencyProbes=%d topologySegments=%d", revision, actionCount, len(push.RunningRules), len(push.RuleLatencyProbes), len(push.TopologySegmentProbes))
 						}
 						agentDesiredStatePushes.schedule(cfg, push)
 					}
@@ -4949,15 +4950,16 @@ func decodeEventDataForPanel(raw string, token string, panelURL string, serverTi
 // 与心跳路径的 syncDesiredState 共享同一幂等性机制（签名 + desired_state_records.json），
 // 因此即使心跳和 SSE 推送同时触发也不会重复执行。
 func handleAgentDesiredStatePush(cfg Config, push agentDesiredStatePush) {
-	if push.DesiredState == nil && len(push.RunningRules) == 0 && len(push.RuleLatencyProbes) == 0 && len(push.StateSignatures) == 0 {
+	if push.DesiredState == nil && len(push.RunningRules) == 0 && len(push.RuleLatencyProbes) == 0 && len(push.TopologySegmentProbes) == 0 && len(push.StateSignatures) == 0 {
 		return
 	}
 	// 先应用 running rules，stale-remove 保护依赖这份数据。
-	if len(push.RunningRules) > 0 || len(push.RuleLatencyProbes) > 0 || len(push.StateSignatures) > 0 {
+	if len(push.RunningRules) > 0 || len(push.RuleLatencyProbes) > 0 || len(push.TopologySegmentProbes) > 0 || len(push.StateSignatures) > 0 {
 		partial := heartbeatResp{
-			RunningRules:      push.RunningRules,
-			RuleLatencyProbes: push.RuleLatencyProbes,
-			StateSignatures:   push.StateSignatures,
+			RunningRules:          push.RunningRules,
+			RuleLatencyProbes:     push.RuleLatencyProbes,
+			TopologySegmentProbes: push.TopologySegmentProbes,
+			StateSignatures:       push.StateSignatures,
 		}
 		state := applyHeartbeatState(partial)
 		rememberDesiredRunningRules(state.RunningRules)

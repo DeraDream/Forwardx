@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.4.73] - 2026-11-18
+
+### Fixed
+
+- 修复新版 Agent 通过 SSE 接收 desired state 时遗漏逐级拓扑分段探测配置的问题；该遗漏导致 Agent 虽已升级、规则探测正常但没有执行/上报分段延迟。
+
+Agent 升级至 `2.2.233`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.4.72] - 2026-11-18
 
 ### Fixed
