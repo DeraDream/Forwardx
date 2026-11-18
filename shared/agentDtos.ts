@@ -50,6 +50,19 @@ export type AgentTunnelTcpingResult = {
   seriesLabel?: string | null;
 };
 
+export type AgentTopologySegmentLatencyResult = {
+  ruleId: number;
+  segmentKey: string;
+  targetHostId?: number;
+  targetIp: string;
+  targetPort?: number;
+  method?: "tcp" | "ping" | string;
+  latencyMs?: number | null;
+  isTimeout?: boolean;
+  probeCount?: number;
+  probeSuccesses?: number;
+};
+
 export type AgentHostProbeServiceResult = {
   serviceId: number;
   landingServiceId?: number;
@@ -238,6 +251,16 @@ export function isAgentTunnelTcpingResult(value: unknown): value is AgentTunnelT
     && validOptionalInteger(item.hopIndex, 0)
     && validOptionalInteger(item.hopCount, 1)
     && (item.seriesKey === undefined || item.seriesKey === null || validShortString(item.seriesKey, 64));
+}
+
+export function isAgentTopologySegmentLatencyResult(value: unknown): value is AgentTopologySegmentLatencyResult {
+  const item = value as Partial<AgentTopologySegmentLatencyResult>;
+  return validAgentProbeResult(item, "ruleId")
+    && validShortString(item.segmentKey, 191) && String(item.segmentKey).trim().length > 0
+    && validOptionalInteger(item.targetHostId, 1)
+    && validShortString(item.targetIp, 253) && String(item.targetIp).trim().length > 0
+    && validOptionalInteger(item.targetPort, 0)
+    && (item.method === undefined || item.method === "tcp" || item.method === "ping");
 }
 
 export function isAgentHostProbeServiceResult(value: unknown): value is AgentHostProbeServiceResult {

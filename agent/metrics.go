@@ -55,6 +55,7 @@ var (
 	tcpingTunnelCursor       int
 	tcpingForwardGroupCursor int
 	tcpingServiceCursor      int
+	tcpingTopologyCursor     int
 	tcpingCollectRunning     int32
 	systemPingSlots          = make(chan struct{}, systemPingConcurrency)
 	networkTargetDNSMu       sync.Mutex
@@ -515,6 +516,7 @@ type tcpingTask struct {
 	Method           string
 	TargetIP         string
 	TargetPort       int
+	TargetHostID     int
 	HopIndex         int
 	HopCount         int
 	FailoverSeconds  int
@@ -1392,7 +1394,7 @@ func trafficCollectBackoffInterval(base time.Duration, elapsed time.Duration) ti
 	return next
 }
 
-func collectTCPing(cfg Config, ruleProbes []ruleLatencyProbe, probes []tunnelProbe, groupProbes []forwardGroupProbe, serviceProbes []hostProbeServiceProbe, force bool, startActionEpoch uint64, startedWithActionsPending bool) {
+func collectTCPing(cfg Config, ruleProbes []ruleLatencyProbe, probes []tunnelProbe, groupProbes []forwardGroupProbe, serviceProbes []hostProbeServiceProbe, topologySegments []topologySegmentProbe, force bool, startActionEpoch uint64, startedWithActionsPending bool) {
 	ruleTasks := []tcpingTask{}
 	explicitRuleIDs := map[int]bool{}
 	for _, probe := range ruleProbes {
@@ -1445,6 +1447,25 @@ func collectTCPing(cfg Config, ruleProbes []ruleLatencyProbe, probes []tunnelPro
 			TargetPort:       probe.TargetPort,
 			ProbeKey:         fmt.Sprintf("service:%d:%s:%d:tcping", probe.ServiceID, strings.ToLower(strings.TrimSpace(probe.TargetIP)), probe.TargetPort),
 			SampleCount:      probe.SampleCount,
+		})
+	}
+
+	segmentTasks := []tcpingTask{}
+	for _, probe := range topologySegments {
+		method := strings.ToLower(strings.TrimSpace(probe.Method))
+		if probe.RuleID <= 0 || strings.TrimSpace(probe.SegmentKey) == "" || strings.TrimSpace(probe.TargetIP) == "" {
+			continue
+		}
+		if method != "ping" && probe.TargetPort <= 0 {
+			continue
+		}
+		if method != "ping" {
+			method = "tcp"
+		}
+		segmentTasks = append(segmentTasks, tcpingTask{
+			Kind: "topologySegment", RuleID: probe.RuleID, TargetHostID: probe.TargetHostID,
+			TargetIP: probe.TargetIP, TargetPort: probe.TargetPort, Method: method,
+			TopologyKey: probe.SegmentKey, ProbeKey: "topology:" + probe.SegmentKey,
 		})
 	}
 
@@ -1503,12 +1524,13 @@ func collectTCPing(cfg Config, ruleProbes []ruleLatencyProbe, probes []tunnelPro
 	selected = append(selected, rotateTCPingTasks(tunnelTasks, &tcpingTunnelCursor, tunnelProbeLimit)...)
 	selected = append(selected, rotateTCPingTasks(forwardGroupTasks, &tcpingForwardGroupCursor, probeLimit)...)
 	selected = append(selected, rotateTCPingTasks(serviceTasks, &tcpingServiceCursor, serviceLimit)...)
+	selected = append(selected, rotateTCPingTasks(segmentTasks, &tcpingTopologyCursor, serviceLimit)...)
 	tcpingCursorMu.Unlock()
 	if len(selected) == 0 {
 		return
 	}
 
-	results, tunnels, forwardGroups, services := runTCPingTasks(selected)
+	results, tunnels, forwardGroups, services, segments := runTCPingTasks(selected)
 	results, tunnels, forwardGroups, services = filterRuntimeProbeResultsAfterActions(
 		startActionEpoch,
 		startedWithActionsPending,
@@ -1523,8 +1545,8 @@ func collectTCPing(cfg Config, ruleProbes []ruleLatencyProbe, probes []tunnelPro
 	tunnels = reportPlan.tunnels
 	forwardGroups = reportPlan.forwardGroups
 	services = reportPlan.services
-	if len(results) > 0 || len(tunnels) > 0 || len(forwardGroups) > 0 || len(services) > 0 {
-		payload := map[string]any{"results": results, "tunnels": tunnels, "forwardGroups": forwardGroups, "services": services, "force": force}
+	if len(results) > 0 || len(tunnels) > 0 || len(forwardGroups) > 0 || len(services) > 0 || len(segments) > 0 {
+		payload := map[string]any{"results": results, "tunnels": tunnels, "forwardGroups": forwardGroups, "services": services, "segments": segments, "force": force}
 		if err := post(cfg, "/api/agent/tcping", payload, &map[string]any{}); err != nil {
 			if isTransientAgentCommError(err) {
 				logAgentCommError("tcping-report", err)
@@ -1654,7 +1676,7 @@ func buildExplicitRuleLatencyProbeTask(probe ruleLatencyProbe) (tcpingTask, bool
 	}, true
 }
 
-func scheduleTCPingCollection(cfg Config, ruleProbes []ruleLatencyProbe, probes []tunnelProbe, groupProbes []forwardGroupProbe, serviceProbes []hostProbeServiceProbe, force bool) bool {
+func scheduleTCPingCollection(cfg Config, ruleProbes []ruleLatencyProbe, probes []tunnelProbe, groupProbes []forwardGroupProbe, serviceProbes []hostProbeServiceProbe, force bool, topologySegmentLists ...[]topologySegmentProbe) bool {
 	startActionEpoch := runtimeActionEpoch.Load()
 	startedWithActionsPending := atomic.LoadInt64(&actionPendingCount) > 0
 	if startedWithActionsPending && (len(ruleProbes) > 0 || len(probes) > 0 || len(groupProbes) > 0) {
@@ -1669,10 +1691,14 @@ func scheduleTCPingCollection(cfg Config, ruleProbes []ruleLatencyProbe, probes 
 	probesCopy := append([]tunnelProbe(nil), probes...)
 	groupProbesCopy := append([]forwardGroupProbe(nil), groupProbes...)
 	serviceProbesCopy := append([]hostProbeServiceProbe(nil), serviceProbes...)
+	topologySegmentsCopy := []topologySegmentProbe(nil)
+	if len(topologySegmentLists) > 0 {
+		topologySegmentsCopy = append(topologySegmentsCopy, topologySegmentLists[0]...)
+	}
 	go func() {
 		started := time.Now()
 		defer finishTCPingCollection()
-		collectTCPing(cfg, ruleProbesCopy, probesCopy, groupProbesCopy, serviceProbesCopy, force, startActionEpoch, startedWithActionsPending)
+		collectTCPing(cfg, ruleProbesCopy, probesCopy, groupProbesCopy, serviceProbesCopy, topologySegmentsCopy, force, startActionEpoch, startedWithActionsPending)
 		if elapsed := time.Since(started); elapsed >= 5*time.Second && shouldLogAgentReport("tcping-collect-slow-async", 5*time.Minute) {
 			logf("tcping collect slow duration=%s ruleProbes=%d tunnels=%d groups=%d services=%d force=%v", elapsed.Round(time.Millisecond), len(ruleProbesCopy), len(probesCopy), len(groupProbesCopy), len(serviceProbesCopy), force)
 		}
@@ -1825,7 +1851,7 @@ func rotateTCPingTasks(tasks []tcpingTask, cursor *int, limit int) []tcpingTask 
 	return selected
 }
 
-func runTCPingTasks(tasks []tcpingTask) ([]map[string]any, []map[string]any, []map[string]any, []map[string]any) {
+func runTCPingTasks(tasks []tcpingTask) ([]map[string]any, []map[string]any, []map[string]any, []map[string]any, []map[string]any) {
 	workerCount := tcpingTaskConcurrency(len(tasks))
 	out := make(chan tcpingTaskResult, len(tasks))
 	jobs := make(chan tcpingTask, workerCount)
@@ -1849,6 +1875,7 @@ func runTCPingTasks(tasks []tcpingTask) ([]map[string]any, []map[string]any, []m
 	tunnels := []map[string]any{}
 	forwardGroups := []map[string]any{}
 	services := []map[string]any{}
+	segments := []map[string]any{}
 	for result := range out {
 		if result.Payload == nil {
 			continue
@@ -1862,9 +1889,11 @@ func runTCPingTasks(tasks []tcpingTask) ([]map[string]any, []map[string]any, []m
 			forwardGroups = append(forwardGroups, result.Payload)
 		case "service":
 			services = append(services, result.Payload)
+		case "topologySegment":
+			segments = append(segments, result.Payload)
 		}
 	}
-	return results, tunnels, forwardGroups, services
+	return results, tunnels, forwardGroups, services, segments
 }
 
 func tcpingTaskConcurrency(taskCount int) int {
@@ -1904,7 +1933,7 @@ func executeTCPingTaskWithProbes(
 	if task.Kind == "forwardGroup" && task.Method == "self" {
 		measurement.Reachable = true
 		measurement.ProbeSuccesses = 1
-	} else if (task.Kind == "rule" || task.Kind == "forwardGroup" || task.Kind == "service") && task.Method == "ping" {
+	} else if (task.Kind == "rule" || task.Kind == "forwardGroup" || task.Kind == "service" || task.Kind == "topologySegment") && task.Method == "ping" {
 		if pingProbe != nil {
 			measurement = pingProbe(task.TargetIP, tcpingProbeTimeout, tcpingPingProbeCount)
 		}
@@ -1977,6 +2006,13 @@ func executeTCPingTaskWithProbes(
 		payload["serviceId"] = task.ServiceID
 		if task.LandingServiceID > 0 {
 			payload["landingServiceId"] = task.LandingServiceID
+		}
+		payload["method"] = task.Method
+	case "topologySegment":
+		payload["ruleId"] = task.RuleID
+		payload["segmentKey"] = task.TopologyKey
+		if task.TargetHostID > 0 {
+			payload["targetHostId"] = task.TargetHostID
 		}
 		payload["method"] = task.Method
 	default:

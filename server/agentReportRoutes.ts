@@ -4,6 +4,7 @@ import { isHostMetricsWatching, pushAgentRefresh } from "./agentEvents";
 import {
   isAgentForwardGroupLatencyResult,
   isAgentHostProbeServiceResult,
+  isAgentTopologySegmentLatencyResult,
   isAgentHostTrafficStat,
   isAgentLandingTrafficStat,
   isAgentTcpingResult,
@@ -12,6 +13,7 @@ import {
   normalizeAgentProbeCounts,
   type AgentForwardGroupLatencyResult,
   type AgentHostProbeServiceResult,
+  type AgentTopologySegmentLatencyResult,
   type AgentHostTrafficStat,
   type AgentTcpingResult,
   type AgentTrafficStat,
@@ -1065,6 +1067,9 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
       ? req.body.services
       : (Array.isArray(req.body?.serviceResults) ? req.body.serviceResults : []);
     const parsedServiceResults: AgentHostProbeServiceResult[] = rawServiceResults.filter(isAgentHostProbeServiceResult);
+    const parsedSegmentResults: AgentTopologySegmentLatencyResult[] = Array.isArray(req.body?.segments)
+      ? req.body.segments.filter(isAgentTopologySegmentLatencyResult)
+      : [];
     // Normalize the optional counters once at the ingress boundary.  This
     // keeps old Agents (which omit them) compatible while preserving partial
     // packet loss reported by newer Agents through every persistence path.
@@ -1073,6 +1078,7 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
       ...parsedTunnelResults,
       ...parsedForwardGroupResults,
       ...parsedServiceResults,
+      ...parsedSegmentResults,
     ]) {
       const probeCounts = normalizeAgentProbeCounts(report, { legacyZeroAsSuccess: false });
       Object.assign(report, probeCounts);
@@ -1082,11 +1088,49 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
       // timeout even if an Agent used an inconsistent legacy boolean.
       report.isTimeout = probeCounts.probeSuccesses <= 0;
     }
-    if (parsedResults.length === 0 && parsedTunnelResults.length === 0 && parsedForwardGroupResults.length === 0 && parsedServiceResults.length === 0) {
-      res.status(400).json({ error: "results, tunnels, forwardGroups or services array is required" });
+    if (parsedResults.length === 0 && parsedTunnelResults.length === 0 && parsedForwardGroupResults.length === 0 && parsedServiceResults.length === 0 && parsedSegmentResults.length === 0) {
+      res.status(400).json({ error: "results, tunnels, forwardGroups, services or segments array is required" });
       return;
     }
     const force = req.body?.force === true;
+    // Agent reports are accepted only for a rule it owns and for the exact
+    // destination saved by the Panel; this prevents arbitrary probe rows.
+    const acceptedSegments: any[] = [];
+    const sourceHostId = Number(host.id);
+    if (parsedSegmentResults.length > 0) {
+      const sourceRuntimeRules = await db.getForwardRulesForAgent(sourceHostId);
+      const targetHostIdByAddress = new Map<string, number>();
+      for (const candidate of await db.getHosts()) {
+        for (const address of [(candidate as any).entryIp, (candidate as any).ipv4, (candidate as any).ip, (candidate as any).publicIp, (candidate as any).exitIp]) {
+          const normalized = String(address || "").trim().toLowerCase();
+          if (normalized && !targetHostIdByAddress.has(normalized)) targetHostIdByAddress.set(normalized, Number((candidate as any).id));
+        }
+      }
+      for (const report of parsedSegmentResults) {
+        const targetAddress = String(report.targetIp || "").trim();
+        const method = report.method === "ping" ? "ping" : "tcp";
+        const targetPort = Number(report.targetPort || 0);
+        // The key is deterministic and binds this report to both the reporting
+        // host and its configured destination; do not persist Agent-supplied
+        // arbitrary segment identifiers.
+        const expectedKey = `topology-v1:${sourceHostId}:${targetAddress.toLowerCase()}:${targetPort}:${method}`;
+        if (String(report.segmentKey).trim() !== expectedKey) continue;
+        const runtimeRules = (sourceRuntimeRules as any[]).filter((rule: any) => (
+          String(rule.targetIp || "").trim().toLowerCase() === targetAddress.toLowerCase()
+          && (method === "ping" || Number(rule.targetPort || 0) === targetPort)
+          && rule.isEnabled !== false && !rule.pendingDelete
+        ));
+        if (!runtimeRules.some((rule: any) => Number(rule.id) === Number(report.ruleId) || Number(rule.forwardGroupRuleId || 0) === Number(report.ruleId))) continue;
+        const targetHostId = targetHostIdByAddress.get(targetAddress.toLowerCase()) || null;
+        for (const runtimeRule of runtimeRules) acceptedSegments.push({
+          ruleId: Number(runtimeRule.forwardGroupRuleId || runtimeRule.id), sourceHostId, targetHostId,
+          targetAddress, targetPort, segmentKey: expectedKey, method,
+          latencyMs: report.latencyMs == null ? null : Number(report.latencyMs), isTimeout: !!report.isTimeout,
+          probeCount: Number(report.probeCount) || 1, probeSuccesses: Number(report.probeSuccesses) || 0,
+        });
+      }
+    }
+    if (acceptedSegments.length > 0) await db.recordTopologySegmentLatency(acceptedSegments);
     const topologyGatePlan = agentTcpingReportGate.plan({
       hostId: Number(host.id),
       force,

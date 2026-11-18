@@ -40,6 +40,7 @@ type AgentRefreshOptions = {
 
 const agentEventClients = new Map<number, AgentEventClient>();
 const hostMetricsWatchUntil = new Map<number, number>();
+const hostTopologyTrafficWatchUntil = new Map<number, number>();
 const hostTcpingRequestUntil = new Map<number, number>();
 const hostRefreshPushedAt = new Map<number, number>();
 const agentEventLogAt = new Map<string, number>();
@@ -71,6 +72,7 @@ function logAgentEventIssue(hostId: number, event: string, reason: string) {
 function pruneAgentEventCaches(now = Date.now()) {
   pruneMapEntries(hostRefreshPushedAt, (lastAt) => now - lastAt >= AGENT_EVENT_CACHE_RETENTION_MS);
   pruneMapEntries(hostMetricsWatchUntil, (until) => until <= now);
+  pruneMapEntries(hostTopologyTrafficWatchUntil, (until) => until <= now);
   pruneMapEntries(hostTcpingRequestUntil, (until) => until <= now);
   pruneMapEntries(agentEventLogAt, (lastAt) => now - lastAt >= AGENT_EVENT_CACHE_RETENTION_MS);
 }
@@ -402,6 +404,22 @@ export function isHostMetricsWatching(hostId: number, now = Date.now()) {
   return true;
 }
 
+export function markHostTopologyTrafficWatching(hostIds: number[], ttlMs = 2_500, now = Date.now()) {
+  const until = now + ttlMs;
+  for (const id of hostIds) {
+    if (Number.isFinite(id) && id > 0) hostTopologyTrafficWatchUntil.set(id, until);
+  }
+}
+
+export function isHostTopologyTrafficWatching(hostId: number, now = Date.now()) {
+  const until = hostTopologyTrafficWatchUntil.get(hostId) || 0;
+  if (until <= now) {
+    hostTopologyTrafficWatchUntil.delete(hostId);
+    return false;
+  }
+  return true;
+}
+
 export function requestHostTcping(hostId: number, ttlMs = 60_000) {
   const id = Number(hostId);
   if (!Number.isFinite(id) || id <= 0) return false;
@@ -433,6 +451,7 @@ export function pushAgentDesiredState(
     desiredState?: unknown;
     runningRules?: unknown[];
     ruleLatencyProbes?: unknown[];
+    topologySegmentProbes?: unknown[];
     stateSignatures?: Record<string, string>;
   }
 ) {

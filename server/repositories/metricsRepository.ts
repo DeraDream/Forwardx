@@ -2353,6 +2353,172 @@ export async function getTrafficSeriesByRule(
   })).filter((r: { bucket: Date }) => r.bucket.getTime() / 1000 >= sinceSec);
 }
 
+/**
+ * Latest raw Agent traffic sample rate for each requested rule. Unlike chart
+ * buckets, this preserves the Agent reporting cadence (normally 3s while a
+ * metrics view is open, otherwise 30s).
+ */
+export async function getLiveTrafficRatesByRule(ruleIds: number[]) {
+  const requestedIds = Array.from(new Set(ruleIds
+    .map((id) => Number(id))
+    .filter((id) => Number.isInteger(id) && id > 0)));
+  if (requestedIds.length === 0) {
+    return [] as Array<{ ruleId: number; bytesInPerSecond: number; bytesOutPerSecond: number; reportedAt: Date | null }>;
+  }
+  const expanded = await expandTrafficQueryRuleIds(requestedIds);
+  if (expanded.queryRuleIds.length === 0) {
+    return requestedIds.map((ruleId) => ({ ruleId, bytesInPerSecond: 0, bytesOutPerSecond: 0, reportedAt: null }));
+  }
+  const nowSec = epochSeconds(nowDate());
+  const q = quoteIdentifier;
+  const rows = await queryRaw<{ ruleId: number; recordedAt: number; bytesIn: number; bytesOut: number }>(
+    `SELECT ${q("ruleId")} AS ${q("ruleId")}, ${q("recordedAt")} AS ${q("recordedAt")},
+            COALESCE(SUM(${q("bytesIn")}), 0) AS ${q("bytesIn")},
+            COALESCE(SUM(${q("bytesOut")}), 0) AS ${q("bytesOut")}
+       FROM ${q("traffic_stats")}
+      WHERE ${q("ruleId")} IN (${expanded.queryRuleIds.map(() => "?").join(",")})
+        AND ${q("recordedAt")} >= ?
+      GROUP BY ${q("ruleId")}, ${q("recordedAt")}
+      ORDER BY ${q("recordedAt")} DESC`,
+    [...expanded.queryRuleIds, nowSec - 90],
+  );
+  const samplesByRule = new Map<number, Map<number, { recordedAt: number; bytesIn: number; bytesOut: number }>>();
+  for (const row of rows) {
+    const sourceRuleId = Number(row.ruleId || 0);
+    const ruleId = expanded.parentByChildRuleId.get(sourceRuleId) || sourceRuleId;
+    if (!requestedIds.includes(ruleId)) continue;
+    const recordedAt = Number(row.recordedAt || 0);
+    const samples = samplesByRule.get(ruleId) || new Map();
+    const sample = samples.get(recordedAt) || { recordedAt, bytesIn: 0, bytesOut: 0 };
+    sample.bytesIn += Math.max(0, Number(row.bytesIn) || 0);
+    sample.bytesOut += Math.max(0, Number(row.bytesOut) || 0);
+    samples.set(recordedAt, sample);
+    samplesByRule.set(ruleId, samples);
+  }
+  return requestedIds.map((ruleId) => {
+    const samples = Array.from(samplesByRule.get(ruleId)?.values() || []).sort((a, b) => b.recordedAt - a.recordedAt);
+    const latest = samples[0];
+    const previous = samples[1];
+    if (!latest || !previous || nowSec - latest.recordedAt > 90) {
+      return { ruleId, bytesInPerSecond: 0, bytesOutPerSecond: 0, reportedAt: latest ? new Date(latest.recordedAt * 1000) : null };
+    }
+    const elapsed = Math.max(1, latest.recordedAt - previous.recordedAt);
+    return {
+      ruleId,
+      bytesInPerSecond: latest.bytesIn / elapsed,
+      bytesOutPerSecond: latest.bytesOut / elapsed,
+      reportedAt: new Date(latest.recordedAt * 1000),
+    };
+  });
+}
+
+export type TopologySegmentLatencySample = {
+  ruleId: number;
+  sourceHostId: number;
+  targetHostId?: number | null;
+  targetAddress: string;
+  targetPort?: number;
+  segmentKey: string;
+  method: "tcp" | "ping";
+  latencyMs: number | null;
+  isTimeout: boolean;
+  probeCount?: number;
+  probeSuccesses?: number;
+  recordedAt?: Date;
+  /** Rolling values from the most recent samples for UI health display. */
+  successRate?: number;
+  jitterMs?: number | null;
+  sampleCount?: number;
+};
+
+export async function recordTopologySegmentLatency(samples: TopologySegmentLatencySample[]) {
+  const rows = samples.filter((sample) => (
+    Number.isInteger(sample.ruleId) && sample.ruleId > 0
+    && Number.isInteger(sample.sourceHostId) && sample.sourceHostId > 0
+    && String(sample.targetAddress || "").trim().length > 0
+    && String(sample.segmentKey || "").trim().length > 0
+  ));
+  if (rows.length === 0) return;
+  const q = quoteIdentifier;
+  await executeRaw(
+    `INSERT INTO ${q("topology_segment_latency_stats")}
+      (${q("ruleId")}, ${q("sourceHostId")}, ${q("targetHostId")}, ${q("targetAddress")}, ${q("targetPort")}, ${q("segmentKey")}, ${q("method")}, ${q("latencyMs")}, ${q("isTimeout")}, ${q("probeCount")}, ${q("probeSuccesses")}, ${q("recordedAt")})
+     VALUES ${rows.map(() => "(?,?,?,?,?,?,?,?,?,?,?,?)").join(",")}`,
+    rows.flatMap((sample) => [
+      sample.ruleId,
+      sample.sourceHostId,
+      Number(sample.targetHostId || 0) || null,
+      String(sample.targetAddress).trim().slice(0, 253),
+      Math.max(0, Math.min(65535, Number(sample.targetPort) || 0)),
+      String(sample.segmentKey).trim().slice(0, 191),
+      sample.method === "ping" ? "ping" : "tcp",
+      sample.isTimeout ? null : Math.max(1, Math.round(Number(sample.latencyMs) || 0)),
+      !!sample.isTimeout,
+      Math.max(1, Math.floor(Number(sample.probeCount) || 1)),
+      Math.max(0, Math.floor(Number(sample.probeSuccesses) || 0)),
+      epochSeconds(sample.recordedAt || nowDate()),
+    ]),
+  );
+}
+
+export async function getLatestTopologySegmentLatency(ruleIds: number[]) {
+  const ids = Array.from(new Set(ruleIds.map(Number).filter((id) => Number.isInteger(id) && id > 0)));
+  if (ids.length === 0) return [] as TopologySegmentLatencySample[];
+  const q = quoteIdentifier;
+  const rows = await queryRaw<any>(
+    `SELECT s.* FROM ${q("topology_segment_latency_stats")} s
+      INNER JOIN (
+        SELECT ${q("segmentKey")} AS ${q("segmentKey")}, MAX(${q("recordedAt")}) AS ${q("recordedAt")}
+          FROM ${q("topology_segment_latency_stats")}
+         WHERE ${q("ruleId")} IN (${ids.map(() => "?").join(",")})
+         GROUP BY ${q("segmentKey")}
+      ) latest ON latest.${q("segmentKey")} = s.${q("segmentKey")} AND latest.${q("recordedAt")} = s.${q("recordedAt")}
+     WHERE s.${q("ruleId")} IN (${ids.map(() => "?").join(",")})`,
+    [...ids, ...ids],
+  );
+  const latest = rows.map((row: any) => ({
+    ruleId: Number(row.ruleId), sourceHostId: Number(row.sourceHostId), targetHostId: Number(row.targetHostId) || null,
+    targetAddress: String(row.targetAddress || ""), targetPort: Number(row.targetPort) || 0,
+    segmentKey: String(row.segmentKey || ""), method: String(row.method) === "ping" ? "ping" : "tcp",
+    latencyMs: row.latencyMs == null ? null : Number(row.latencyMs), isTimeout: rowBool(row.isTimeout),
+    probeCount: Number(row.probeCount) || 1, probeSuccesses: Number(row.probeSuccesses) || 0,
+    recordedAt: rowDate(row.recordedAt),
+  })) as TopologySegmentLatencySample[];
+  const segmentKeys = Array.from(new Set(latest.map((sample) => sample.segmentKey).filter(Boolean)));
+  if (segmentKeys.length === 0) return latest;
+  // Keep a compact rolling window per physical leg. This deliberately uses
+  // probe counters (rather than rows) so ping packet loss is reflected.
+  const history = await queryRaw<any>(
+    `SELECT ${q("segmentKey")}, ${q("latencyMs")}, ${q("probeCount")}, ${q("probeSuccesses")}
+       FROM (
+         SELECT ${q("segmentKey")}, ${q("latencyMs")}, ${q("probeCount")}, ${q("probeSuccesses")},
+                ROW_NUMBER() OVER (PARTITION BY ${q("segmentKey")} ORDER BY ${q("recordedAt")} DESC) AS ${q("sampleRank")}
+           FROM ${q("topology_segment_latency_stats")}
+          WHERE ${q("segmentKey")} IN (${segmentKeys.map(() => "?").join(",")})
+       ) recent
+      WHERE ${q("sampleRank")} <= 20`,
+    segmentKeys,
+  );
+  const historyByKey = new Map<string, any[]>();
+  for (const row of history) {
+    const key = String(row.segmentKey || "");
+    const samples = historyByKey.get(key) || [];
+    if (samples.length < 20) samples.push(row);
+    historyByKey.set(key, samples);
+  }
+  return latest.map((sample) => {
+    const samples = historyByKey.get(sample.segmentKey) || [];
+    const probeCount = samples.reduce((sum, row) => sum + Math.max(1, Number(row.probeCount) || 1), 0);
+    const successes = samples.reduce((sum, row) => sum + Math.max(0, Number(row.probeSuccesses) || 0), 0);
+    const latencies = samples.map((row) => row.latencyMs == null ? null : Number(row.latencyMs)).filter((value): value is number => Number.isFinite(value));
+    const mean = latencies.length ? latencies.reduce((sum, value) => sum + value, 0) / latencies.length : 0;
+    const jitterMs = latencies.length > 1
+      ? Math.sqrt(latencies.reduce((sum, value) => sum + (value - mean) ** 2, 0) / latencies.length)
+      : null;
+    return { ...sample, sampleCount: samples.length, successRate: probeCount ? successes / probeCount : 0, jitterMs };
+  });
+}
+
 /** Aggregate global traffic trend by time bucket for the dashboard. */
 export async function getGlobalTrafficSeries(opts: { bucketMinutes?: number; since?: Date; userId?: number } = {}) {
   const db = await getDb();

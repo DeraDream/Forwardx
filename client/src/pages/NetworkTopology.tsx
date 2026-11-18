@@ -14,6 +14,7 @@ import {
   Route,
   Search,
   Server,
+  Stethoscope,
   Waypoints,
 } from "lucide-react";
 import DashboardLayout from "@/components/DashboardLayout";
@@ -637,17 +638,31 @@ type TopologyPathMetrics = {
 function TopologyLane({
   path,
   metrics,
+  segments,
   selected,
   onSelectPath,
   onSelectNode,
 }: {
   path: PhysicalPath;
   metrics?: TopologyPathMetrics;
+  segments?: Array<{ sourceHostId: number; targetHostId?: number | null; targetAddress: string; targetPort: number; latencyMs: number | null; isTimeout: boolean; method?: string; recordedAt?: Date | string; successRate?: number; jitterMs?: number | null; sampleCount?: number }>;
   selected: boolean;
   onSelectPath: () => void;
   onSelectNode: (node: PhysicalNode) => void;
 }) {
   const nodes = [path.entry, ...path.relays, path.landing];
+  const segmentForSource = (node: PhysicalNode, next: PhysicalNode) => {
+    const hostId = Number(String(node.id).replace(/^host:/, ""));
+    const nextHostId = Number(String(next.id).replace(/^host:/, ""));
+    const addresses = [next.subtitle, next.label]
+      .map((value) => String(value || "").trim().toLowerCase())
+      .filter(Boolean);
+    return segments?.find((segment) => (
+      segment.sourceHostId === hostId
+      && (segment.targetHostId === nextHostId
+        || addresses.includes(String(segment.targetAddress || "").trim().toLowerCase()))
+    )) || null;
+  };
   return (
     <section
       className={cn(
@@ -675,12 +690,16 @@ function TopologyLane({
             const isManagedVps = node.id.startsWith("host:");
             return (
             <div key={`${path.id}:${node.id}:${index}`} className="flex items-center">
-              {index > 0 && (
-                <div className="flex w-14 shrink-0 items-center px-1.5">
+              {index > 0 && (() => {
+                const segment = segmentForSource(nodes[index - 1], nodes[index]);
+                const ageMs = segment?.recordedAt ? Date.now() - new Date(segment.recordedAt).getTime() : 0;
+                const stale = !!segment && (!Number.isFinite(ageMs) || ageMs > 3 * 60_000);
+                return <div className="relative flex w-14 shrink-0 items-center px-1.5">
                   <span className="h-0 flex-1 border-t border-dashed border-primary/65" />
                   <ArrowRight className="-ml-0.5 h-3 w-3 shrink-0 text-primary" />
-                </div>
-              )}
+                  {segment && <span title={segment.sampleCount ? `近 ${segment.sampleCount} 次成功率 ${Math.round((segment.successRate || 0) * 100)}%${segment.jitterMs == null ? "" : `，抖动 ${Math.round(segment.jitterMs)} ms`}` : undefined} className={cn("absolute -top-4 left-1/2 -translate-x-1/2 whitespace-nowrap rounded border bg-background px-1 text-[9px] tabular-nums", segment.isTimeout ? "border-destructive/35 text-destructive" : stale ? "border-amber-500/35 text-amber-700 dark:text-amber-300" : "border-border/50 text-muted-foreground")}>{segment.isTimeout ? (segment.method === "ping" ? "Ping 超时" : "超时") : stale ? `${Math.round(Number(segment.latencyMs) || 0)} ms · 过期` : `${segment.method === "ping" ? "Ping " : ""}${Math.round(Number(segment.latencyMs) || 0)} ms · ${Math.round((segment.successRate || 0) * 100)}%`}</span>}
+                </div>;
+              })()}
               <button
                 type="button"
                 onClick={() => onSelectNode(node)}
@@ -733,6 +752,7 @@ function NetworkTopologyContent() {
   const [showMinimap, setShowMinimap] = useState(false);
   const [layoutMode, setLayoutMode] = useState<"lanes" | "graph">("lanes");
   const [qualityTarget, setQualityTarget] = useState<LinkQualityTarget | null>(null);
+  const probeTopologySegments = trpc.rules.probeTopologySegments.useMutation();
 
   const hostsQuery = trpc.hosts.options.useQuery(undefined, {
     refetchInterval: pollingInterval("slow"),
@@ -794,12 +814,28 @@ function NetworkTopologyContent() {
     },
   );
   const rateRuleIds = useMemo(() => topologyRuleIds.slice(0, 100), [topologyRuleIds]);
+  const topologySegmentQuery = trpc.rules.topologySegmentLatency.useQuery(
+    { ruleIds: rateRuleIds },
+    { enabled: rateRuleIds.length > 0, refetchInterval: pollingInterval("active"), staleTime: 0, refetchOnWindowFocus: false },
+  );
+  const segmentsByRule = useMemo(() => {
+    const result = new Map<number, Array<{ sourceHostId: number; targetHostId?: number | null; targetAddress: string; targetPort: number; latencyMs: number | null; isTimeout: boolean; method?: string; recordedAt?: Date | string; successRate?: number; jitterMs?: number | null; sampleCount?: number }>>();
+    (topologySegmentQuery.data || []).forEach((segment: any) => {
+      const ruleId = Number(segment.ruleId || 0);
+      if (ruleId <= 0) return;
+      const list = result.get(ruleId) || [];
+      list.push({ sourceHostId: Number(segment.sourceHostId || 0), targetHostId: Number(segment.targetHostId || 0) || null, targetAddress: String(segment.targetAddress || ""), targetPort: Number(segment.targetPort || 0), latencyMs: segment.latencyMs == null ? null : Number(segment.latencyMs), isTimeout: !!segment.isTimeout, method: String(segment.method || ""), recordedAt: segment.recordedAt, successRate: segment.successRate == null ? undefined : Number(segment.successRate), jitterMs: segment.jitterMs == null ? null : Number(segment.jitterMs), sampleCount: Number(segment.sampleCount || 0) || undefined });
+      result.set(ruleId, list);
+    });
+    return result;
+  }, [topologySegmentQuery.data]);
   const trafficRateQuery = trpc.rules.trafficRateBatch.useQuery(
     { ruleIds: rateRuleIds },
     {
       enabled: rateRuleIds.length > 0,
-      refetchInterval: pollingInterval("normal"),
-      staleTime: 5_000,
+      // While topology is open the existing Agent reporter is requested at 1s.
+      refetchInterval: pollingInterval("realtime"),
+      staleTime: 0,
       refetchOnWindowFocus: false,
     },
   );
@@ -1002,6 +1038,7 @@ function NetworkTopologyContent() {
                   key={path.id}
                   path={path}
                   metrics={path.ruleId ? trafficByRule.get(path.ruleId) : undefined}
+                  segments={path.ruleId ? segmentsByRule.get(path.ruleId) : undefined}
                   selected={selectedPathId === path.id}
                   onSelectPath={() => { setSelectedPathId(path.id); setSelectedNodeId(null); setSelectedEdgeId(null); }}
                   onSelectNode={(node) => { setSelectedPathId(path.id); setSelectedNodeId(node.id); setSelectedEdgeId(null); }}
@@ -1124,7 +1161,12 @@ function NetworkTopologyContent() {
                   <div className="break-words leading-6">{[selectedPath.entry, ...selectedPath.relays, selectedPath.landing].map((node) => node.label).join(" → ")}</div>
                   {selectedRule && <div className="space-y-1 text-muted-foreground"><div>规则协议：{String(selectedRule.protocol || "未知").toUpperCase()}</div><div>入口端口：{selectedRule.sourcePort || "未知"}</div><div>规则目标：{selectedRule.targetIp || "未知"}{selectedRule.targetPort ? `:${selectedRule.targetPort}` : ""}</div></div>}
                   <p className="text-muted-foreground">路径根据面板配置生成，不代表端到端业务已验证。</p>
-                  <a className="text-primary underline" href={selectedRule ? topologyRuleHref(Number(selectedRule.id)) : "/tunnels"}>打开{selectedRule ? "该转发规则" : "链路管理"}</a>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <a className="text-primary underline" href={selectedRule ? topologyRuleHref(Number(selectedRule.id)) : "/tunnels"}>打开{selectedRule ? "该转发规则" : "链路管理"}</a>
+                    {selectedPath.ruleId && <Button size="sm" variant="outline" className="h-7 gap-1 text-[11px]" disabled={probeTopologySegments.isPending} onClick={() => probeTopologySegments.mutate({ ruleIds: [selectedPath.ruleId!] })}>
+                      <Stethoscope className="h-3 w-3" />立即探测路径
+                    </Button>}
+                  </div>
                 </div>
               )}
               {selectedNode ? (

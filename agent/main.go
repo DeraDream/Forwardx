@@ -37,7 +37,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.231"
+var Version = "2.2.232"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -848,6 +848,7 @@ type heartbeatResp struct {
 	SelfTests               []selfTest               `json:"selfTests"`
 	RunningRules            []runningRule            `json:"runningRules"`
 	RuleLatencyProbes       []ruleLatencyProbe       `json:"ruleLatencyProbes"`
+	TopologySegmentProbes   []topologySegmentProbe   `json:"topologySegmentProbes"`
 	TunnelProbes            []tunnelProbe            `json:"tunnelProbes"`
 	ForwardGroupProbes      []forwardGroupProbe      `json:"forwardGroupProbes"`
 	HostProbeServices       []hostProbeServiceProbe  `json:"hostProbeServices"`
@@ -887,13 +888,14 @@ type panelMigrationDirective struct {
 }
 
 type heartbeatStateSnapshot struct {
-	RunningRules       []runningRule
-	RuleLatencyProbes  []ruleLatencyProbe
-	TunnelProbes       []tunnelProbe
-	ForwardGroupProbes []forwardGroupProbe
-	HostProbeServices  []hostProbeServiceProbe
-	GuardRules         []guardRule
-	DNSWatch           []dnsWatchItem
+	RunningRules          []runningRule
+	RuleLatencyProbes     []ruleLatencyProbe
+	TopologySegmentProbes []topologySegmentProbe
+	TunnelProbes          []tunnelProbe
+	ForwardGroupProbes    []forwardGroupProbe
+	HostProbeServices     []hostProbeServiceProbe
+	GuardRules            []guardRule
+	DNSWatch              []dnsWatchItem
 }
 
 type localRuntimeStatePayload struct {
@@ -981,6 +983,12 @@ func applyHeartbeatState(resp heartbeatResp) heartbeatStateSnapshot {
 		heartbeatStateCache.RuleLatencyProbes = append([]ruleLatencyProbe(nil), resp.RuleLatencyProbes...)
 		if !hasStateSignature("ruleLatencyProbes") {
 			delete(heartbeatStateSignatures, "ruleLatencyProbes")
+		}
+	}
+	if resp.TopologySegmentProbes != nil {
+		heartbeatStateCache.TopologySegmentProbes = append([]topologySegmentProbe(nil), resp.TopologySegmentProbes...)
+		if !hasStateSignature("topologySegmentProbes") {
+			delete(heartbeatStateSignatures, "topologySegmentProbes")
 		}
 	}
 	if resp.TunnelProbes != nil {
@@ -2507,6 +2515,15 @@ type ruleLatencyProbe struct {
 	GroupHealth *forwardGroupHealthSpec `json:"forwardGroupHealth,omitempty"`
 }
 
+type topologySegmentProbe struct {
+	RuleID       int    `json:"ruleId"`
+	SegmentKey   string `json:"segmentKey"`
+	TargetHostID int    `json:"targetHostId,omitempty"`
+	TargetIP     string `json:"targetIp"`
+	TargetPort   int    `json:"targetPort,omitempty"`
+	Method       string `json:"method"`
+}
+
 type hostProbeServiceProbe struct {
 	ServiceID        int    `json:"serviceId"`
 	LandingServiceID int    `json:"landingServiceId,omitempty"`
@@ -3296,7 +3313,7 @@ func scheduleAgentTCPing(cfg Config, force bool) bool {
 	if !force && !due {
 		return false
 	}
-	if scheduleTCPingCollection(cfg, state.RuleLatencyProbes, state.TunnelProbes, state.ForwardGroupProbes, state.HostProbeServices, force) {
+	if scheduleTCPingCollection(cfg, state.RuleLatencyProbes, state.TunnelProbes, state.ForwardGroupProbes, state.HostProbeServices, force, state.TopologySegmentProbes) {
 		tcpingScheduleMu.Lock()
 		lastTCPingAt = time.Now()
 		tcpingScheduleMu.Unlock()

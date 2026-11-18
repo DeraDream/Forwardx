@@ -4,6 +4,7 @@ import * as db from "../db";
 import { lookupAddressGeo } from "../hostGeo";
 import { requireRuleAccess } from "./helpers";
 import { appendPanelLog } from "../_core/panelLogger";
+import { markHostTopologyTrafficWatching, requestHostTcping } from "../agentEvents";
 import { ruleTrafficQueryCache as trafficQueryCache } from "../ruleLatencyQueryCache";
 
 const TRAFFIC_RETENTION_HOURS = 24 * 3;
@@ -121,6 +122,27 @@ export const trafficRulesRouter = router({
           }),
       );
     }),
+  probeTopologySegments: protectedProcedure
+    .input(z.object({ ruleIds: z.array(z.number().int().positive()).min(1).max(100) }))
+    .mutation(async ({ input, ctx }) => {
+      const requestedIds = new Set<number>(input.ruleIds);
+      const visibleRules = await db.getForwardRules(ctx.user.role === "admin" ? undefined : ctx.user.id);
+      const hostIds = Array.from(new Set<number>((visibleRules || [])
+        .filter((rule: any) => requestedIds.has(Number(rule.id)) || requestedIds.has(Number(rule.forwardGroupRuleId || 0)))
+        .map((rule: any) => Number(rule.hostId || 0))
+        .filter((hostId: number) => hostId > 0)));
+      hostIds.forEach((hostId) => requestHostTcping(hostId, 30_000));
+      return { requestedHosts: hostIds.length };
+    }),
+  topologySegmentLatency: protectedProcedure
+    .input(z.object({ ruleIds: z.array(z.number().int().positive()).max(100) }))
+    .query(async ({ input, ctx }) => {
+      const requestedIds = Array.from(new Set(input.ruleIds)).sort((a, b) => a - b);
+      if (requestedIds.length === 0) return [];
+      const visibleRules = await db.getForwardRules(ctx.user.role === "admin" ? undefined : ctx.user.id);
+      const visibleIds = new Set((visibleRules || []).map((rule: any) => Number(rule.id)).filter((id: number) => id > 0));
+      return db.getLatestTopologySegmentLatency(requestedIds.filter((id) => visibleIds.has(id)));
+    }),
   trafficRateBatch: protectedProcedure
     .input(z.object({ ruleIds: z.array(z.number().int().positive()).max(100) }))
     .query(async ({ input, ctx }) => {
@@ -129,31 +151,19 @@ export const trafficRulesRouter = router({
       const visibleRules = await db.getForwardRules(ctx.user.role === "admin" ? undefined : ctx.user.id);
       const visibleIds = new Set((visibleRules || []).map((rule: any) => Number(rule.id)).filter((id: number) => id > 0));
       const ruleIds = requestedIds.filter((id) => visibleIds.has(id));
-      const now = Date.now();
+      // Keep the existing Agent traffic reporter in its interactive mode while
+      // the topology is open. This is not a second probe or sampler.
+      markHostTopologyTrafficWatching(
+        (visibleRules || [])
+          .filter((rule: any) => ruleIds.includes(Number(rule.id)))
+          .map((rule: any) => Number(rule.hostId || 0))
+          .filter((hostId: number) => hostId > 0),
+        2_500,
+      );
       return trafficQueryCache.get(
-        `rate:${ctx.user.id}:${ruleIds.join(",")}:${Math.floor(now / 30_000)}`,
-        { ttlMs: 10_000, staleMs: 0 },
-        async () => {
-          const result: Array<{ ruleId: number; bytesInPerSecond: number; bytesOutPerSecond: number }> = [];
-          // Keep the per-rule historical aggregation bounded; topology only asks
-          // for visible paths and must not stampede the metrics database.
-          for (let offset = 0; offset < ruleIds.length; offset += 8) {
-            const batch = await Promise.all(ruleIds.slice(offset, offset + 8).map(async (ruleId) => {
-              const rows = await db.getTrafficSeriesByRule(ruleId, {
-                bucketMinutes: 1,
-                since: new Date(now - 3 * 60_000),
-              });
-              const latest = rows[rows.length - 1];
-              return {
-                ruleId,
-                bytesInPerSecond: latest ? Math.max(0, Number(latest.bytesIn) || 0) / 60 : 0,
-                bytesOutPerSecond: latest ? Math.max(0, Number(latest.bytesOut) || 0) / 60 : 0,
-              };
-            }));
-            result.push(...batch);
-          }
-          return result;
-        },
+        `rate:${ctx.user.id}:${ruleIds.join(",")}`,
+        { ttlMs: 500, staleMs: 0 },
+        () => db.getLiveTrafficRatesByRule(ruleIds),
       );
     }),
   trafficSeries: protectedProcedure

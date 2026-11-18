@@ -70,6 +70,35 @@ test("SQLite host metric summaries seek only the latest two rows per host", asyn
     );
     assert.match(plan.map((row) => String(row.detail || "")).join(" | "), /idx_host_metrics_hostId_recordedAt/i);
 
+    const segmentRecordedAt = new Date((now - 10) * 1000);
+    await metrics.recordTopologySegmentLatency([
+      {
+        ruleId: 1, sourceHostId: 1, targetHostId: 2,
+        targetAddress: "198.51.100.2", targetPort: 443, segmentKey: "topology-v1:1:198.51.100.2:443:tcp",
+        method: "tcp", latencyMs: 20, isTimeout: false, probeCount: 2, probeSuccesses: 2,
+        recordedAt: segmentRecordedAt,
+      },
+      {
+        ruleId: 1, sourceHostId: 1, targetHostId: 2,
+        targetAddress: "198.51.100.2", targetPort: 443, segmentKey: "topology-v1:1:198.51.100.2:443:tcp",
+        method: "tcp", latencyMs: null, isTimeout: true, probeCount: 2, probeSuccesses: 0,
+        recordedAt: new Date((now - 5) * 1000),
+      },
+      {
+        ruleId: 1, sourceHostId: 1, targetHostId: 2,
+        targetAddress: "198.51.100.2", targetPort: 443, segmentKey: "topology-v1:1:198.51.100.2:443:tcp",
+        method: "tcp", latencyMs: 40, isTimeout: false, probeCount: 2, probeSuccesses: 1,
+        recordedAt: new Date(now * 1000),
+      },
+    ]);
+    const segments = await metrics.getLatestTopologySegmentLatency([1]);
+    assert.equal(segments.length, 1);
+    assert.equal(segments[0].targetHostId, 2);
+    assert.equal(segments[0].latencyMs, 40);
+    assert.equal(segments[0].sampleCount, 3);
+    assert.equal(segments[0].successRate, 0.5);
+    assert.equal(Math.round(Number(segments[0].jitterMs)), 10);
+
     await metrics.cleanOldHostMetrics(72);
     const [{ count }] = await runtime.queryRaw<{ count: number }>(
       `SELECT COUNT(*) AS count FROM host_metrics WHERE hostId = ?`,

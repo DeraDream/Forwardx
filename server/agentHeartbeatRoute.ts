@@ -1,7 +1,7 @@
 import { Router, Request, Response } from "express";
 import * as db from "./db";
 import { AGENT_VERSION } from "./_core/systemRouter";
-import { clearHostTcpingRequest, hasHostTcpingRequest, isHostMetricsWatching, pushAgentDesiredState } from "./agentEvents";
+import { clearHostTcpingRequest, hasHostTcpingRequest, isHostMetricsWatching, isHostTopologyTrafficWatching, pushAgentDesiredState } from "./agentEvents";
 import { AGENT_PLUGIN_TASK_VERSION, buildMetaAgentSelfTestPayload, buildRuleAgentSelfTestPayload, hasAgentVersionChanged, isAgentUpgradeTargetSatisfied, isAgentVersionAtLeast, parseSelfTestMeta, tunnelSecretSeed } from "./agentRouteUtils";
 import { resolveAgentAdvertisedPanelUrl } from "./agentPanelUrl";
 import { getAgentMigrationSwitchTarget, getPanelMigrationAgentDirective } from "./panelMigrationAgentState";
@@ -70,7 +70,7 @@ import {
 } from "./agentActionCommands";
 import { handleHostAddressChanged, hostIngressAddress, refreshAgentsAffectedByHostAddress } from "./hostAddressRuntime";
 import { isHostStatusOnline, notifyHostOnlineIfNeeded } from "./hostStatusNotifier";
-import { normalizeLinkProbeMethod } from "@shared/latencyProbe";
+import { normalizeLinkProbeMethod, ruleLatencyProbeMethodForRule } from "@shared/latencyProbe";
 import { buildPluginHostAssetSyncActions } from "./repositories/pluginRepository";
 import {
   forwardRuleProtocols,
@@ -314,6 +314,7 @@ const GOST_UDP_LISTENER_METADATA = {
 const AGENT_STATE_SECTION_NAMES = [
   "runningRules",
   "ruleLatencyProbes",
+  "topologySegmentProbes",
   "tunnelProbes",
   "forwardGroupProbes",
   "hostProbeServices",
@@ -1809,7 +1810,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
 
     if (busyHeartbeat) {
       const panelUrl = await resolveAgentAdvertisedPanelUrl();
-      const metricsWatching = isHostMetricsWatching(host.id);
+      const topologyTrafficWatching = isHostTopologyTrafficWatching(host.id);
+      const metricsWatching = isHostMetricsWatching(host.id) || topologyTrafficWatching;
       logAgentHeartbeatSummary({
         hostId: logHostId,
         hostName: logHostName,
@@ -1824,13 +1826,13 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         requestLocalState: localRuntimeState.requestLocalState,
         stable: false,
         metricsWatching,
-        nextInterval: metricsWatching ? 3 : 5,
+        nextInterval: metricsWatching ? (topologyTrafficWatching ? 1 : 3) : 5,
       });
       res.json(buildBusyAgentHeartbeatResponse({
         panelUrl,
         requestLocalState: localRuntimeState.requestLocalState,
         metricsWatching,
-        trafficReportInterval: metricsWatching ? 10 : undefined,
+        trafficReportInterval: metricsWatching ? (topologyTrafficWatching ? 1 : 10) : undefined,
       }));
       return;
     }
@@ -1873,7 +1875,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       agentLastAppliedHash,
     });
     if (stablePlan) {
-      const metricsWatching = isHostMetricsWatching(host.id);
+      const topologyTrafficWatching = isHostTopologyTrafficWatching(host.id);
+      const metricsWatching = isHostMetricsWatching(host.id) || topologyTrafficWatching;
       logAgentHeartbeatSummary({
         hostId: logHostId,
         hostName: logHostName,
@@ -1887,7 +1890,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         requestLocalState: false,
         stable: true,
         metricsWatching,
-        nextInterval: metricsWatching ? 3 : stablePlan.idleNextInterval,
+        nextInterval: metricsWatching ? (topologyTrafficWatching ? 1 : 3) : stablePlan.idleNextInterval,
       });
       res.json({
         success: true,
@@ -1899,12 +1902,12 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         agentUpgrade: null,
         panelUrl: stablePlan.panelUrl,
         forceTcping: false,
-        nextInterval: metricsWatching ? 3 : stablePlan.idleNextInterval,
+        nextInterval: metricsWatching ? (topologyTrafficWatching ? 1 : 3) : stablePlan.idleNextInterval,
         requestLocalState: false,
         compactReports: true,
         presenceSupported: true,
         metricsOnly: metricsWatching,
-        ...(metricsWatching ? { trafficReportInterval: 10 } : {}),
+        ...(metricsWatching ? { trafficReportInterval: topologyTrafficWatching ? 1 : 10 } : {}),
       });
       return;
     }
@@ -6163,6 +6166,41 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     ruleLatencyProbes.sort(
       (left: any, right: any) => Number(left.ruleId) - Number(right.ruleId),
     );
+    // Every runtime rule on this host is one physical non-tunnel forwarding
+    // leg. Group child rules retain their visible template rule ID so the
+    // topology can join all legs of one configured path.
+    const topologySegmentProbeMap = new Map<string, any>();
+    // Only attach a host ID when the configured target exactly matches one of
+    // its declared addresses. A DNS name or an arbitrary IP must remain an
+    // external target instead of being guessed as the next managed hop.
+    const targetHostIdByAddress = new Map<string, number>();
+    for (const candidate of await db.getHosts()) {
+      for (const address of [(candidate as any).entryIp, (candidate as any).ipv4, (candidate as any).ip, (candidate as any).publicIp, (candidate as any).exitIp]) {
+        const normalized = String(address || "").trim().toLowerCase();
+        if (normalized && !targetHostIdByAddress.has(normalized)) targetHostIdByAddress.set(normalized, Number((candidate as any).id));
+      }
+    }
+    for (const rule of agentAllRules as any[]) {
+      const tunnel = Number(rule?.tunnelId || 0) > 0 ? tunnelById.get(Number(rule.tunnelId)) : undefined;
+      if (!rule || runtimeBool(rule.pendingDelete) || !runtimeBool(rule.isEnabled) || !runtimeBool(rule.isRunning)
+        || (!!tunnel && !runtimeBool((tunnel as any).isEnabled))
+        || !isRuleProtocolEnabled(forwardProtocolSettings, rule, tunnel)) continue;
+      const targetIp = processTarget(rule);
+      const targetPort = Number(rule.targetPort || 0);
+      const method = ruleLatencyProbeMethodForRule(rule) === "ping" ? "ping" : "tcp";
+      const visibleRuleId = Number(rule.forwardGroupRuleId || rule.id);
+      if (!visibleRuleId || !targetIp || (method !== "ping" && targetPort <= 0)) continue;
+      // Probe a physical leg once per source/target/method, then fan its result
+      // back out to every visible rule using that leg.
+      const segmentKey = `topology-v1:${Number(host.id)}:${targetIp.toLowerCase()}:${targetPort}:${method}`;
+      if (!topologySegmentProbeMap.has(segmentKey)) {
+        topologySegmentProbeMap.set(segmentKey, {
+          ruleId: visibleRuleId, segmentKey, targetIp, targetPort, method,
+          targetHostId: targetHostIdByAddress.get(String(targetIp).trim().toLowerCase()) || undefined,
+        });
+      }
+    }
+    const topologySegmentProbes = Array.from(topologySegmentProbeMap.values());
     const hostProbeServices = await db.getHostProbeTasksForHost(host.id);
     if (landingHostEnabled) {
       for (const service of await db.getLandingServicesForHost(Number(host.id), false)) {
@@ -6701,7 +6739,10 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       || pluginSyncActionQueued
       || forceTcping
       || (hasPendingMultiHopRuntime && !hasTunnelApplyActions);
-    const nextInterval = selectAgentHeartbeatInterval({
+    const topologyTrafficWatching = isHostTopologyTrafficWatching(host.id);
+    const nextInterval = topologyTrafficWatching
+      ? 1
+      : selectAgentHeartbeatInterval({
       requestLocalState: localRuntimeState.requestLocalState,
       hasInteractiveTasks,
       metricsWatching: isHostMetricsWatching(host.id),
@@ -6730,13 +6771,14 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     const stateSections = buildAgentStateResponseSections({
       runningRules,
       ruleLatencyProbes,
+      topologySegmentProbes,
       tunnelProbes,
       forwardGroupProbes,
       hostProbeServices,
       guardRules,
       dnsWatch: Array.from(dnsWatches.values()),
     }, agentStateSignatures);
-    const probeStateRefreshed = ["runningRules", "ruleLatencyProbes", "tunnelProbes", "forwardGroupProbes", "hostProbeServices"]
+    const probeStateRefreshed = ["runningRules", "ruleLatencyProbes", "topologySegmentProbes", "tunnelProbes", "forwardGroupProbes", "hostProbeServices"]
       .some((name) => Object.prototype.hasOwnProperty.call(stateSections.payload, name));
     // 有 SSE 长连接时立即将 desiredState + runningRules 推送给 Agent，
     // 无需等待下一个心跳周期即可执行转发规则变更。
@@ -6757,13 +6799,15 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         desiredState,
         runningRules,
         ruleLatencyProbes,
+        topologySegmentProbes,
         stateSignatures: {
           runningRules: stateSections.signatures.runningRules,
           ruleLatencyProbes: stateSections.signatures.ruleLatencyProbes,
+          topologySegmentProbes: stateSections.signatures.topologySegmentProbes,
         },
       });
     }
-    const metricsWatching = isHostMetricsWatching(host.id);
+    const metricsWatching = isHostMetricsWatching(host.id) || topologyTrafficWatching;
     const stablePlanReady = supportsDesiredState
       && supportsStateSignatures
       && !!localRuntimeState.state
@@ -6852,7 +6896,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         && !hasInteractiveTasks
         && !localRuntimeState.requestLocalState
         && activeWorkActions.length === 0,
-      ...(metricsWatching ? { trafficReportInterval: 10 } : {}),
+      ...(metricsWatching ? { trafficReportInterval: topologyTrafficWatching ? 1 : 10 } : {}),
     });
   } catch (error) {
     console.error(`[Agent Heartbeat] Error host=${logHostId || "-"} name=${logHostName || "-"}:`, error);
