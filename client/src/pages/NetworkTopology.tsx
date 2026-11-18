@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { topologyPathEdgeIds } from "./networkTopologyPaths";
 import { topologyRuleHref } from "./topologyRuleLink";
 import { improveTopologyOrder } from "./topologyLayout";
-import { routeNaturalTopologyGraph, topologyRoutePath } from "./topologyRouting";
+import { routeTopologyGraph, topologyRoutePath } from "./topologyRouting";
 import { topologyEnabledFlag, visibleTopologyTunnelVariants } from "./topologyTunnelVariants";
 import { combineTopologyHostVariants, joinTopologyHostPaths, MAX_TOPOLOGY_VARIANTS, type TopologyExpansionState } from "./topologyExpansion";
 import {
@@ -590,8 +590,10 @@ function buildGraph(paths: PhysicalPath[]) {
 
   improveTopologyOrder(columns, edges, directOnlySinkIds);
 
-  const maxColumn = Math.max(landingColumn, ...Array.from(columns.keys()));
-  const routed = routeNaturalTopologyGraph(positionedNodes, edges);
+  // The relationship overview is a layered physical graph: shared HK→SG and
+  // HK→JP legs are represented once, while the router reserves lanes around
+  // cards so a dense connection bends rather than crossing a node.
+  const routed = routeTopologyGraph(positionedNodes, edges, directOnlySinkIds);
   return { nodes: positionedNodes, edges, ...routed };
 }
 

@@ -682,9 +682,11 @@ function DashboardLayoutContent({
     // The upgrade job remains persisted after the new panel starts. Refresh
     // only an older browser bundle; otherwise every page load schedules a
     // fresh 3-second reload forever.
-    if (normalizePanelVersion(upgradeStatus.job.targetVersion) !== normalizePanelVersion(APP_VERSION)) {
-      scheduleUpgradeRefresh();
-    }
+    const targetVersion = upgradeStatus.job.targetVersion;
+    const clientVersion = normalizePanelVersion(APP_VERSION);
+    const targetComparison = comparePanelVersions(clientVersion, targetVersion);
+    const clientHasTarget = upgradeStatus.job.mode === "rollback" ? targetComparison <= 0 : targetComparison >= 0;
+    if (!clientHasTarget) scheduleUpgradeRefresh();
   }, [scheduleUpgradeRefresh, upgradeStatus?.job?.status, upgradeStatus?.job?.targetVersion]);
 
   useEffect(() => {
@@ -706,9 +708,9 @@ function DashboardLayoutContent({
 
     clearPanelUpgradeSession();
     setBackgroundUpgrade(null);
-    if (normalizePanelVersion(backgroundUpgrade.targetVersion) !== normalizePanelVersion(APP_VERSION)) {
-      scheduleUpgradeRefresh();
-    }
+    const targetComparison = comparePanelVersions(APP_VERSION, backgroundUpgrade.targetVersion);
+    const clientHasTarget = backgroundUpgrade.mode === "rollback" ? targetComparison <= 0 : targetComparison >= 0;
+    if (!clientHasTarget) scheduleUpgradeRefresh();
   }, [
     backgroundUpgrade?.startedAt,
     backgroundUpgrade?.mode,
