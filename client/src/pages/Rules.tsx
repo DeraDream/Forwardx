@@ -2464,8 +2464,8 @@ function RuleTrafficGlobe({
     if (!globeReady || !globeRef.current) return;
     const globe = globeRef.current;
     const controls = globe.controls();
-    // Keep traffic routes stable for comparison; users can still drag the globe manually.
-    controls.autoRotate = false;
+    controls.autoRotate = true;
+    controls.autoRotateSpeed = 0.32;
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
     controls.enablePan = false;
@@ -2476,6 +2476,11 @@ function RuleTrafficGlobe({
     globe.pointOfView({ lat: 18, lng: 108, altitude: 1.28 }, 0);
   }, [globeReady]);
 
+  useEffect(() => {
+    const controls = globeRef.current?.controls();
+    if (!controls) return;
+    controls.autoRotate = !(hoveredPath || hoveredPoint);
+  }, [hoveredPath, hoveredPoint]);
 
   return (
     <>
