@@ -4,7 +4,7 @@ import * as db from "../db";
 import { lookupAddressGeo } from "../hostGeo";
 import { requireRuleAccess } from "./helpers";
 import { appendPanelLog } from "../_core/panelLogger";
-import { markHostTopologyTrafficWatching, requestHostTcping } from "../agentEvents";
+import { markHostTopologyTrafficWatching, requestHostTcping, requestTopologyHostTcping } from "../agentEvents";
 import { ruleTrafficQueryCache as trafficQueryCache } from "../ruleLatencyQueryCache";
 
 const TRAFFIC_RETENTION_HOURS = 24 * 3;
@@ -153,13 +153,14 @@ export const trafficRulesRouter = router({
       const ruleIds = requestedIds.filter((id) => visibleIds.has(id));
       // Keep the existing Agent traffic reporter in its interactive mode while
       // the topology is open. This is not a second probe or sampler.
-      markHostTopologyTrafficWatching(
+      const topologyHostIds = Array.from(new Set<number>(
         (visibleRules || [])
           .filter((rule: any) => ruleIds.includes(Number(rule.id)))
           .map((rule: any) => Number(rule.hostId || 0))
           .filter((hostId: number) => hostId > 0),
-        2_500,
-      );
+      ));
+      markHostTopologyTrafficWatching(topologyHostIds, 2_500);
+      topologyHostIds.forEach((hostId) => requestTopologyHostTcping(hostId));
       return trafficQueryCache.get(
         `rate:${ctx.user.id}:${ruleIds.join(",")}`,
         { ttlMs: 500, staleMs: 0 },

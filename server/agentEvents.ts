@@ -41,6 +41,7 @@ type AgentRefreshOptions = {
 const agentEventClients = new Map<number, AgentEventClient>();
 const hostMetricsWatchUntil = new Map<number, number>();
 const hostTopologyTrafficWatchUntil = new Map<number, number>();
+const hostTopologyTcpingRequestedAt = new Map<number, number>();
 const hostTcpingRequestUntil = new Map<number, number>();
 const hostRefreshPushedAt = new Map<number, number>();
 const agentEventLogAt = new Map<string, number>();
@@ -73,6 +74,7 @@ function pruneAgentEventCaches(now = Date.now()) {
   pruneMapEntries(hostRefreshPushedAt, (lastAt) => now - lastAt >= AGENT_EVENT_CACHE_RETENTION_MS);
   pruneMapEntries(hostMetricsWatchUntil, (until) => until <= now);
   pruneMapEntries(hostTopologyTrafficWatchUntil, (until) => until <= now);
+  pruneMapEntries(hostTopologyTcpingRequestedAt, (lastAt) => now - lastAt >= AGENT_EVENT_CACHE_RETENTION_MS);
   pruneMapEntries(hostTcpingRequestUntil, (until) => until <= now);
   pruneMapEntries(agentEventLogAt, (lastAt) => now - lastAt >= AGENT_EVENT_CACHE_RETENTION_MS);
 }
@@ -418,6 +420,17 @@ export function isHostTopologyTrafficWatching(hostId: number, now = Date.now()) 
     return false;
   }
   return true;
+}
+
+// Topology is an interactive view: request a fresh Agent measurement when it
+// opens, then no more often than every ten seconds while it remains visible.
+export function requestTopologyHostTcping(hostId: number, minIntervalMs = 10_000, now = Date.now()) {
+  const id = Number(hostId);
+  if (!Number.isFinite(id) || id <= 0) return false;
+  const lastAt = hostTopologyTcpingRequestedAt.get(id) || 0;
+  if (now - lastAt < minIntervalMs) return false;
+  hostTopologyTcpingRequestedAt.set(id, now);
+  return requestHostTcping(id, Math.max(minIntervalMs * 2, 30_000));
 }
 
 export function requestHostTcping(hostId: number, ttlMs = 60_000) {

@@ -1789,7 +1789,7 @@ func TestTCPingDynamicBatchLimitScalesWithoutUnboundedRuns(t *testing.T) {
 }
 
 func TestTCPingDueIntervalScalesWithWorkAndServiceRequirements(t *testing.T) {
-	if got := tcpingDueInterval(nil, 20, 2); got != time.Minute {
+	if got := tcpingDueInterval(nil, 20, 2); got != 100*time.Second {
 		t.Fatalf("small workload interval = %s", got)
 	}
 	if got := tcpingDueInterval(nil, 600, 0); got != 15*time.Second {

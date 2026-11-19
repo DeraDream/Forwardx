@@ -1093,8 +1093,10 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
       return;
     }
     const force = req.body?.force === true;
-    // Agent reports are accepted only for a rule it owns and for the exact
-    // destination saved by the Panel; this prevents arbitrary probe rows.
+    // The authenticated Agent may report only a visible rule it owns. Runtime
+    // chain reconciliation can replace target IP/port just before dispatch,
+    // so matching against the stored target here would silently discard a
+    // valid physical-hop result.
     const acceptedSegments: any[] = [];
     const sourceHostId = Number(host.id);
     if (parsedSegmentResults.length > 0) {
@@ -1116,11 +1118,10 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
         const expectedKey = `topology-v1:${sourceHostId}:${targetAddress.toLowerCase()}:${targetPort}:${method}`;
         if (String(report.segmentKey).trim() !== expectedKey) continue;
         const runtimeRules = (sourceRuntimeRules as any[]).filter((rule: any) => (
-          String(rule.targetIp || "").trim().toLowerCase() === targetAddress.toLowerCase()
-          && (method === "ping" || Number(rule.targetPort || 0) === targetPort)
+          (Number(rule.id) === Number(report.ruleId) || Number(rule.forwardGroupRuleId || 0) === Number(report.ruleId))
           && rule.isEnabled !== false && !rule.pendingDelete
         ));
-        if (!runtimeRules.some((rule: any) => Number(rule.id) === Number(report.ruleId) || Number(rule.forwardGroupRuleId || 0) === Number(report.ruleId))) continue;
+        if (runtimeRules.length === 0) continue;
         const targetHostId = targetHostIdByAddress.get(targetAddress.toLowerCase()) || null;
         for (const runtimeRule of runtimeRules) acceptedSegments.push({
           ruleId: Number(runtimeRule.forwardGroupRuleId || runtimeRule.id), sourceHostId, targetHostId,

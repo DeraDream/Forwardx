@@ -37,7 +37,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.233"
+var Version = "2.2.234"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -4212,7 +4212,9 @@ func heartbeatPresenceRequest(cfg Config, expectedGeneration *uint64) (int, uint
 
 func tcpingDueInterval(serviceProbes []hostProbeServiceProbe, ruleCount int, linkProbeCount int) time.Duration {
 	workCount := ruleCount + linkProbeCount
-	interval := time.Minute
+	// Background topology/latency collection is intentionally conservative;
+	// the panel sends forceTcping while an operator has topology open.
+	interval := 100 * time.Second
 	switch {
 	case workCount >= 500:
 		interval = 15 * time.Second
@@ -4963,6 +4965,13 @@ func handleAgentDesiredStatePush(cfg Config, push agentDesiredStatePush) {
 		}
 		state := applyHeartbeatState(partial)
 		rememberDesiredRunningRules(state.RunningRules)
+		// A topology view may have requested an immediate measurement before
+		// this SSE state arrived. Wake the collector after caching the segments
+		// so that first page load does not wait for its background interval.
+		if len(push.TopologySegmentProbes) > 0 {
+			agentMetricsForceTCPing.Store(true)
+			wakeAgentMetricsScheduler()
+		}
 	}
 	if push.DesiredState == nil {
 		return
