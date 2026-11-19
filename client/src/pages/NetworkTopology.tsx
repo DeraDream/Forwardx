@@ -955,7 +955,9 @@ function NetworkTopologyContent() {
     // A direct rule has a normal forward-test result rather than a chain
     // summary. Match its source host and the displayed target address.
     const targetNode = graph.nodes.find((node) => node.id === edge.to);
-    const targetAddresses = [targetNode?.subtitle, targetNode?.detail].map((value) => String(value || "").trim()).filter(Boolean);
+    // Plain IP targets use the node label; its subtitle is the port. External
+    // SS landings keep their endpoint in the subtitle, so accept both forms.
+    const targetAddresses = [targetNode?.label, targetNode?.subtitle].map((value) => String(value || "").trim()).filter(Boolean);
     const directRuleIds = new Set((rulesQuery.data || []).filter((rule: any) => Number(rule.hostId) === sourceId && targetAddresses.includes(String(rule.targetIp || "").trim())).map((rule: any) => Number(rule.id)));
     const directTests = [...testByRule.entries()]
       .filter(([ruleId, test]) => directRuleIds.has(ruleId) && test.status !== "pending")
