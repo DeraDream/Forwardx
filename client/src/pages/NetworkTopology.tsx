@@ -943,7 +943,12 @@ function NetworkTopologyContent() {
   const edgeMeasurementLabel = (edge: TopologyEdge) => {
     const sourceId = Number(edge.from.replace(/^host:/, ""));
     const targetId = Number(edge.to.replace(/^host:/, ""));
-    const details = [...testByRule.values()].flatMap((test: any) => (test.parsed.details || []).map((detail: any) => ({ ...detail, recordedAt: test.recordedAt })))
+    const targetNode = graph.nodes.find((node) => node.id === edge.to);
+    // Plain IP targets use the node label; its subtitle is the port. External
+    // SS landings keep their endpoint in the subtitle, so accept both forms.
+    const targetAddresses = [targetNode?.label, targetNode?.subtitle].map((value) => String(value || "").trim()).filter(Boolean);
+    const allDetails = [...testByRule.values()].flatMap((test: any) => (test.parsed.details || []).map((detail: any) => ({ ...detail, recordedAt: test.recordedAt })));
+    const details = allDetails
       .filter((detail: any) => detail.fromHostId === sourceId && detail.toHostId === targetId)
       .sort((a: any, b: any) => b.recordedAt - a.recordedAt);
     if (details.length) {
@@ -952,12 +957,17 @@ function NetworkTopologyContent() {
       const detail = details[0];
       return detail.pending ? "探测中" : !detail.success ? "超时" : `${Math.round(Number(detail.latencyMs) || 0)} ms`;
     }
+    // The final hop to an external SS deliberately has no target host ID.
+    // Its route label still names the endpoint, which makes it unambiguous.
+    const externalTerminalDetails = allDetails
+      .filter((detail: any) => detail.fromHostId === sourceId && !detail.toHostId && targetAddresses.some((address) => String(detail.routeLabel || detail.message || "").includes(address)))
+      .sort((a: any, b: any) => b.recordedAt - a.recordedAt);
+    if (externalTerminalDetails.length) {
+      const detail = externalTerminalDetails[0];
+      return detail.pending ? "探测中" : !detail.success ? "超时" : `${Math.round(Number(detail.latencyMs) || 0)} ms`;
+    }
     // A direct rule has a normal forward-test result rather than a chain
     // summary. Match its source host and the displayed target address.
-    const targetNode = graph.nodes.find((node) => node.id === edge.to);
-    // Plain IP targets use the node label; its subtitle is the port. External
-    // SS landings keep their endpoint in the subtitle, so accept both forms.
-    const targetAddresses = [targetNode?.label, targetNode?.subtitle].map((value) => String(value || "").trim()).filter(Boolean);
     const directRuleIds = new Set((rulesQuery.data || []).filter((rule: any) => Number(rule.hostId) === sourceId && targetAddresses.includes(String(rule.targetIp || "").trim())).map((rule: any) => Number(rule.id)));
     const directTests = [...testByRule.entries()]
       .filter(([ruleId, test]) => directRuleIds.has(ruleId) && test.status !== "pending")
