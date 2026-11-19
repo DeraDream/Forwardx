@@ -565,6 +565,8 @@ agentRouter.post("/api/agent/selftest-result", async (req: Request, res: Respons
           hopLabel,
           routeLabel,
           method: normalizeLinkProbeMethod((meta as any).method),
+          fromHostId: Number((meta as any).fromHostId) || null,
+          toHostId: Number((meta as any).toHostId) || null,
         }, {
           successPrefix: "转发链逐跳测试成功",
           failurePrefix: "转发链逐跳测试失败",

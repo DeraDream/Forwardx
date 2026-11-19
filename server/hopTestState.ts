@@ -7,6 +7,8 @@ export type HopTestResult = {
   hopLabel: string;
   routeLabel?: string | null;
   method?: "tcp" | "ping" | string | null;
+  fromHostId?: number | null;
+  toHostId?: number | null;
   groupKey?: string | null;
   groupLabel?: string | null;
 };

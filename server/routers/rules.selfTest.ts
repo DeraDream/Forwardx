@@ -80,7 +80,7 @@ export const selfTestRulesRouter = router({
               message: JSON.stringify({ kind: "forward-chain", groupId: savedChain.id, ruleId: rule.id,
                 entryIp: rule.targetIp, entrySourcePort: rule.targetPort, targetIp: rule.targetIp, targetPort: rule.targetPort,
                 method: linkProbeMethodForRule(rule), hopLabel: `${index + 1}/${hopCount} ${sourceName}->${entryName}`,
-                routeLabel: `${sourceName} -> ${entryName}`, batchId, latencyMode: chainLatencyMode, runtimeDependent: true }),
+                routeLabel: `${sourceName} -> ${entryName}`, fromHostId: sourceHostId, toHostId: Number(probes[0].fromHostId), batchId, latencyMode: chainLatencyMode, runtimeDependent: true }),
             });
             if (!outerTestId) outerTestId = Number(testId);
             registerHopTest(batchId, Number(testId));
@@ -93,7 +93,7 @@ export const selfTestRulesRouter = router({
               message: JSON.stringify({ kind: "forward-chain", groupId: savedChain.id, ruleId: rule.id,
                 entryIp: probe.targetIp, entrySourcePort: probe.targetPort, targetIp: probe.targetIp, targetPort: probe.targetPort,
                 method: probe.method, hopLabel: `${sourceHostIds.length + index + 1}/${hopCount} ${probe.hopLabel}`, routeLabel: probe.routeLabel,
-                batchId, latencyMode: chainLatencyMode, runtimeDependent: probe.runtimeDependent }),
+                fromHostId: probe.fromHostId, toHostId: probe.toHostId, batchId, latencyMode: chainLatencyMode, runtimeDependent: probe.runtimeDependent }),
             });
             registerHopTest(batchId, Number(testId));
             testHostIds.add(Number(probe.fromHostId));
@@ -132,6 +132,8 @@ export const selfTestRulesRouter = router({
               method: probe.method,
               hopLabel: probe.hopLabel,
               routeLabel: probe.routeLabel,
+              fromHostId: probe.fromHostId,
+              toHostId: probe.toHostId,
               batchId,
               latencyMode: chainLatencyMode,
               runtimeDependent: probe.runtimeDependent,

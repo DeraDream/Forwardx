@@ -1236,6 +1236,8 @@ export async function getForwardGroupPrimaryTemplateRule(groupId: number) {
 export type ForwardGroupChainProbe = {
   groupId: number;
   fromHostId: number;
+  // Null only for a final external target that is not one of this user's hosts.
+  toHostId: number | null;
   targetIp: string;
   targetPort: number;
   method: LinkProbeMethod;
@@ -1339,6 +1341,7 @@ async function buildForwardGroupChainProbes(
         probes.push({
           groupId,
           fromHostId: entryHostId,
+          toHostId: firstHostId || null,
           targetIp,
           targetPort: hopProbeMethod === "ping" ? 0 : firstListenerPort,
           method: hopProbeMethod,
@@ -1367,6 +1370,7 @@ async function buildForwardGroupChainProbes(
     probes.push({
       groupId,
       fromHostId: currentHostId,
+      toHostId: nextHostId || null,
       targetIp,
       targetPort: hopProbeMethod === "ping" ? 0 : (nextListenerPort > 0 ? nextListenerPort : 0),
       method: hopProbeMethod,
@@ -1387,9 +1391,11 @@ async function buildForwardGroupChainProbes(
     if (lastHostId > 0 && targetIp && targetPort > 0) {
       const targetLabel = await forwardChainTargetLabel(template);
       const finalProbeMethod = linkProbeMethodForProtocol(template?.protocol);
+      const destinationHost = [...hostById.values()].find((host: any) => [host?.ip, host?.exitIp, host?.entryIp].some((address) => String(address || "").trim() === targetIp));
       probes.push({
         groupId,
         fromHostId: lastHostId,
+        toHostId: Number(destinationHost?.id || 0) || null,
         targetIp,
         targetPort: finalProbeMethod === "ping" ? 0 : targetPort,
         method: finalProbeMethod,
