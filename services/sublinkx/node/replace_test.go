@@ -57,6 +57,37 @@ func TestReplaceServerAddress(t *testing.T) {
 	}
 }
 
+func TestReplaceAdditionalProtocolServers(t *testing.T) {
+	vmessPayload := base64.RawURLEncoding.EncodeToString([]byte(`{"v":"2","ps":"keep me","add":"origin.example.com","port":"8443","id":"uuid","net":"ws","host":"cdn.example.com"}`))
+	tests := []struct {
+		link, protocol string
+		port           int
+		contain        string
+	}{
+		{"trojan://password@origin.example.com:443?peer=cdn.example.com#trojan", "trojan", 443, "@198.51.100.24:443?peer=cdn.example.com#trojan"},
+		{"hysteria2://password@origin.example.com:8443?obfs=salamander#hy2", "hysteria2", 8443, "@198.51.100.24:8443?obfs=salamander#hy2"},
+		{"tuic://uuid:password@origin.example.com:443?congestion_control=bbr#tuic", "tuic", 443, "@198.51.100.24:443?congestion_control=bbr#tuic"},
+		{"vmess://" + vmessPayload, "vmess", 8443, ""},
+	}
+	for _, test := range tests {
+		t.Run(test.protocol, func(t *testing.T) {
+			got, err := ReplaceServerAddress(test.link, "198.51.100.24")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Protocol != test.protocol || got.OriginalHost != "origin.example.com" || got.Port != test.port {
+				t.Fatalf("metadata = %#v", got)
+			}
+			if test.contain != "" && !strings.Contains(got.Link, test.contain) {
+				t.Fatalf("link %q does not contain %q", got.Link, test.contain)
+			}
+			if test.protocol == "vmess" && !strings.Contains(Base64Decode(strings.TrimPrefix(got.Link, "vmess://")), `"add":"198.51.100.24"`) {
+				t.Fatalf("VMess server not replaced: %q", got.Link)
+			}
+		})
+	}
+}
+
 func TestReplaceLegacySSServerPreservesEncodingAndSuffix(t *testing.T) {
 	payload := base64.RawURLEncoding.EncodeToString([]byte("aes-256-cfb:password@54.169.35.228:31444"))
 	result, err := ReplaceServerAddress("ss://"+payload+"#修改后的备注", "198.51.100.24")
@@ -81,7 +112,7 @@ func TestReplaceServerAddressRejectsInvalidInput(t *testing.T) {
 	}{
 		{"invalid target", "vless://user@203.0.113.9:443#node", "1.2.3.999"},
 		{"target contains port", "vless://user@203.0.113.9:443#node", "198.51.100.24:80"},
-		{"unsupported protocol", "trojan://pass@203.0.113.9:443#node", "198.51.100.24"},
+		{"unsupported protocol", "socks5://user@203.0.113.9:443#node", "198.51.100.24"},
 		{"missing port", "vless://user@203.0.113.9#node", "198.51.100.24"},
 		{"invalid original host", "vless://user@bad_host:443#node", "198.51.100.24"},
 		{"invalid original ipv4", "vless://user@999.2.3.4:443#node", "198.51.100.24"},

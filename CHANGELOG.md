@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.4.92] - 2026-11-20
+
+### Added
+
+- 节点订阅导入与入口 IP 精确替换支持 SS、SS2022、VLESS、VMess、Trojan、Hysteria/Hysteria2 与 TUIC；仅改写服务端地址，保留端口、认证、传输参数和备注。
+
+### Fixed
+
+- 修复 VMess 使用数字端口时自动提取节点名称可能导致导入失败的问题。
+
+Agent 保持 `2.2.237`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.4.91] - 2026-11-19
 
 ### Fixed

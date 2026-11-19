@@ -2,6 +2,7 @@ package node
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/url"
@@ -16,8 +17,10 @@ type ServerReplacement struct {
 	Link         string `json:"link"`
 }
 
-// ReplaceServerAddress validates an SS or VLESS link and replaces only the
-// connection host. Credentials, query parameters and remarks are preserved.
+// ReplaceServerAddress replaces only a node's connection host. Authentication,
+// transport parameters and remarks are retained verbatim wherever the protocol
+// permits it. It supports the common subscription URI protocols, including
+// Shadowsocks/SS2022, VLESS, VMess, Trojan, Hysteria(2) and TUIC.
 func ReplaceServerAddress(rawLink, targetIP string) (ServerReplacement, error) {
 	rawLink = strings.TrimSpace(rawLink)
 	if rawLink == "" {
@@ -35,12 +38,14 @@ func ReplaceServerAddress(rawLink, targetIP string) (ServerReplacement, error) {
 	}
 	protocol := strings.ToLower(rawLink[:schemeEnd])
 	switch protocol {
-	case "ss":
+	case "ss": // SS2022 uses the standard ss:// URI format.
 		return replaceSSServer(rawLink, normalizedIP)
-	case "vless":
+	case "vmess":
+		return replaceVMessServer(rawLink, normalizedIP)
+	case "vless", "trojan", "hy", "hysteria", "hy2", "hysteria2", "tuic":
 		return replaceURLServer(rawLink, normalizedIP, protocol)
 	default:
-		return ServerReplacement{}, fmt.Errorf("仅支持 SS 和 VLESS 链接")
+		return ServerReplacement{}, fmt.Errorf("暂不支持 %s 协议的入口地址替换", protocol)
 	}
 }
 
@@ -105,10 +110,14 @@ func replaceSSServer(rawLink, targetIP string) (ServerReplacement, error) {
 func replaceURLServer(rawLink, targetIP, protocol string) (ServerReplacement, error) {
 	u, err := url.Parse(rawLink)
 	if err != nil || strings.ToLower(u.Scheme) != protocol || u.Opaque != "" {
-		return ServerReplacement{}, fmt.Errorf("VLESS 链接格式不正确")
+		return ServerReplacement{}, fmt.Errorf("%s 链接格式不正确", strings.ToUpper(protocol))
 	}
+	// Hysteria may carry auth in its query string rather than userinfo. All
+	// other URL protocols require credentials in the authority.
 	if u.User == nil || strings.TrimSpace(u.User.Username()) == "" {
-		return ServerReplacement{}, fmt.Errorf("VLESS 链接缺少用户信息")
+		if protocol != "hy" && protocol != "hysteria" && protocol != "hy2" && protocol != "hysteria2" {
+			return ServerReplacement{}, fmt.Errorf("%s 链接缺少用户信息", strings.ToUpper(protocol))
+		}
 	}
 
 	authorityStart := len(protocol) + 3
@@ -118,16 +127,69 @@ func replaceURLServer(rawLink, targetIP, protocol string) (ServerReplacement, er
 	}
 	authority := rawLink[authorityStart:authorityEnd]
 	at := strings.LastIndex(authority, "@")
-	if at <= 0 || at == len(authority)-1 {
-		return ServerReplacement{}, fmt.Errorf("VLESS 链接缺少服务器地址")
+	endpoint := authority
+	prefix := ""
+	if at >= 0 {
+		if at == len(authority)-1 {
+			return ServerReplacement{}, fmt.Errorf("%s 链接缺少服务器地址", strings.ToUpper(protocol))
+		}
+		prefix, endpoint = authority[:at+1], authority[at+1:]
 	}
-	host, port, err := parseEndpoint(authority[at+1:])
+	host, port, err := parseEndpoint(endpoint)
 	if err != nil {
-		return ServerReplacement{}, fmt.Errorf("VLESS 服务器地址不正确: %w", err)
+		return ServerReplacement{}, fmt.Errorf("%s 服务器地址不正确: %w", strings.ToUpper(protocol), err)
 	}
-	replacedAuthority := authority[:at+1] + net.JoinHostPort(targetIP, strconv.Itoa(port))
+	replacedAuthority := prefix + net.JoinHostPort(targetIP, strconv.Itoa(port))
 	replaced := rawLink[:authorityStart] + replacedAuthority + rawLink[authorityEnd:]
 	return ServerReplacement{Protocol: protocol, OriginalHost: host, Port: port, Link: replaced}, nil
+}
+
+// VMess stores its endpoint in base64-encoded JSON. Decode it into a generic
+// map so extensions unknown to this server are not discarded on replacement.
+func replaceVMessServer(rawLink, targetIP string) (ServerReplacement, error) {
+	payload := strings.TrimSpace(rawLink[len("vmess://"):])
+	decoded, encoding, padded, err := decodeSSPayload(payload)
+	if err != nil {
+		return ServerReplacement{}, fmt.Errorf("VMess Base64 内容无法解码")
+	}
+	var config map[string]interface{}
+	if err := json.Unmarshal([]byte(decoded), &config); err != nil {
+		return ServerReplacement{}, fmt.Errorf("VMess 配置格式不正确")
+	}
+	host, ok := config["add"].(string)
+	if !ok || strings.TrimSpace(host) == "" || (net.ParseIP(host) == nil && (looksLikeIPv4(host) || !validHostname(host))) {
+		return ServerReplacement{}, fmt.Errorf("VMess 服务器地址不正确")
+	}
+	port, err := vmessPort(config["port"])
+	if err != nil {
+		return ServerReplacement{}, err
+	}
+	config["add"] = targetIP
+	encoded, err := json.Marshal(config)
+	if err != nil {
+		return ServerReplacement{}, fmt.Errorf("VMess 配置编码失败")
+	}
+	return ServerReplacement{Protocol: "vmess", OriginalHost: host, Port: port, Link: "vmess://" + encodeSSPayload(string(encoded), encoding, padded)}, nil
+}
+
+func vmessPort(value interface{}) (int, error) {
+	var text string
+	switch port := value.(type) {
+	case string:
+		text = port
+	case float64:
+		if port != float64(int64(port)) {
+			return 0, fmt.Errorf("VMess 端口不正确")
+		}
+		text = strconv.FormatInt(int64(port), 10)
+	default:
+		return 0, fmt.Errorf("VMess 端口不正确")
+	}
+	parsed, err := strconv.Atoi(text)
+	if err != nil || parsed < 1 || parsed > 65535 {
+		return 0, fmt.Errorf("VMess 端口必须在 1-65535 之间")
+	}
+	return parsed, nil
 }
 
 func parseEndpoint(value string) (string, int, error) {

@@ -46,7 +46,7 @@ func CallVmessURL() {
 func EncodeVmessURL(v Vmess) string {
 	// 如果备注为空，则使用服务器地址+端口
 	if v.Ps == "" {
-		v.Ps = v.Add + ":" + v.Port.(string)
+		v.Ps = v.Add + ":" + fmt.Sprint(v.Port)
 	}
 	// 如果版本为空，则默认为2
 	if v.V == "" {
@@ -75,7 +75,7 @@ func DecodeVMESSURL(s string) (Vmess, error) {
 	}
 	// 如果备注为空，则使用服务器地址+端口
 	if vmess.Ps == "" {
-		vmess.Ps = vmess.Add + ":" + vmess.Port.(string)
+		vmess.Ps = vmess.Add + ":" + fmt.Sprint(vmess.Port)
 	}
 	if CheckEnvironment() {
 		fmt.Println("服务器地址", vmess.Add)
