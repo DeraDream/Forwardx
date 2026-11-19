@@ -13,7 +13,7 @@ const pathIds = (path: any) => [path.entry, ...path.relays, path.landing].map((n
 
 test("nested multi-exit tunnel branches are expanded in rules and full chains", () => {
   const rules = [{ id: 1, name: "nested rule", hostId: 1, forwardGroupId: 10, targetIp: "198.51.100.9", targetPort: 443 }];
-  const fullChains = [{ id: 2, name: "nested full chain", nodes: [{ hostId: 1 }, { nodeType: "forward-chain", forwardGroupId: 10 }, { hostId: 6 }] }];
+  const fullChains = [{ id: 2, name: "nested full chain", status: "running", isEnabled: true, nodes: [{ hostId: 1 }, { nodeType: "forward-chain", forwardGroupId: 10 }, { hostId: 6 }] }];
   const result = buildPhysicalPaths(rules, hosts, [tunnel], [group], [], fullChains, "all", "");
   assert.equal(result.truncated, false);
   const rulePaths = result.paths.filter((path) => path.name === "nested rule").map(pathIds);
@@ -31,6 +31,14 @@ test("relationship overview keeps an entry's direct landing but omits standalone
   const groups = [{ id: 20, groupMode: "chain", members: [{ memberType: "host", hostId: 1, isEnabled: true }, { memberType: "host", hostId: 2, isEnabled: true }] }];
   const result = buildPhysicalPaths(rules, hosts, [], groups, [], [], "all", "");
   assert.deepEqual(relationshipOverviewPaths(result.paths).map((path) => path.name).sort(), ["IX chain", "IX direct"]);
+});
+
+test("overview excludes draft, cancelled and not-yet-deployed full chains", () => {
+  const chains = ["draft", "ports-ready", "ready-to-deploy", "cancelled", "running"].map((status, id) => ({
+    id: id + 1, name: status, status, isEnabled: true, nodes: [{hostId:1}, {hostId:2}, {hostId:3}],
+  }));
+  const result = buildPhysicalPaths([], hosts, [], [], [], chains, "all", "");
+  assert.deepEqual(result.paths.map(p => p.name), ["running"]);
 });
 
 test("missing references and cycles are marked incomplete rather than drawn as direct routes", () => {

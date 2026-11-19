@@ -9428,8 +9428,19 @@ function RulesContent() {
     );
   };
 
+  const openedFocusRuleRef = useRef(0);
+  useEffect(() => {
+    if (!focusRuleId) { openedFocusRuleRef.current = 0; return; }
+    if (openedFocusRuleRef.current === focusRuleId || !focusedRuleQuery.data ||
+        !hostsFetched || !tunnelsFetched || !forwardGroupsFetched || hostsError || tunnelsError || forwardGroupsError) return;
+    openedFocusRuleRef.current = focusRuleId;
+    setRulePageTab(ruleCategory);
+    openEdit(focusedRuleQuery.data);
+    closeFocusedRule();
+  });
+
   const focusedRuleDialog = (
-    <Dialog open={focusRuleId > 0} onOpenChange={(open) => { if (!open) closeFocusedRule(); }}>
+    <Dialog open={focusRuleId > 0 && (focusedRuleQuery.isError || hostsError || tunnelsError || forwardGroupsError)} onOpenChange={(open) => { if (!open) closeFocusedRule(); }}>
       <DialogContent>
         <DialogHeader><DialogTitle>规则详情 #{focusRuleId}</DialogTitle><DialogDescription>从网络拓扑定位到的规则；数据以规则管理为准。</DialogDescription></DialogHeader>
         {focusedRuleQuery.isLoading ? <p className="text-sm text-muted-foreground">正在加载规则…</p> : focusedRuleQuery.isError ? <p className="text-sm text-destructive">规则加载失败，请稍后重试。</p> : !focusedRuleQuery.data ? <p className="text-sm text-muted-foreground">规则不存在或当前账号无权查看。</p> : <div className="space-y-2 text-sm">

@@ -37,7 +37,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.235"
+var Version = "2.2.236"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -1031,13 +1031,14 @@ func applyHeartbeatState(resp heartbeatResp) heartbeatStateSnapshot {
 		}
 	}
 	return heartbeatStateSnapshot{
-		RunningRules:       append([]runningRule(nil), heartbeatStateCache.RunningRules...),
-		RuleLatencyProbes:  append([]ruleLatencyProbe(nil), heartbeatStateCache.RuleLatencyProbes...),
-		TunnelProbes:       append([]tunnelProbe(nil), heartbeatStateCache.TunnelProbes...),
-		ForwardGroupProbes: append([]forwardGroupProbe(nil), heartbeatStateCache.ForwardGroupProbes...),
-		HostProbeServices:  append([]hostProbeServiceProbe(nil), heartbeatStateCache.HostProbeServices...),
-		GuardRules:         append([]guardRule(nil), heartbeatStateCache.GuardRules...),
-		DNSWatch:           append([]dnsWatchItem(nil), heartbeatStateCache.DNSWatch...),
+		TopologySegmentProbes: append([]topologySegmentProbe(nil), heartbeatStateCache.TopologySegmentProbes...),
+		RunningRules:          append([]runningRule(nil), heartbeatStateCache.RunningRules...),
+		RuleLatencyProbes:     append([]ruleLatencyProbe(nil), heartbeatStateCache.RuleLatencyProbes...),
+		TunnelProbes:          append([]tunnelProbe(nil), heartbeatStateCache.TunnelProbes...),
+		ForwardGroupProbes:    append([]forwardGroupProbe(nil), heartbeatStateCache.ForwardGroupProbes...),
+		HostProbeServices:     append([]hostProbeServiceProbe(nil), heartbeatStateCache.HostProbeServices...),
+		GuardRules:            append([]guardRule(nil), heartbeatStateCache.GuardRules...),
+		DNSWatch:              append([]dnsWatchItem(nil), heartbeatStateCache.DNSWatch...),
 	}
 }
 
@@ -2970,13 +2971,14 @@ func heartbeatStateSnapshotCopy() heartbeatStateSnapshot {
 	heartbeatStateMu.Lock()
 	defer heartbeatStateMu.Unlock()
 	return heartbeatStateSnapshot{
-		RunningRules:       append([]runningRule(nil), heartbeatStateCache.RunningRules...),
-		RuleLatencyProbes:  append([]ruleLatencyProbe(nil), heartbeatStateCache.RuleLatencyProbes...),
-		TunnelProbes:       append([]tunnelProbe(nil), heartbeatStateCache.TunnelProbes...),
-		ForwardGroupProbes: append([]forwardGroupProbe(nil), heartbeatStateCache.ForwardGroupProbes...),
-		HostProbeServices:  append([]hostProbeServiceProbe(nil), heartbeatStateCache.HostProbeServices...),
-		GuardRules:         append([]guardRule(nil), heartbeatStateCache.GuardRules...),
-		DNSWatch:           append([]dnsWatchItem(nil), heartbeatStateCache.DNSWatch...),
+		TopologySegmentProbes: append([]topologySegmentProbe(nil), heartbeatStateCache.TopologySegmentProbes...),
+		RunningRules:          append([]runningRule(nil), heartbeatStateCache.RunningRules...),
+		RuleLatencyProbes:     append([]ruleLatencyProbe(nil), heartbeatStateCache.RuleLatencyProbes...),
+		TunnelProbes:          append([]tunnelProbe(nil), heartbeatStateCache.TunnelProbes...),
+		ForwardGroupProbes:    append([]forwardGroupProbe(nil), heartbeatStateCache.ForwardGroupProbes...),
+		HostProbeServices:     append([]hostProbeServiceProbe(nil), heartbeatStateCache.HostProbeServices...),
+		GuardRules:            append([]guardRule(nil), heartbeatStateCache.GuardRules...),
+		DNSWatch:              append([]dnsWatchItem(nil), heartbeatStateCache.DNSWatch...),
 	}
 }
 

@@ -173,7 +173,9 @@ export function routeSmoothLayeredTopologyGraph(nodes: TopologyRoutingNode[], in
     outgoing.set(edge.from, [...(outgoing.get(edge.from) || []), edge]);
     incoming.set(edge.to, [...(incoming.get(edge.to) || []), edge]);
   }
-  for (const list of [...outgoing.values(), ...incoming.values()]) list.sort((a, b) => a.id.localeCompare(b.id));
+  const centerY = (id: string) => { const box = base.positions.get(id)!; return box.y + box.height / 2; };
+  for (const list of outgoing.values()) list.sort((a, b) => centerY(a.to) - centerY(b.to) || a.id.localeCompare(b.id));
+  for (const list of incoming.values()) list.sort((a, b) => centerY(a.from) - centerY(b.from) || a.id.localeCompare(b.id));
   const bottom = Math.max(...[...base.positions.values()].map((box) => box.y + box.height));
   const top = Math.min(...[...base.positions.values()].map((box) => box.y));
   let lowestLane = bottom;
@@ -194,7 +196,7 @@ export function routeSmoothLayeredTopologyGraph(nodes: TopologyRoutingNode[], in
     let controlY1 = start.y;
     let controlY2 = end.y;
     if (spansRelayLayer) {
-      const laneY = isDirectLanding ? bottom + 44 + index * 14 : top - 44 - index * 14;
+      const laneY = isDirectLanding ? end.y + 16 : top - 44 - index * 14;
       controlY1 = laneY;
       controlY2 = laneY;
       if (isDirectLanding) lowestLane = Math.max(lowestLane, laneY);
@@ -206,7 +208,17 @@ export function routeSmoothLayeredTopologyGraph(nodes: TopologyRoutingNode[], in
       end,
     ]);
   });
-  return { ...base, edgeRoutes, height: Math.max(base.height, lowestLane + 56), centerY: Math.max(base.centerY, (top + lowestLane) / 2) };
+  // Crop the old orthogonal router's unused overhead and side margins.
+  const points = [...edgeRoutes.values()].flat();
+  const boxes = [...base.positions.values()];
+  const left = Math.min(0, ...points.map(p => p.x), ...boxes.map(b => b.x));
+  const minY = Math.min(...points.map(p => p.y), ...boxes.map(b => b.y), top);
+  const shiftY = Number.isFinite(minY) ? 32 - minY : 0;
+  for (const box of boxes) box.y += shiftY;
+  for (const point of points) point.y += shiftY;
+  const width = Math.max(320, ...boxes.map(b => b.x + b.width + 32), ...points.map(p => p.x + 32)) - left;
+  const height = Math.max(240, ...boxes.map(b => b.y + b.height + 32), ...points.map(p => p.y + 32));
+  return { ...base, edgeRoutes, width, height, centerY: height / 2 };
 }
 
 export function topologyRoutePath(points: TopologyPoint[]) {

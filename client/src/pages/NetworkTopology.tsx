@@ -372,7 +372,7 @@ export function buildPhysicalPaths(
 
   if (category === "all" || category === "fullchain") {
     for (const chain of fullChains || []) {
-      if (chain?.status === "draft" && chain?.isEnabled === false) continue;
+      if (chain?.status !== "running" || !topologyEnabledFlag(chain?.isEnabled, true)) continue;
       const nodes = Array.isArray(chain?.nodes) ? chain.nodes : [];
       let variants: number[][] = nodes.length ? [[]] : [];
       for (const node of nodes) {
@@ -755,9 +755,9 @@ function NetworkTopologyContent() {
   const [zoom, setZoom] = useState(1);
   const canvasRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
-  const [showMinimap, setShowMinimap] = useState(false);
   const [layoutMode, setLayoutMode] = useState<"lanes" | "graph">("lanes");
   const [qualityTarget, setQualityTarget] = useState<LinkQualityTarget | null>(null);
+  const [probeMessage, setProbeMessage] = useState("");
   const probeTopologySegments = trpc.rules.probeTopologySegments.useMutation();
   const stopTopologySegments = trpc.rules.stopTopologySegments.useMutation();
 
@@ -937,6 +937,32 @@ function NetworkTopologyContent() {
     ? graph.nodes.find((node) => node.id === selectedNodeId) || null
     : null;
   const selectedEdge = graph.edges.find((edge) => edge.id === selectedEdgeId) || null;
+  const edgeMeasurementLabel = (edge: TopologyEdge) => {
+    const target = graph.nodes.find(node => node.id === edge.to);
+    const sourceId = Number(edge.from.replace(/^host:/, ""));
+    const targetId = Number(edge.to.replace(/^host:/, ""));
+    const rows = (topologySegmentQuery.data || []).filter((row: any) =>
+      Number(row.sourceHostId) === sourceId &&
+      (Number(row.targetHostId) === targetId || String(row.targetAddress || "").toLowerCase() === String(target?.subtitle || "").toLowerCase() ||
+       edge.to === `target:${row.targetAddress}:${row.targetPort}`));
+    if (!rows.length) return "待探测";
+    const labels = new Set(rows.map((row: any) => {
+      const age = Date.now() - new Date(row.recordedAt).getTime();
+      const stale = !Number.isFinite(age) || age > 180_000;
+      return `${row.method === "ping" ? "Ping" : "TCP"} ${row.isTimeout ? "超时" : `${Math.round(Number(row.latencyMs) || 0)} ms`}${stale ? " · 过期" : ""}`;
+    }));
+    return [...labels].join(" / ");
+  };
+  const requestPathProbe = async (ruleId: number) => {
+    setProbeMessage("正在请求探测…");
+    try {
+      const result = await probeTopologySegments.mutateAsync({ ruleIds: [ruleId] });
+      setProbeMessage(result.requestedHosts > 0 ? `已请求 ${result.requestedHosts} 台 Agent 探测；等待上报，结果自动刷新。` : "未找到可请求的 Agent，请检查规则关联。");
+      void topologySegmentQuery.refetch();
+    } catch (error) {
+      setProbeMessage(`探测请求失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
   const nodePaths = selectedNode ? paths.filter((path) => [path.entry, ...path.relays, path.landing].some((node) => node.id === selectedNode.id)) : [];
   const edgePaths = selectedEdge ? paths.filter((path) => topologyPathEdgeIds([path.entry, ...path.relays, path.landing].map((node) => node.id)).includes(selectedEdge.id)) : [];
   const nodeRoles = selectedNode ? [
@@ -950,14 +976,11 @@ function NetworkTopologyContent() {
     const canvas = canvasRef.current;
     if (isLoading || !canvas || graph.nodes.length === 0) return;
     const width = Math.max(1, canvas.clientWidth);
-    const height = Math.max(240, Math.min(window.innerHeight * 0.65, 600));
-    // Keep labels readable by default; users can still choose a full overview.
-    const minimumReadableZoom = window.innerWidth < 640 ? 0.6 : 0.7;
-    const nextZoom = Math.min(1, Math.max(minimumReadableZoom, Math.min(width / canvasWidth, height / canvasHeight)));
+    const nextZoom = Math.min(1, width / canvasWidth, canvas.clientHeight / canvasHeight);
     setZoom(nextZoom);
-    const frame = requestAnimationFrame(() => canvas.scrollTo({ left: 0, top: Math.max(0, graph.centerY * nextZoom - height / 2) }));
+    const frame = requestAnimationFrame(() => canvas.scrollTo({ left: 0, top: 0 }));
     return () => cancelAnimationFrame(frame);
-  }, [activeEntry, canvasHeight, canvasWidth, category, graph.centerY, graph.nodes.length, isLoading]);
+  }, [activeEntry, canvasHeight, canvasWidth, category, graph.centerY, graph.nodes.length, isLoading, layoutMode]);
 
   const handleRefresh = async () => {
     await Promise.all([
@@ -1046,7 +1069,7 @@ function NetworkTopologyContent() {
 
       {isLoading ? (
         <DataSectionLoading label="正在加载网络拓扑" />
-      ) : graph.nodes.length === 0 ? (
+      ) : (layoutMode === "graph" ? graph.nodes.length === 0 : visiblePaths.length === 0) ? (
         <Card className="border-dashed border-border/50 bg-card/40">
           <CardContent className="flex min-h-72 flex-col items-center justify-center gap-2 text-center">
             <Network className="h-8 w-8 text-muted-foreground" />
@@ -1089,27 +1112,15 @@ function NetworkTopologyContent() {
                 <Button size="sm" variant="outline" aria-label="放大拓扑" onClick={() => setZoom((value) => Math.min(1.5, Math.round((value + 0.1) * 10) / 10))}>＋</Button>
                 <Button size="sm" variant="outline" onClick={() => setZoom(Math.min(1, Math.max(0.2, (canvasRef.current?.clientWidth || canvasWidth) / canvasWidth)))}>适应宽度</Button>
                 <Button size="sm" variant="outline" onClick={() => { const canvas = canvasRef.current; if (!canvas) return; setZoom(Math.min(1, Math.max(0.2, Math.min(canvas.clientWidth / canvasWidth, Math.max(240, Math.min(window.innerHeight * 0.65, 600)) / canvasHeight)))); canvas.scrollTo({ left: 0, top: 0 }); }}>适应画布</Button>
-                <Button size="sm" variant="outline" onClick={() => setShowMinimap((value) => !value)}>{showMinimap ? "隐藏小地图" : "小地图"}</Button>
                 {selectedNode && <Button size="sm" variant="outline" onClick={() => focusNode(selectedNode.id)}>定位选中节点</Button>}
               </div>
-              {showMinimap && <div className="border-b border-border/40 p-2"><svg role="img" aria-label="拓扑小地图，点击可移动画布" viewBox={`0 0 ${canvasWidth} ${canvasHeight}`} className="h-28 w-full max-w-[240px] cursor-crosshair rounded border border-border/50 bg-muted/20" onClick={(event) => {
-                const canvas = canvasRef.current, bounds = event.currentTarget.getBoundingClientRect();
-                if (!canvas || !bounds.width || !bounds.height) return;
-                const scale = Math.min(bounds.width / canvasWidth, bounds.height / canvasHeight);
-                const offsetX = (bounds.width - canvasWidth * scale) / 2, offsetY = (bounds.height - canvasHeight * scale) / 2;
-                const x = (event.clientX - bounds.left - offsetX) / scale, y = (event.clientY - bounds.top - offsetY) / scale;
-                canvas.scrollTo({ left: Math.max(0, x * zoom - canvas.clientWidth / 2), top: Math.max(0, y * zoom - canvas.clientHeight / 2), behavior: "smooth" });
-              }}>
-                {graph.edges.map((edge) => { const points = graph.edgeRoutes.get(edge.id); return points ? <path key={edge.id} d={topologyRoutePath(points)} fill="none" stroke="currentColor" strokeWidth="3" className="text-muted-foreground" /> : null; })}
-                {graph.nodes.map((node) => { const pos = graph.positions.get(node.id); return pos ? <rect key={node.id} x={pos.x} y={pos.y} width={pos.width} height={pos.height} rx="6" fill="currentColor" className={selectedNodeId === node.id || highlightedNodes.has(node.id) ? "text-primary" : "text-muted-foreground/50"} /> : null; })}
-              </svg><p className="mt-1 text-[10px] text-muted-foreground">点击小地图移动画布；鼠标可拖动画布，触屏可直接滑动。</p></div>}
-              <div ref={canvasRef} className="max-h-[70vh] cursor-grab overflow-auto active:cursor-grabbing" onPointerDown={(event) => {
+              <div ref={canvasRef} className="h-[65vh] min-h-80 cursor-grab overflow-hidden active:cursor-grabbing" onPointerDown={(event) => {
                 if (event.pointerType !== "mouse" || event.button !== 0 || (event.target as Element).closest("button, a, [role=button]")) return;
                 const canvas = event.currentTarget; dragRef.current = { x: event.clientX, y: event.clientY, left: canvas.scrollLeft, top: canvas.scrollTop };
                 canvas.setPointerCapture(event.pointerId);
               }} onPointerMove={(event) => { const drag = dragRef.current; if (!drag) return; event.currentTarget.scrollLeft = drag.left - (event.clientX - drag.x); event.currentTarget.scrollTop = drag.top - (event.clientY - drag.y); }}
                 onPointerUp={() => { dragRef.current = null; }} onPointerCancel={() => { dragRef.current = null; }}>
-                <div style={{ width: canvasWidth * zoom, height: canvasHeight * zoom }}>
+                <div style={{ width: canvasWidth * zoom, height: canvasHeight * zoom, marginInline: "auto", marginTop: Math.max(0, ((canvasRef.current?.clientHeight || 0) - canvasHeight * zoom) / 2) }}>
                 <div className="relative origin-top-left" style={{ width: canvasWidth, height: canvasHeight, transform: `scale(${zoom})` }}>
                 <div className="absolute top-0" style={{ left: 0, width: graph.width, height: graph.height }}>
                   <svg data-topology-edges className="absolute inset-0 h-full w-full" width={graph.width} height={graph.height} style={{ pointerEvents: "none" }}>
@@ -1123,7 +1134,13 @@ function NetworkTopologyContent() {
                         <g key={edge.id} opacity={faded ? 0.25 : 1}>
                           <path d={path} fill="none" stroke="currentColor" strokeWidth={active ? 7 : 5} className="text-card" />
                           <path d={path} fill="none" stroke="currentColor" strokeWidth={active ? 3 : 1.8} className={active ? "text-primary" : "text-muted-foreground/70"} />
-                          <path data-topology-edge={edge.id} d={path} fill="none" stroke="transparent" strokeWidth="10" style={{ pointerEvents: "stroke", cursor: "pointer" }}
+                          {active && points.length === 4 && <text
+                            x={(points[0].x + 3 * points[1].x + 3 * points[2].x + points[3].x) / 8}
+                            y={(points[0].y + 3 * points[1].y + 3 * points[2].y + points[3].y) / 8 - 10}
+                            textAnchor="middle" fill="currentColor" stroke="var(--background)" strokeWidth="4" paintOrder="stroke" className="text-xs text-primary">
+                            {edgeMeasurementLabel(edge)}
+                          </text>}
+                          <path data-topology-edge={edge.id} d={path} fill="none" stroke="transparent" strokeWidth="10" style={{ pointerEvents: "stroke", cursor: "pointer", outline: "none" }}
                             role="button" tabIndex={0} aria-label={`查看 ${graph.nodes.find((node) => node.id === edge.from)?.label || edge.from} 到 ${graph.nodes.find((node) => node.id === edge.to)?.label || edge.to} 的关联路径`}
                             onClick={() => { setSelectedEdgeId(edge.id); setSelectedNodeId(null); }}
                             onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelectedEdgeId(edge.id); setSelectedNodeId(null); } }} />
@@ -1171,6 +1188,7 @@ function NetworkTopologyContent() {
           </Card>
           )}
 
+          {probeMessage && <p role="status" className="text-sm text-muted-foreground">{probeMessage}</p>}
           <Card className="h-fit border-border/45 bg-card/60">
             <CardContent className="space-y-4 p-4">
               {selectedEdge && !selectedNode && (
@@ -1179,7 +1197,7 @@ function NetworkTopologyContent() {
                   <div className="break-words">{graph.nodes.find((node) => node.id === selectedEdge.from)?.label} → {graph.nodes.find((node) => node.id === selectedEdge.to)?.label}</div>
                   <p className="text-muted-foreground">当前筛选下 {edgePaths.length} 条配置路径经过此方向。相同主机间可能存在不同端口或规则，连线已合并，不代表单条连接。</p>
                   <div className="max-h-40 space-y-1 overflow-auto">{edgePaths.map((path) => <button key={path.id} type="button" className="block w-full rounded px-2 py-1 text-left hover:bg-accent" onClick={() => { setEntryFilter(path.entry.id); setSelectedPathId(path.id); setSelectedEdgeId(null); }}>{path.name} · {categoryLabel(path.category)}</button>)}</div>
-                  <p className="text-muted-foreground">连线可用性：未单独验证</p>
+                  <p className="text-muted-foreground">分段探测：{edgeMeasurementLabel(selectedEdge)}。TCP / Ping 结果不代表端到端业务可用；合并边可能包含多个目标端口。</p>
                 </div>
               )}
               {selectedPath && !selectedNode && !selectedEdge && (
@@ -1191,7 +1209,7 @@ function NetworkTopologyContent() {
                   <p className="text-muted-foreground">路径根据面板配置生成，不代表端到端业务已验证。</p>
                   <div className="flex flex-wrap items-center gap-3">
                     <a className="text-primary underline" href={selectedRule ? topologyRuleHref(Number(selectedRule.id)) : "/tunnels"}>打开{selectedRule ? "该转发规则" : "链路管理"}</a>
-                    {selectedPath.ruleId && <Button size="sm" variant="outline" className="h-7 gap-1 text-[11px]" disabled={probeTopologySegments.isPending} onClick={() => probeTopologySegments.mutate({ ruleIds: [selectedPath.ruleId!] })}>
+                    {selectedPath.ruleId && <Button size="sm" variant="outline" className="h-7 gap-1 text-[11px]" disabled={probeTopologySegments.isPending} onClick={() => void requestPathProbe(selectedPath.ruleId!)}>
                       <Stethoscope className="h-3 w-3" />立即探测路径
                     </Button>}
                   </div>

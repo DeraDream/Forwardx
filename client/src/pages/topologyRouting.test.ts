@@ -47,6 +47,17 @@ test("relationship overview uses smooth curves and routes long direct exits outs
   assert.ok(direct[1].y > result.positions.get("relay")!.y + result.positions.get("relay")!.height);
 });
 
+test("smooth fan-out ports follow destination positions, not edge IDs", () => {
+  const nodes = [{id:"hk",column:0,row:0}, {id:"jp",column:1,row:0}, {id:"sg",column:1,row:1}];
+  const graph = routeSmoothLayeredTopologyGraph(nodes, [
+    {id:"z-upper",from:"hk",to:"jp"}, {id:"a-lower",from:"hk",to:"sg"},
+  ], new Set());
+  const upper = graph.edgeRoutes.get("z-upper")!;
+  const lower = graph.edgeRoutes.get("a-lower")!;
+  const y = (p: TopologyPoint[], t: number) => (1-t)**3*p[0].y + 3*(1-t)**2*t*p[1].y + 3*(1-t)*t*t*p[2].y + t**3*p[3].y;
+  for (let i = 0; i <= 100; i++) assert.ok(y(upper, i/100) < y(lower, i/100), "fan-out curves crossed");
+});
+
 test("routed edges stay clear across a range of dense mixed-direction graphs", () => {
   let seed = 0x12345678;
   const random = (max: number) => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed % max; };
