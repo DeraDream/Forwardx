@@ -37,7 +37,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.237"
+var Version = "2.2.238"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -57,7 +57,7 @@ const selfTestActivePollInterval = 2 * time.Second
 const selfTestActiveWindow = 2 * time.Minute
 const publicIPRefreshInterval = time.Minute
 const heartbeatStaticReportInterval = 10 * time.Minute
-const trafficCollectInterval = 3 * time.Second
+const trafficCollectInterval = 500 * time.Millisecond
 const trafficCollectMaxInterval = 30 * time.Second
 const countingChainRepairInitialDelay = 2 * time.Second
 const countingChainRepairPace = 100 * time.Millisecond
@@ -873,6 +873,7 @@ type heartbeatResp struct {
 	NextPresenceInterval    int                      `json:"nextPresenceInterval,omitempty"`
 	MetricsOnly             bool                     `json:"metricsOnly,omitempty"`
 	TrafficReportInterval   int                      `json:"trafficReportInterval,omitempty"`
+	TrafficReportIntervalMs int                      `json:"trafficReportIntervalMs,omitempty"`
 }
 
 type heartbeatResult struct {
@@ -3936,7 +3937,9 @@ func heartbeat(cfg Config, forceReconcile ...bool) (heartbeatResult, error) {
 	logHeartbeatResponse("full", &resp, time.Since(startedAt))
 	compactAgentReports.Store(resp.CompactReports)
 	agentPresenceSupported.Store(resp.PresenceSupported)
-	if resp.TrafficReportInterval > 0 {
+	if resp.TrafficReportIntervalMs > 0 {
+		setActiveTrafficReportIntervalMilliseconds(resp.TrafficReportIntervalMs)
+	} else if resp.TrafficReportInterval > 0 {
 		setActiveTrafficReportIntervalSeconds(resp.TrafficReportInterval)
 	}
 	preserveDNSChangesAfterHeartbeat(dnsChanges, resp.ReconciliationCoalesced)
@@ -4134,7 +4137,9 @@ func heartbeatKeepalive(cfg Config) (heartbeatResult, error) {
 	logHeartbeatResponse("keepalive", &resp, time.Since(startedAt))
 	compactAgentReports.Store(resp.CompactReports)
 	agentPresenceSupported.Store(resp.PresenceSupported)
-	if resp.TrafficReportInterval > 0 {
+	if resp.TrafficReportIntervalMs > 0 {
+		setActiveTrafficReportIntervalMilliseconds(resp.TrafficReportIntervalMs)
+	} else if resp.TrafficReportInterval > 0 {
 		setActiveTrafficReportIntervalSeconds(resp.TrafficReportInterval)
 	}
 	if shouldReportStatic {

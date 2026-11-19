@@ -44,7 +44,7 @@ const (
 	// positive/negative DNS cache bounded so a long-lived Agent does not retain
 	// one entry for every hostname it has ever probed.
 	networkTargetDNSCacheMaxEntries = 1024
-	activeTrafficReportEvery        = 3 * time.Second
+	activeTrafficReportEvery        = 500 * time.Millisecond
 	steadyTrafficReportEvery        = 30 * time.Second
 	idleHostTrafficReportEvery      = 5 * time.Minute
 )
@@ -1067,11 +1067,11 @@ func configuredActiveTrafficReportInterval() time.Duration {
 // The panel may relax ordinary traffic accounting to a larger batch window.
 // Zero is intentionally ignored so an older panel keeps the conservative
 // ten-second default.
-func setActiveTrafficReportIntervalSeconds(seconds int) {
-	if seconds <= 0 {
+func setActiveTrafficReportIntervalMilliseconds(milliseconds int) {
+	if milliseconds <= 0 {
 		return
 	}
-	interval := time.Duration(seconds) * time.Second
+	interval := time.Duration(milliseconds) * time.Millisecond
 	if interval < activeTrafficReportEvery {
 		interval = activeTrafficReportEvery
 	}
@@ -1174,7 +1174,9 @@ func collectTraffic(cfg Config) time.Duration {
 				logf("traffic report retry failed stats=%d: %v", pending.StatCount, err)
 			}
 		} else {
-			if seconds, ok := response["trafficReportInterval"].(float64); ok {
+			if milliseconds, ok := response["trafficReportIntervalMs"].(float64); ok {
+				setActiveTrafficReportIntervalMilliseconds(int(milliseconds))
+			} else if seconds, ok := response["trafficReportInterval"].(float64); ok {
 				setActiveTrafficReportIntervalSeconds(int(seconds))
 			}
 			if err := completePendingTrafficReport(pending); err != nil {
@@ -1323,7 +1325,9 @@ func collectTraffic(cfg Config) time.Duration {
 				logf("traffic report failed watched=%d stats=%d: %v", watched, len(stats), err)
 			}
 		} else {
-			if seconds, ok := response["trafficReportInterval"].(float64); ok {
+			if milliseconds, ok := response["trafficReportIntervalMs"].(float64); ok {
+				setActiveTrafficReportIntervalMilliseconds(int(milliseconds))
+			} else if seconds, ok := response["trafficReportInterval"].(float64); ok {
 				setActiveTrafficReportIntervalSeconds(int(seconds))
 			}
 			completeErr := completePendingTrafficReport(pending)
@@ -1346,6 +1350,10 @@ func collectTraffic(cfg Config) time.Duration {
 	}
 	nextInterval = trafficCollectionIntervalForRuleCount(activeSources)
 	return trafficCollectBackoffInterval(nextInterval, time.Since(started))
+}
+
+func setActiveTrafficReportIntervalSeconds(seconds int) {
+	setActiveTrafficReportIntervalMilliseconds(seconds * 1000)
 }
 
 func trafficCollectionIntervalForRuleCount(count int) time.Duration {

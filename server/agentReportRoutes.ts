@@ -1,6 +1,6 @@
 import { Router, Request, Response } from "express";
 import * as db from "./db";
-import { isHostMetricsWatching, pushAgentRefresh } from "./agentEvents";
+import { isHostMetricsWatching, isHostTopologyTrafficWatching, pushAgentRefresh } from "./agentEvents";
 import {
   isAgentForwardGroupLatencyResult,
   isAgentHostProbeServiceResult,
@@ -41,7 +41,6 @@ import {
 } from "./ruleLatency";
 import { clearRuleLatencyQueryCaches } from "./ruleLatencyQueryCache";
 import { agentTcpingReportGate } from "./agentTcpingReportGate";
-import { selectAgentTrafficReportInterval } from "./agentHeartbeatGate";
 import { pruneMapEntries, setBoundedMapValue } from "./boundedCache";
 import { branchedTunnelExitEndpoints, relayBranchedTunnelExitEndpoints } from "./tunnelBranchPlan";
 
@@ -1031,11 +1030,10 @@ agentRouter.post("/api/agent/traffic", async (req: Request, res: Response) => {
 
     res.json({
       success: true,
-      trafficReportInterval: selectAgentTrafficReportInterval({
-        metricsWatching: isHostMetricsWatching(Number(host.id)),
-        strictAccounting: strictTrafficAccounting,
-        landingTrafficActive: landingStats.length > 0,
-      }),
+      // Topology has an explicit high-frequency mode; after its watcher expires
+      // keep this host at one second instead of reverting to the normal batch window.
+      trafficReportInterval: 1,
+      trafficReportIntervalMs: isHostTopologyTrafficWatching(Number(host.id)) ? 500 : 1_000,
     });
   } catch (error) {
     console.error(`[Agent Traffic] Error host=${logHostId || "-"} name=${logHostName || "-"}:`, error);

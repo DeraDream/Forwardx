@@ -1831,7 +1831,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         panelUrl,
         requestLocalState: localRuntimeState.requestLocalState,
         metricsWatching,
-        trafficReportInterval: metricsWatching ? (topologyTrafficWatching ? 1 : 10) : undefined,
+        trafficReportInterval: metricsWatching ? 1 : undefined,
+        trafficReportIntervalMs: metricsWatching ? (topologyTrafficWatching ? 500 : 1_000) : undefined,
       }));
       return;
     }
@@ -1906,7 +1907,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         compactReports: true,
         presenceSupported: true,
         metricsOnly: metricsWatching,
-        ...(metricsWatching ? { trafficReportInterval: topologyTrafficWatching ? 1 : 10 } : {}),
+        ...(metricsWatching ? { trafficReportInterval: 1, trafficReportIntervalMs: topologyTrafficWatching ? 500 : 1_000 } : {}),
       });
       return;
     }
@@ -6857,7 +6858,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         && !hasInteractiveTasks
         && !localRuntimeState.requestLocalState
         && activeWorkActions.length === 0,
-      ...(metricsWatching ? { trafficReportInterval: topologyTrafficWatching ? 1 : 10 } : {}),
+      ...(metricsWatching ? { trafficReportInterval: 1, trafficReportIntervalMs: topologyTrafficWatching ? 500 : 1_000 } : {}),
     });
   } catch (error) {
     console.error(`[Agent Heartbeat] Error host=${logHostId || "-"} name=${logHostName || "-"}:`, error);

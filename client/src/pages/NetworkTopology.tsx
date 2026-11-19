@@ -1008,7 +1008,8 @@ function NetworkTopologyContent() {
     {
       enabled: rateRuleIds.length > 0,
       // While topology is open the existing Agent reporter is requested at 1s.
-      refetchInterval: pollingInterval("realtime"),
+      // Match the topology Agent reporter's 500ms interactive interval.
+      refetchInterval: 500,
       staleTime: 0,
       refetchOnWindowFocus: false,
     },

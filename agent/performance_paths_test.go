@@ -187,7 +187,7 @@ func TestIdleHostTrafficReportsAreCoalesced(t *testing.T) {
 func TestActiveRuleTrafficReportsAreBatched(t *testing.T) {
 	previous := lastRuleTrafficReportAt
 	previousInterval := activeTrafficReportNanos.Load()
-	setActiveTrafficReportIntervalSeconds(int(activeTrafficReportEvery / time.Second))
+	setActiveTrafficReportIntervalMilliseconds(int(activeTrafficReportEvery / time.Millisecond))
 	t.Cleanup(func() {
 		lastRuleTrafficReportAt = previous
 		activeTrafficReportNanos.Store(previousInterval)
@@ -232,7 +232,7 @@ func TestSteadyTrafficReportsAndCollectionUsePanelBatchWindow(t *testing.T) {
 		t.Fatalf("steady collection interval=%s want=%s", got, reportInterval)
 	}
 
-	setActiveTrafficReportIntervalSeconds(1)
+	setActiveTrafficReportIntervalMilliseconds(100)
 	if got := configuredActiveTrafficReportInterval(); got != activeTrafficReportEvery {
 		t.Fatalf("interactive interval clamp=%s want=%s", got, activeTrafficReportEvery)
 	}

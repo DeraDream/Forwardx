@@ -92,6 +92,7 @@ export function buildBusyAgentHeartbeatResponse(input: {
   requestLocalState: boolean;
   metricsWatching?: boolean;
   trafficReportInterval?: number;
+  trafficReportIntervalMs?: number;
 }) {
   const metricsOnly = input.metricsWatching === true && !input.requestLocalState;
   return {
@@ -110,6 +111,7 @@ export function buildBusyAgentHeartbeatResponse(input: {
     presenceSupported: true,
     metricsOnly,
     trafficReportInterval: input.trafficReportInterval,
+    trafficReportIntervalMs: input.trafficReportIntervalMs,
   };
 }
 
