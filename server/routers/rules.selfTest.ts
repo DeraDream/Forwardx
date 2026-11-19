@@ -199,6 +199,16 @@ export const selfTestRulesRouter = router({
       return { id };
     }),
 
+  latestTests: protectedProcedure
+    .input(z.object({ ruleIds: z.array(z.number().int().positive()).max(100), includeActive: z.boolean().optional().default(true) }))
+    .query(async ({ input, ctx }) => {
+      const ids = Array.from(new Set(input.ruleIds));
+      const rules = await Promise.all(ids.map((id) => db.getForwardRuleById(id)));
+      const allowed = ids.filter((id, index) => rules[index] && (ctx.user.role === "admin" || Number((rules[index] as any).userId) === Number(ctx.user.id)));
+      const rows = await Promise.all(allowed.map(async (ruleId) => ({ ruleId, test: await db.getLatestForwardTest(ruleId, { includeActive: input.includeActive }) })));
+      return rows;
+    }),
+
   latestTest: protectedProcedure
     .input(z.object({ ruleId: z.number(), includeActive: z.boolean().optional().default(true) }))
     .query(async ({ input, ctx }) => {

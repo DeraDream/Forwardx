@@ -4,7 +4,7 @@ import * as db from "../db";
 import { lookupAddressGeo } from "../hostGeo";
 import { requireRuleAccess } from "./helpers";
 import { appendPanelLog } from "../_core/panelLogger";
-import { clearTopologyHostTcping, markHostTopologyTrafficWatching, requestTopologyHostTcping } from "../agentEvents";
+import { markHostTopologyTrafficWatching } from "../agentEvents";
 import { ruleTrafficQueryCache as trafficQueryCache } from "../ruleLatencyQueryCache";
 
 const TRAFFIC_RETENTION_HOURS = 24 * 3;
@@ -122,39 +122,6 @@ export const trafficRulesRouter = router({
           }),
       );
     }),
-  probeTopologySegments: protectedProcedure
-    .input(z.object({ ruleIds: z.array(z.number().int().positive()).min(1).max(100) }))
-    .mutation(async ({ input, ctx }) => {
-      const requestedIds = new Set<number>(input.ruleIds);
-      const visibleRules = await db.getForwardRules(ctx.user.role === "admin" ? undefined : ctx.user.id);
-      const hostIds = Array.from(new Set<number>((visibleRules || [])
-        .filter((rule: any) => requestedIds.has(Number(rule.id)) || requestedIds.has(Number(rule.forwardGroupRuleId || 0)))
-        .map((rule: any) => Number(rule.hostId || 0))
-        .filter((hostId: number) => hostId > 0)));
-      hostIds.forEach((hostId) => requestTopologyHostTcping(hostId, 10_000));
-      return { requestedHosts: hostIds.length };
-    }),
-  stopTopologySegments: protectedProcedure
-    .input(z.object({ ruleIds: z.array(z.number().int().positive()).max(100) }))
-    .mutation(async ({ input, ctx }) => {
-      const requestedIds = new Set<number>(input.ruleIds);
-      const visibleRules = await db.getForwardRules(ctx.user.role === "admin" ? undefined : ctx.user.id);
-      const hostIds = Array.from(new Set<number>((visibleRules || [])
-        .filter((rule: any) => requestedIds.has(Number(rule.id)) || requestedIds.has(Number(rule.forwardGroupRuleId || 0)))
-        .map((rule: any) => Number(rule.hostId || 0))
-        .filter((hostId: number) => hostId > 0)));
-      hostIds.forEach(clearTopologyHostTcping);
-      return { stoppedHosts: hostIds.length };
-    }),
-  topologySegmentLatency: protectedProcedure
-    .input(z.object({ ruleIds: z.array(z.number().int().positive()).max(100) }))
-    .query(async ({ input, ctx }) => {
-      const requestedIds = Array.from(new Set(input.ruleIds)).sort((a, b) => a - b);
-      if (requestedIds.length === 0) return [];
-      const visibleRules = await db.getForwardRules(ctx.user.role === "admin" ? undefined : ctx.user.id);
-      const visibleIds = new Set((visibleRules || []).map((rule: any) => Number(rule.id)).filter((id: number) => id > 0));
-      return db.getLatestTopologySegmentLatency(requestedIds.filter((id) => visibleIds.has(id)));
-    }),
   trafficRateBatch: protectedProcedure
     .input(z.object({ ruleIds: z.array(z.number().int().positive()).max(100) }))
     .query(async ({ input, ctx }) => {
@@ -172,7 +139,6 @@ export const trafficRulesRouter = router({
           .filter((hostId: number) => hostId > 0),
       ));
       markHostTopologyTrafficWatching(topologyHostIds, 2_500);
-      topologyHostIds.forEach((hostId) => requestTopologyHostTcping(hostId));
       return trafficQueryCache.get(
         `rate:${ctx.user.id}:${ruleIds.join(",")}`,
         { ttlMs: 500, staleMs: 0 },

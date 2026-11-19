@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { topologyPathEdgeIds } from "./networkTopologyPaths";
+import { parseLinkTestMessage } from "@/components/LinkTestLatencySummary";
 import { topologyRuleHref } from "./topologyRuleLink";
 import { improveTopologyOrder } from "./topologyLayout";
 import { routeSmoothLayeredTopologyGraph, topologyRoutePath } from "./topologyRouting";
@@ -44,6 +45,10 @@ type PhysicalNode = {
 type PhysicalPath = {
   id: string;
   ruleId?: number;
+  // A visible entry rule may explicitly reference another rule. Each physical
+  // leg reports under its own visible rule ID, so the path must query all of
+  // them rather than only the entry rule.
+  segmentRuleIds?: number[];
   name: string;
   category: Exclude<TopologyCategory, "all">;
   entry: PhysicalNode;
@@ -284,7 +289,7 @@ export function buildPhysicalPaths(
   const resolveRuleTail = (
     rule: any,
     visited: Set<number>,
-  ): Array<{ hostIds: number[]; landing: PhysicalNode }> => {
+  ): Array<{ hostIds: number[]; landing: PhysicalNode; ruleIds: number[] }> => {
     const ruleId = Number(rule?.id || 0);
     if (ruleId > 0 && visited.has(ruleId)) { state.incomplete = true; return []; }
 
@@ -299,17 +304,18 @@ export function buildPhysicalPaths(
       return currentVariants.map((hostIds: number[], index: number) => ({
         hostIds,
         landing: makeLandingForRule("rule:" + ruleId + ":" + index, rule),
+        ruleIds: ruleId > 0 ? [ruleId] : [],
       }));
     }
 
     const nested = resolveRuleTail(referenced, nextVisited);
-    const result: Array<{ hostIds: number[]; landing: PhysicalNode }> = [];
+    const result: Array<{ hostIds: number[]; landing: PhysicalNode; ruleIds: number[] }> = [];
     for (const current of currentVariants) {
       for (const tail of nested) {
         const hostIds = joinTopologyHostPaths(current, tail.hostIds);
         if (!hostIds) { state.incomplete = true; continue; }
         if (result.length >= MAX_TOPOLOGY_VARIANTS) { state.truncated = true; return result; }
-        result.push({ hostIds, landing: tail.landing });
+        result.push({ hostIds, landing: tail.landing, ruleIds: Array.from(new Set([ruleId, ...tail.ruleIds].filter((id) => id > 0)))});
       }
     }
     return result;
@@ -361,6 +367,7 @@ export function buildPhysicalPaths(
       paths.push({
         id: pathId,
         ruleId: Number(rule.id),
+        segmentRuleIds: tail.ruleIds,
         name: String(rule?.name || "规则 #" + rule.id),
         category: currentCategory,
         entry,
@@ -647,31 +654,19 @@ type TopologyPathMetrics = {
 function TopologyLane({
   path,
   metrics,
-  segments,
+  edgeLatency,
   selected,
   onSelectPath,
   onSelectNode,
 }: {
   path: PhysicalPath;
   metrics?: TopologyPathMetrics;
-  segments?: Array<{ sourceHostId: number; targetHostId?: number | null; targetAddress: string; targetPort: number; latencyMs: number | null; isTimeout: boolean; method?: string; recordedAt?: Date | string; successRate?: number; jitterMs?: number | null; sampleCount?: number }>;
+  edgeLatency?: (from: PhysicalNode, to: PhysicalNode) => string;
   selected: boolean;
   onSelectPath: () => void;
   onSelectNode: (node: PhysicalNode) => void;
 }) {
   const nodes = [path.entry, ...path.relays, path.landing];
-  const segmentForSource = (node: PhysicalNode, next: PhysicalNode) => {
-    const hostId = Number(String(node.id).replace(/^host:/, ""));
-    const nextHostId = Number(String(next.id).replace(/^host:/, ""));
-    const addresses = [next.subtitle, next.label]
-      .map((value) => String(value || "").trim().toLowerCase())
-      .filter(Boolean);
-    return segments?.find((segment) => (
-      segment.sourceHostId === hostId
-      && (segment.targetHostId === nextHostId
-        || addresses.includes(String(segment.targetAddress || "").trim().toLowerCase()))
-    )) || null;
-  };
   return (
     <section
       className={cn(
@@ -700,13 +695,11 @@ function TopologyLane({
             return (
             <div key={`${path.id}:${node.id}:${index}`} className="flex items-center">
               {index > 0 && (() => {
-                const segment = segmentForSource(nodes[index - 1], nodes[index]);
-                const ageMs = segment?.recordedAt ? Date.now() - new Date(segment.recordedAt).getTime() : 0;
-                const stale = !!segment && (!Number.isFinite(ageMs) || ageMs > 3 * 60_000);
+                const label = edgeLatency?.(nodes[index - 1], nodes[index]) || "待探测";
                 return <div className="relative flex w-14 shrink-0 items-center px-1.5">
                   <span className="h-0 flex-1 border-t border-dashed border-primary/65" />
                   <ArrowRight className="-ml-0.5 h-3 w-3 shrink-0 text-primary" />
-                  <span title={segment?.sampleCount ? `近 ${segment.sampleCount} 次成功率 ${Math.round((segment.successRate || 0) * 100)}%${segment.jitterMs == null ? "" : `，抖动 ${Math.round(segment.jitterMs)} ms`}` : undefined} className={cn("absolute -top-4 left-1/2 -translate-x-1/2 whitespace-nowrap rounded border bg-background px-1 text-[9px] tabular-nums", !segment ? "border-border/50 text-muted-foreground" : segment.isTimeout ? "border-destructive/35 text-destructive" : stale ? "border-amber-500/35 text-amber-700 dark:text-amber-300" : "border-border/50 text-muted-foreground")}>{!segment ? "待探测" : segment.isTimeout ? (segment.method === "ping" ? "Ping 超时" : "超时") : stale ? `${Math.round(Number(segment.latencyMs) || 0)} ms · 过期` : `${segment.method === "ping" ? "Ping " : ""}${Math.round(Number(segment.latencyMs) || 0)} ms · ${Math.round((segment.successRate || 0) * 100)}%`}</span>
+                  <span className={cn("absolute -top-4 left-1/2 -translate-x-1/2 whitespace-nowrap rounded border bg-background px-1 text-[9px] tabular-nums", label === "待探测" || label === "探测中" ? "border-border/50 text-muted-foreground" : label === "超时" ? "border-destructive/35 text-destructive" : "border-border/50 text-muted-foreground")}>{label}</span>
                 </div>;
               })()}
               <button
@@ -758,8 +751,7 @@ function NetworkTopologyContent() {
   const [layoutMode, setLayoutMode] = useState<"lanes" | "graph">("lanes");
   const [qualityTarget, setQualityTarget] = useState<LinkQualityTarget | null>(null);
   const [probeMessage, setProbeMessage] = useState("");
-  const probeTopologySegments = trpc.rules.probeTopologySegments.useMutation();
-  const stopTopologySegments = trpc.rules.stopTopologySegments.useMutation();
+  const startRuleLatencyTest = trpc.rules.startSelfTest.useMutation();
 
   const hostsQuery = trpc.hosts.options.useQuery(undefined, {
     refetchInterval: pollingInterval("slow"),
@@ -807,7 +799,7 @@ function NetworkTopologyContent() {
   );
   const paths = topology.paths;
   const topologyRuleIds = useMemo(
-    () => Array.from(new Set(paths.map((path) => Number(path.ruleId || 0)).filter((id) => id > 0))),
+    () => Array.from(new Set(paths.flatMap((path) => path.segmentRuleIds || [Number(path.ruleId || 0)]).filter((id) => id > 0))),
     [paths],
   );
   const trafficQuery = trpc.rules.trafficSummary.useQuery(
@@ -821,41 +813,34 @@ function NetworkTopologyContent() {
     },
   );
   const rateRuleIds = useMemo(() => topologyRuleIds.slice(0, 100), [topologyRuleIds]);
-  const topologyProbeKeyRef = useRef("");
   const topologyProbeRuleIdsRef = useRef<number[]>([]);
-  // Mutation result objects are recreated after a request. Keep the latest
-  // callback in a ref so the unmount-only cleanup below never re-runs and
-  // recursively mutates React state.
-  const stopTopologySegmentsRef = useRef(stopTopologySegments.mutate);
-  stopTopologySegmentsRef.current = stopTopologySegments.mutate;
-  useEffect(() => {
-    topologyProbeRuleIdsRef.current = rateRuleIds;
-    const key = rateRuleIds.join(",");
-    if (!key || topologyProbeKeyRef.current === key) return;
-    topologyProbeKeyRef.current = key;
-    // Request one immediate collection when this view opens. Subsequent edge
-    // values still come from the normal Agent collector, not browser probes.
-    probeTopologySegments.mutate({ ruleIds: rateRuleIds });
-  }, [probeTopologySegments, rateRuleIds]);
-  useEffect(() => () => {
-    const ruleIds = topologyProbeRuleIdsRef.current;
-    if (ruleIds.length > 0) stopTopologySegmentsRef.current({ ruleIds });
-  }, []);
-  const topologySegmentQuery = trpc.rules.topologySegmentLatency.useQuery(
-    { ruleIds: rateRuleIds },
-    { enabled: rateRuleIds.length > 0, refetchInterval: pollingInterval("active"), staleTime: 0, refetchOnWindowFocus: false },
+  const topologyPollRunningRef = useRef(false);
+  const ruleLatencyTests = trpc.rules.latestTests.useQuery(
+    { ruleIds: topologyRuleIds, includeActive: true },
+    { enabled: topologyRuleIds.length > 0, refetchInterval: pollingInterval("active"), staleTime: 0, refetchOnWindowFocus: false },
   );
-  const segmentsByRule = useMemo(() => {
-    const result = new Map<number, Array<{ sourceHostId: number; targetHostId?: number | null; targetAddress: string; targetPort: number; latencyMs: number | null; isTimeout: boolean; method?: string; recordedAt?: Date | string; successRate?: number; jitterMs?: number | null; sampleCount?: number }>>();
-    (topologySegmentQuery.data || []).forEach((segment: any) => {
-      const ruleId = Number(segment.ruleId || 0);
-      if (ruleId <= 0) return;
-      const list = result.get(ruleId) || [];
-      list.push({ sourceHostId: Number(segment.sourceHostId || 0), targetHostId: Number(segment.targetHostId || 0) || null, targetAddress: String(segment.targetAddress || ""), targetPort: Number(segment.targetPort || 0), latencyMs: segment.latencyMs == null ? null : Number(segment.latencyMs), isTimeout: !!segment.isTimeout, method: String(segment.method || ""), recordedAt: segment.recordedAt, successRate: segment.successRate == null ? undefined : Number(segment.successRate), jitterMs: segment.jitterMs == null ? null : Number(segment.jitterMs), sampleCount: Number(segment.sampleCount || 0) || undefined });
-      result.set(ruleId, list);
-    });
-    return result;
-  }, [topologySegmentQuery.data]);
+  // Reuse the exact same self-test mutation as the Rules page. This is the
+  // only interactive topology polling; no topology-specific probe exists.
+  useEffect(() => {
+    topologyProbeRuleIdsRef.current = topologyRuleIds;
+    if (topologyRuleIds.length === 0) return;
+    let stopped = false;
+    const run = async () => {
+      if (stopped || topologyPollRunningRef.current) return;
+      topologyPollRunningRef.current = true;
+      try {
+        await Promise.allSettled(topologyRuleIds.map((ruleId) => startRuleLatencyTest.mutateAsync({ ruleId })));
+        await ruleLatencyTests.refetch();
+      } finally { topologyPollRunningRef.current = false; }
+    };
+    void run();
+    const timer = window.setInterval(() => void run(), 10_000);
+    return () => { stopped = true; window.clearInterval(timer); };
+  }, [topologyRuleIds.join(",")]);
+  const testByRule = useMemo(() => new Map((ruleLatencyTests.data || []).map((row: any) => [Number(row.ruleId), {
+    parsed: parseLinkTestMessage(row.test?.message),
+    recordedAt: new Date(row.test?.updatedAt || row.test?.createdAt || 0).getTime(),
+  }])), [ruleLatencyTests.data]);
   const trafficRateQuery = trpc.rules.trafficRateBatch.useQuery(
     { ruleIds: rateRuleIds },
     {
@@ -938,29 +923,25 @@ function NetworkTopologyContent() {
     : null;
   const selectedEdge = graph.edges.find((edge) => edge.id === selectedEdgeId) || null;
   const edgeMeasurementLabel = (edge: TopologyEdge) => {
-    const target = graph.nodes.find(node => node.id === edge.to);
     const sourceId = Number(edge.from.replace(/^host:/, ""));
     const targetId = Number(edge.to.replace(/^host:/, ""));
-    const rows = (topologySegmentQuery.data || []).filter((row: any) =>
-      Number(row.sourceHostId) === sourceId &&
-      (Number(row.targetHostId) === targetId || String(row.targetAddress || "").toLowerCase() === String(target?.subtitle || "").toLowerCase() ||
-       edge.to === `target:${row.targetAddress}:${row.targetPort}`));
-    if (!rows.length) return "待探测";
-    const labels = new Set(rows.map((row: any) => {
-      const age = Date.now() - new Date(row.recordedAt).getTime();
-      const stale = !Number.isFinite(age) || age > 180_000;
-      return `${row.method === "ping" ? "Ping" : "TCP"} ${row.isTimeout ? "超时" : `${Math.round(Number(row.latencyMs) || 0)} ms`}${stale ? " · 过期" : ""}`;
-    }));
-    return [...labels].join(" / ");
+    const details = [...testByRule.values()].flatMap((test: any) => (test.parsed.details || []).map((detail: any) => ({ ...detail, recordedAt: test.recordedAt })))
+      .filter((detail: any) => detail.fromHostId === sourceId && detail.toHostId === targetId)
+      .sort((a: any, b: any) => b.recordedAt - a.recordedAt);
+    if (!details.length) return "待探测";
+    // A merged physical edge can belong to several rules/ports. Show only the
+    // newest Rules-page test result; never concatenate unrelated port tests.
+    const detail = details[0];
+    return detail.pending ? "探测中" : !detail.success ? "超时" : `${Math.round(Number(detail.latencyMs) || 0)} ms`;
   };
   const requestPathProbe = async (ruleId: number) => {
-    setProbeMessage("正在请求探测…");
+    setProbeMessage("正在请求链路测试…");
     try {
-      const result = await probeTopologySegments.mutateAsync({ ruleIds: [ruleId] });
-      setProbeMessage(result.requestedHosts > 0 ? `已请求 ${result.requestedHosts} 台 Agent 探测；等待上报，结果自动刷新。` : "未找到可请求的 Agent，请检查规则关联。");
-      void topologySegmentQuery.refetch();
+      await startRuleLatencyTest.mutateAsync({ ruleId });
+      setProbeMessage("已请求规则链路测试；结果自动刷新。");
+      void ruleLatencyTests.refetch();
     } catch (error) {
-      setProbeMessage(`探测请求失败：${error instanceof Error ? error.message : String(error)}`);
+      setProbeMessage(`链路测试请求失败：${error instanceof Error ? error.message : String(error)}`);
     }
   };
   const nodePaths = selectedNode ? paths.filter((path) => [path.entry, ...path.relays, path.landing].some((node) => node.id === selectedNode.id)) : [];
@@ -1088,8 +1069,13 @@ function NetworkTopologyContent() {
                 <TopologyLane
                   key={path.id}
                   path={path}
-                  metrics={path.ruleId ? trafficByRule.get(path.ruleId) : undefined}
-                  segments={path.ruleId ? segmentsByRule.get(path.ruleId) : undefined}
+                  metrics={path.ruleId ? (() => {
+                    const base = trafficByRule.get(path.ruleId);
+                    const test = testByRule.get(path.ruleId);
+                    const total = typeof test?.parsed.totalLatencyMs === "number" ? test.parsed.totalLatencyMs : null;
+                    return base ? { ...base, latestLatencyMs: total ?? base.latestLatencyMs, latestLatencyIsTimeout: total == null ? base.latestLatencyIsTimeout : false } : undefined;
+                  })() : undefined}
+                  edgeLatency={(from, to) => edgeMeasurementLabel({ id: `${from.id}=>${to.id}`, from: from.id, to: to.id })}
                   selected={selectedPathId === path.id}
                   onSelectPath={() => { setSelectedPathId(path.id); setSelectedNodeId(null); setSelectedEdgeId(null); }}
                   onSelectNode={(node) => { setSelectedPathId(path.id); setSelectedNodeId(node.id); setSelectedEdgeId(null); }}
@@ -1134,7 +1120,7 @@ function NetworkTopologyContent() {
                         <g key={edge.id} opacity={faded ? 0.25 : 1}>
                           <path d={path} fill="none" stroke="currentColor" strokeWidth={active ? 7 : 5} className="text-card" />
                           <path d={path} fill="none" stroke="currentColor" strokeWidth={active ? 3 : 1.8} className={active ? "text-primary" : "text-muted-foreground/70"} />
-                          {active && points.length === 4 && <text
+                          {points.length === 4 && <text
                             x={(points[0].x + 3 * points[1].x + 3 * points[2].x + points[3].x) / 8}
                             y={(points[0].y + 3 * points[1].y + 3 * points[2].y + points[3].y) / 8 - 10}
                             textAnchor="middle" fill="currentColor" stroke="var(--background)" strokeWidth="4" paintOrder="stroke" className="text-xs text-primary">
@@ -1209,7 +1195,7 @@ function NetworkTopologyContent() {
                   <p className="text-muted-foreground">路径根据面板配置生成，不代表端到端业务已验证。</p>
                   <div className="flex flex-wrap items-center gap-3">
                     <a className="text-primary underline" href={selectedRule ? topologyRuleHref(Number(selectedRule.id)) : "/tunnels"}>打开{selectedRule ? "该转发规则" : "链路管理"}</a>
-                    {selectedPath.ruleId && <Button size="sm" variant="outline" className="h-7 gap-1 text-[11px]" disabled={probeTopologySegments.isPending} onClick={() => void requestPathProbe(selectedPath.ruleId!)}>
+                    {selectedPath.ruleId && <Button size="sm" variant="outline" className="h-7 gap-1 text-[11px]" disabled={startRuleLatencyTest.isPending} onClick={() => void requestPathProbe(selectedPath.ruleId!)}>
                       <Stethoscope className="h-3 w-3" />立即探测路径
                     </Button>}
                   </div>

@@ -314,7 +314,6 @@ const GOST_UDP_LISTENER_METADATA = {
 const AGENT_STATE_SECTION_NAMES = [
   "runningRules",
   "ruleLatencyProbes",
-  "topologySegmentProbes",
   "tunnelProbes",
   "forwardGroupProbes",
   "hostProbeServices",
@@ -6166,41 +6165,6 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     ruleLatencyProbes.sort(
       (left: any, right: any) => Number(left.ruleId) - Number(right.ruleId),
     );
-    // Every runtime rule on this host is one physical non-tunnel forwarding
-    // leg. Group child rules retain their visible template rule ID so the
-    // topology can join all legs of one configured path.
-    const topologySegmentProbeMap = new Map<string, any>();
-    // Only attach a host ID when the configured target exactly matches one of
-    // its declared addresses. A DNS name or an arbitrary IP must remain an
-    // external target instead of being guessed as the next managed hop.
-    const targetHostIdByAddress = new Map<string, number>();
-    for (const candidate of await db.getHosts()) {
-      for (const address of [(candidate as any).entryIp, (candidate as any).ipv4, (candidate as any).ip, (candidate as any).publicIp, (candidate as any).exitIp]) {
-        const normalized = String(address || "").trim().toLowerCase();
-        if (normalized && !targetHostIdByAddress.has(normalized)) targetHostIdByAddress.set(normalized, Number((candidate as any).id));
-      }
-    }
-    for (const rule of agentAllRules as any[]) {
-      const tunnel = Number(rule?.tunnelId || 0) > 0 ? tunnelById.get(Number(rule.tunnelId)) : undefined;
-      if (!rule || runtimeBool(rule.pendingDelete) || !runtimeBool(rule.isEnabled) || !runtimeBool(rule.isRunning)
-        || (!!tunnel && !runtimeBool((tunnel as any).isEnabled))
-        || !isRuleProtocolEnabled(forwardProtocolSettings, rule, tunnel)) continue;
-      const targetIp = processTarget(rule);
-      const targetPort = Number(rule.targetPort || 0);
-      const method = ruleLatencyProbeMethodForRule(rule) === "ping" ? "ping" : "tcp";
-      const visibleRuleId = Number(rule.forwardGroupRuleId || rule.id);
-      if (!visibleRuleId || !targetIp || (method !== "ping" && targetPort <= 0)) continue;
-      // Probe a physical leg once per source/target/method, then fan its result
-      // back out to every visible rule using that leg.
-      const segmentKey = `topology-v1:${Number(host.id)}:${targetIp.toLowerCase()}:${targetPort}:${method}`;
-      if (!topologySegmentProbeMap.has(segmentKey)) {
-        topologySegmentProbeMap.set(segmentKey, {
-          ruleId: visibleRuleId, segmentKey, targetIp, targetPort, method,
-          targetHostId: targetHostIdByAddress.get(String(targetIp).trim().toLowerCase()) || undefined,
-        });
-      }
-    }
-    const topologySegmentProbes = Array.from(topologySegmentProbeMap.values());
     const hostProbeServices = await db.getHostProbeTasksForHost(host.id);
     if (landingHostEnabled) {
       for (const service of await db.getLandingServicesForHost(Number(host.id), false)) {
@@ -6771,14 +6735,13 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     const stateSections = buildAgentStateResponseSections({
       runningRules,
       ruleLatencyProbes,
-      topologySegmentProbes,
       tunnelProbes,
       forwardGroupProbes,
       hostProbeServices,
       guardRules,
       dnsWatch: Array.from(dnsWatches.values()),
     }, agentStateSignatures);
-    const probeStateRefreshed = ["runningRules", "ruleLatencyProbes", "topologySegmentProbes", "tunnelProbes", "forwardGroupProbes", "hostProbeServices"]
+    const probeStateRefreshed = ["runningRules", "ruleLatencyProbes", "tunnelProbes", "forwardGroupProbes", "hostProbeServices"]
       .some((name) => Object.prototype.hasOwnProperty.call(stateSections.payload, name));
     // 有 SSE 长连接时立即将 desiredState + runningRules 推送给 Agent，
     // 无需等待下一个心跳周期即可执行转发规则变更。
@@ -6799,11 +6762,9 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         desiredState,
         runningRules,
         ruleLatencyProbes,
-        topologySegmentProbes,
         stateSignatures: {
           runningRules: stateSections.signatures.runningRules,
           ruleLatencyProbes: stateSections.signatures.ruleLatencyProbes,
-          topologySegmentProbes: stateSections.signatures.topologySegmentProbes,
         },
       });
     }

@@ -37,7 +37,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.236"
+var Version = "2.2.237"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -3318,7 +3318,7 @@ func scheduleAgentTCPing(cfg Config, force bool) bool {
 	if !force && !due {
 		return false
 	}
-	if scheduleTCPingCollection(cfg, state.RuleLatencyProbes, state.TunnelProbes, state.ForwardGroupProbes, state.HostProbeServices, force, state.TopologySegmentProbes) {
+	if scheduleTCPingCollection(cfg, state.RuleLatencyProbes, state.TunnelProbes, state.ForwardGroupProbes, state.HostProbeServices, force) {
 		tcpingScheduleMu.Lock()
 		lastTCPingAt = time.Now()
 		tcpingScheduleMu.Unlock()
