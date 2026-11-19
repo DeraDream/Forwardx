@@ -23,7 +23,9 @@ export function routeTopologyGraph(nodes: TopologyRoutingNode[], inputEdges: Top
     add(targetByGap, byId.get(edge.to)!.column - 1, edge);
   }
   const maxDegree = Math.max(1, ...nodes.map((node) => Math.max(outgoing.get(node.id)?.length || 0, incoming.get(node.id)?.length || 0)));
-  const nodeWidth = 188, nodeHeight = Math.max(58, (maxDegree + 1) * 8), laneStep = 10;
+  // Keep the relationship canvas dense enough for the dashboard while retaining
+  // sufficient routing room around cards and arrow labels.
+  const nodeWidth = 176, nodeHeight = Math.max(56, (maxDegree + 1) * 8), laneStep = 8;
   const gapWidth = (column: number) => Math.max(50, 30 + ((sourceByGap.get(column)?.length || 0) + (targetByGap.get(column)?.length || 0)) * laneStep);
   const columnX = new Map<number, number>();
   columnX.set(0, 32 + gapWidth(-1));
@@ -31,7 +33,7 @@ export function routeTopologyGraph(nodes: TopologyRoutingNode[], inputEdges: Top
   const columns = new Map<number, TopologyRoutingNode[]>();
   for (const node of nodes) add(columns, node.column, node);
   for (const list of columns.values()) list.sort((a, b) => a.row - b.row);
-  const rowGap = nodeHeight + 28;
+  const rowGap = nodeHeight + 18;
   const maxRows = Math.max(1, ...[...columns.values()].map((list) => list.length));
   const maxSpan = nodeHeight + (maxRows - 1) * rowGap + 34;
   const cardTop = 70 + edges.length * laneStep;
