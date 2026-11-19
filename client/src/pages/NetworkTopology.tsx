@@ -823,6 +823,11 @@ function NetworkTopologyContent() {
   const rateRuleIds = useMemo(() => topologyRuleIds.slice(0, 100), [topologyRuleIds]);
   const topologyProbeKeyRef = useRef("");
   const topologyProbeRuleIdsRef = useRef<number[]>([]);
+  // Mutation result objects are recreated after a request. Keep the latest
+  // callback in a ref so the unmount-only cleanup below never re-runs and
+  // recursively mutates React state.
+  const stopTopologySegmentsRef = useRef(stopTopologySegments.mutate);
+  stopTopologySegmentsRef.current = stopTopologySegments.mutate;
   useEffect(() => {
     topologyProbeRuleIdsRef.current = rateRuleIds;
     const key = rateRuleIds.join(",");
@@ -834,8 +839,8 @@ function NetworkTopologyContent() {
   }, [probeTopologySegments, rateRuleIds]);
   useEffect(() => () => {
     const ruleIds = topologyProbeRuleIdsRef.current;
-    if (ruleIds.length > 0) stopTopologySegments.mutate({ ruleIds });
-  }, [stopTopologySegments]);
+    if (ruleIds.length > 0) stopTopologySegmentsRef.current({ ruleIds });
+  }, []);
   const topologySegmentQuery = trpc.rules.topologySegmentLatency.useQuery(
     { ruleIds: rateRuleIds },
     { enabled: rateRuleIds.length > 0, refetchInterval: pollingInterval("active"), staleTime: 0, refetchOnWindowFocus: false },
