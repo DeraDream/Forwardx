@@ -67,6 +67,13 @@ type TopologyEdge = {
   to: string;
 };
 
+type TopologyRuleTest = {
+  parsed: ReturnType<typeof parseLinkTestMessage>;
+  recordedAt: number;
+  status: string;
+  latencyMs: number | null;
+};
+
 const categoryOptions: Array<{ value: TopologyCategory; label: string }> = [
   { value: "all", label: "全部" },
   { value: "local", label: "端口转发" },
@@ -817,7 +824,7 @@ function NetworkTopologyContent() {
   const topologyPollRunningRef = useRef(false);
   // Keep the last completed result while the next 10-second test is pending.
   // A fresh page has no cache and correctly shows "待探测" until its first result.
-  const completedLatencyTestsRef = useRef(new Map<number, { parsed: ReturnType<typeof parseLinkTestMessage>; recordedAt: number }>());
+  const completedLatencyTestsRef = useRef(new Map<number, TopologyRuleTest>());
   const ruleLatencyTests = trpc.rules.latestTests.useQuery(
     { ruleIds: topologyRuleIds, includeActive: true },
     { enabled: topologyRuleIds.length > 0, refetchInterval: pollingInterval("active"), staleTime: 0, refetchOnWindowFocus: false },
@@ -842,12 +849,15 @@ function NetworkTopologyContent() {
   }, [topologyRuleIds.join(",")]);
   const testByRule = useMemo(() => new Map((ruleLatencyTests.data || []).map((row: any) => {
     const ruleId = Number(row.ruleId);
-    const candidate = {
+    const candidate: TopologyRuleTest = {
       parsed: parseLinkTestMessage(row.test?.message),
       recordedAt: new Date(row.test?.updatedAt || row.test?.createdAt || 0).getTime(),
+      status: String(row.test?.status || "pending"),
+      latencyMs: typeof row.test?.latencyMs === "number" ? row.test.latencyMs : null,
     };
-    if (candidate.parsed.details.length > 0) completedLatencyTestsRef.current.set(ruleId, candidate);
-    return [ruleId, candidate.parsed.details.length > 0 ? candidate : completedLatencyTestsRef.current.get(ruleId) || candidate];
+    const completed = candidate.parsed.details.length > 0 || ["success", "failed", "timeout"].includes(candidate.status);
+    if (completed) completedLatencyTestsRef.current.set(ruleId, candidate);
+    return [ruleId, completed ? candidate : completedLatencyTestsRef.current.get(ruleId) || candidate];
   })), [ruleLatencyTests.data]);
   const trafficRateQuery = trpc.rules.trafficRateBatch.useQuery(
     { ruleIds: rateRuleIds },
@@ -936,11 +946,24 @@ function NetworkTopologyContent() {
     const details = [...testByRule.values()].flatMap((test: any) => (test.parsed.details || []).map((detail: any) => ({ ...detail, recordedAt: test.recordedAt })))
       .filter((detail: any) => detail.fromHostId === sourceId && detail.toHostId === targetId)
       .sort((a: any, b: any) => b.recordedAt - a.recordedAt);
-    if (!details.length) return "待探测";
-    // A merged physical edge can belong to several rules/ports. Show only the
-    // newest Rules-page test result; never concatenate unrelated port tests.
-    const detail = details[0];
-    return detail.pending ? "探测中" : !detail.success ? "超时" : `${Math.round(Number(detail.latencyMs) || 0)} ms`;
+    if (details.length) {
+      // A merged physical edge can belong to several rules/ports. Show only the
+      // newest Rules-page test result; never concatenate unrelated port tests.
+      const detail = details[0];
+      return detail.pending ? "探测中" : !detail.success ? "超时" : `${Math.round(Number(detail.latencyMs) || 0)} ms`;
+    }
+    // A direct rule has a normal forward-test result rather than a chain
+    // summary. Match its source host and the displayed target address.
+    const targetNode = graph.nodes.find((node) => node.id === edge.to);
+    const targetAddresses = [targetNode?.subtitle, targetNode?.detail].map((value) => String(value || "").trim()).filter(Boolean);
+    const directRuleIds = new Set((rulesQuery.data || []).filter((rule: any) => Number(rule.hostId) === sourceId && targetAddresses.includes(String(rule.targetIp || "").trim())).map((rule: any) => Number(rule.id)));
+    const directTests = [...testByRule.entries()]
+      .filter(([ruleId, test]) => directRuleIds.has(ruleId) && test.status !== "pending")
+      .map(([, test]) => test)
+      .sort((a, b) => b.recordedAt - a.recordedAt);
+    if (!directTests.length) return "待探测";
+    const test = directTests[0];
+    return test.status === "timeout" || test.status === "failed" ? "超时" : typeof test.latencyMs === "number" ? `${Math.round(test.latencyMs)} ms` : "待探测";
   };
   const requestPathProbe = async (ruleId: number) => {
     setProbeMessage("正在请求链路测试…");
