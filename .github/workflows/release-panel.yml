@@ -136,7 +136,10 @@ jobs:
           fi
 
           if gh release view "$RELEASE_VERSION" >/dev/null 2>&1; then
-            gh release edit "$RELEASE_VERSION" --notes-file RELEASE_NOTES.md
+            # A prior interrupted release can remain as a draft. Draft assets
+            # are invisible to both the panel updater and direct download URLs;
+            # explicitly publish an existing release after refreshing its notes.
+            gh release edit "$RELEASE_VERSION" --notes-file RELEASE_NOTES.md --draft=false --prerelease=false
           else
             gh release create "$RELEASE_VERSION" \
               --target "$GITHUB_SHA" \
