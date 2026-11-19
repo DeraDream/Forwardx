@@ -815,6 +815,9 @@ function NetworkTopologyContent() {
   const rateRuleIds = useMemo(() => topologyRuleIds.slice(0, 100), [topologyRuleIds]);
   const topologyProbeRuleIdsRef = useRef<number[]>([]);
   const topologyPollRunningRef = useRef(false);
+  // Keep the last completed result while the next 10-second test is pending.
+  // A fresh page has no cache and correctly shows "待探测" until its first result.
+  const completedLatencyTestsRef = useRef(new Map<number, { parsed: ReturnType<typeof parseLinkTestMessage>; recordedAt: number }>());
   const ruleLatencyTests = trpc.rules.latestTests.useQuery(
     { ruleIds: topologyRuleIds, includeActive: true },
     { enabled: topologyRuleIds.length > 0, refetchInterval: pollingInterval("active"), staleTime: 0, refetchOnWindowFocus: false },
@@ -837,10 +840,15 @@ function NetworkTopologyContent() {
     const timer = window.setInterval(() => void run(), 10_000);
     return () => { stopped = true; window.clearInterval(timer); };
   }, [topologyRuleIds.join(",")]);
-  const testByRule = useMemo(() => new Map((ruleLatencyTests.data || []).map((row: any) => [Number(row.ruleId), {
-    parsed: parseLinkTestMessage(row.test?.message),
-    recordedAt: new Date(row.test?.updatedAt || row.test?.createdAt || 0).getTime(),
-  }])), [ruleLatencyTests.data]);
+  const testByRule = useMemo(() => new Map((ruleLatencyTests.data || []).map((row: any) => {
+    const ruleId = Number(row.ruleId);
+    const candidate = {
+      parsed: parseLinkTestMessage(row.test?.message),
+      recordedAt: new Date(row.test?.updatedAt || row.test?.createdAt || 0).getTime(),
+    };
+    if (candidate.parsed.details.length > 0) completedLatencyTestsRef.current.set(ruleId, candidate);
+    return [ruleId, candidate.parsed.details.length > 0 ? candidate : completedLatencyTestsRef.current.get(ruleId) || candidate];
+  })), [ruleLatencyTests.data]);
   const trafficRateQuery = trpc.rules.trafficRateBatch.useQuery(
     { ruleIds: rateRuleIds },
     {

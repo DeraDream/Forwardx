@@ -12,6 +12,7 @@ import {
   type InsertForwardGroupMember,
 } from "../../drizzle/schema";
 import { pushAgentRefresh } from "../agentEvents";
+import { getLandingServiceById } from "./landingRepository";
 import { appendPanelLog } from "../_core/panelLogger";
 import { getDdnsSettings, updateDdnsRecordValues } from "../ddns";
 import { afterDatabaseCommit, afterDatabaseTransactionSettled, executeRaw, getDb, insertAndGetId, isDatabaseTransactionActive, nowDate, queryRaw, withDatabaseTransaction } from "../dbRuntime";
@@ -1391,11 +1392,14 @@ async function buildForwardGroupChainProbes(
     if (lastHostId > 0 && targetIp && targetPort > 0) {
       const targetLabel = await forwardChainTargetLabel(template);
       const finalProbeMethod = linkProbeMethodForProtocol(template?.protocol);
+      const targetRule = Number(template?.targetRuleId || 0) > 0 ? await getForwardRuleById(Number(template.targetRuleId)) as any : null;
+      const targetLanding = Number(template?.targetLandingServiceId || 0) > 0 ? await getLandingServiceById(Number(template.targetLandingServiceId)) as any : null;
       const destinationHost = [...hostById.values()].find((host: any) => [host?.ip, host?.exitIp, host?.entryIp].some((address) => String(address || "").trim() === targetIp));
+      const destinationHostId = Number(targetRule?.hostId || targetLanding?.hostId || destinationHost?.id || 0) || null;
       probes.push({
         groupId,
         fromHostId: lastHostId,
-        toHostId: Number(destinationHost?.id || 0) || null,
+        toHostId: destinationHostId,
         targetIp,
         targetPort: finalProbeMethod === "ping" ? 0 : targetPort,
         method: finalProbeMethod,
