@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.4.89] - 2026-11-19
+
+### Fixed
+
+- 修复链路质量趋势图 Tooltip 的 TypeScript formatter 类型不兼容，导致发布打包 Type Check 失败的问题。
+
+Agent 保持 `2.2.237`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.4.88] - 2026-11-19
 
 ### Changed
