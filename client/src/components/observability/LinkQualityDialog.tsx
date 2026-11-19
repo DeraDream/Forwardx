@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { pollingInterval } from "@/lib/polling";
+import { applyLatencyPeakCut } from "@/lib/latencyChart";
 
 export type LinkQualityScope = "rule" | "tunnel" | "chain" | "full-chain";
 export type LinkQualityTarget = { scope: LinkQualityScope; id: number; name: string; subtitle?: string };
@@ -42,7 +43,7 @@ function CompactStat({ label, value, hint, icon: Icon }: { label: string; value:
 
 export function LinkQualityDialog({ target, open, onOpenChange }: { target: LinkQualityTarget | null; open: boolean; onOpenChange: (open: boolean) => void }) {
   const [rangeHours, setRangeHours] = useState<RangeHours>(24);
-  const [smooth, setSmooth] = useState(false);
+  const [peakCut, setPeakCut] = useState(false);
   const enabled = open && !!target?.id;
   const ruleQuery = trpc.rules.tcpingSeries.useQuery({ ruleId: Number(target?.id || 0), hours: 168 }, { enabled: enabled && target?.scope === "rule", refetchInterval: pollingInterval("slow", enabled), refetchOnWindowFocus: false });
   const tunnelQuery = trpc.tunnels.latencySeries.useQuery({ tunnelId: Number(target?.id || 0), hours: 168 }, { enabled: enabled && target?.scope === "tunnel", refetchInterval: pollingInterval("slow", enabled), refetchOnWindowFocus: false });
@@ -58,6 +59,10 @@ export function LinkQualityDialog({ target, open, onOpenChange }: { target: Link
     const pad = (value: number) => String(value).padStart(2, "0");
     return { label: `${pad(at.getMonth() + 1)}/${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())}`, latency: timeout ? null : Number(sample.latencyMs ?? 0), timeout };
   }), [rangedSeries]);
+  // 与转发规则的 TCPing 弹窗一致：只削减趋势图中的异常尖峰，真实统计值不被改写。
+  const displayedChartData = useMemo(() => peakCut
+    ? applyLatencyPeakCut(chartData as Array<Record<string, unknown>>, [{ dataKey: "latency", timeoutKey: "timeout" }]) as typeof chartData
+    : chartData, [chartData, peakCut]);
   const unstable = stats.status === "unstable" || stats.status === "degraded";
   const windowLabel = rangeHours === 1 ? "近 1 小时" : rangeHours === 24 ? "近 24 小时" : "近 7 天";
 
@@ -84,8 +89,8 @@ export function LinkQualityDialog({ target, open, onOpenChange }: { target: Link
         </section>
 
         <section className="rounded-xl border border-border/55 bg-card/65 p-3">
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-2"><div><h2 className="text-[13px] font-bold leading-none text-foreground">延迟趋势</h2><p className="mt-1 text-[11px] leading-none text-muted-foreground">只读取历史探测样本；超时点不会伪造成 0 ms。</p></div><div className="flex items-center gap-2.5"><span className="rounded-md bg-muted px-2 py-0.5 font-mono text-[11px] text-muted-foreground">{stats.total} 个样本</span><span className="border-l border-border/60 pl-2 text-[11px] font-medium text-foreground">平滑</span><Switch checked={smooth} onCheckedChange={setSmooth} aria-label="平滑延迟趋势" className="scale-75 origin-right" /></div></div>
-          <div className="h-[155px] w-full text-primary">{chartData.length ? <ResponsiveContainer width="100%" height="100%"><AreaChart data={chartData} margin={{ top: 6, right: 8, left: -12, bottom: 0 }}><defs><linearGradient id="linkQualityGradient" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="var(--color-chart-2)" stopOpacity={smooth ? .30 : .14} /><stop offset="95%" stopColor="var(--color-chart-2)" stopOpacity="0" /></linearGradient></defs><CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" vertical={false} /><XAxis dataKey="label" minTickGap={48} tick={{ fontSize: 9 }} interval="preserveStartEnd" /><YAxis width={44} tick={{ fontSize: 9 }} tickFormatter={(value) => `${value}ms`} /><RechartsTooltip contentStyle={{ borderRadius: 8, fontSize: 11 }} formatter={(value: any) => [value == null ? "超时" : `${Math.round(Number(value))} ms`, "延迟"]} /><Area type={smooth ? "monotone" : "linear"} dataKey="latency" stroke="var(--color-chart-2)" strokeWidth={smooth ? 1.6 : 1.25} strokeLinecap="round" strokeLinejoin="round" fill="url(#linkQualityGradient)" fillOpacity={smooth ? 1 : .35} connectNulls={false} dot={false} activeDot={{ r: 3.5, fill: "var(--color-chart-2)", stroke: "var(--color-background)", strokeWidth: 2 }} isAnimationActive={false} /></AreaChart></ResponsiveContainer> : <div className="flex h-full items-center justify-center rounded-lg border border-dashed border-border/60 text-sm text-muted-foreground">当前时间范围暂无历史探测数据</div>}</div>
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2"><div><h2 className="text-[13px] font-bold leading-none text-foreground">延迟趋势</h2><p className="mt-1 text-[11px] leading-none text-muted-foreground">只读取历史探测样本；超时点不会伪造成 0 ms。</p></div><div className="flex items-center gap-2.5"><span className="rounded-md bg-muted px-2 py-0.5 font-mono text-[11px] text-muted-foreground">{stats.total} 个样本</span><span className="border-l border-border/60 pl-2 text-[11px] font-medium text-foreground">削峰</span><Switch checked={peakCut} onCheckedChange={setPeakCut} aria-label="削峰延迟趋势" className="scale-75 origin-right" /></div></div>
+          <div className="h-[155px] w-full text-primary">{chartData.length ? <ResponsiveContainer width="100%" height="100%"><AreaChart data={displayedChartData} margin={{ top: 6, right: 8, left: -12, bottom: 0 }}><defs><linearGradient id="linkQualityGradient" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="var(--color-chart-2)" stopOpacity={peakCut ? .30 : .14} /><stop offset="95%" stopColor="var(--color-chart-2)" stopOpacity="0" /></linearGradient></defs><CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" vertical={false} /><XAxis dataKey="label" minTickGap={48} tick={{ fontSize: 9 }} interval="preserveStartEnd" /><YAxis width={44} tick={{ fontSize: 9 }} tickFormatter={(value) => `${value}ms`} /><RechartsTooltip contentStyle={{ borderRadius: 8, fontSize: 11 }} formatter={(value: any) => [value == null ? "超时" : `${Math.round(Number(value))} ms`, "延迟"]} /><Area type={peakCut ? "monotone" : "linear"} dataKey="latency" stroke="var(--color-chart-2)" strokeWidth={peakCut ? 1.6 : 1.25} strokeLinecap="round" strokeLinejoin="round" fill="url(#linkQualityGradient)" fillOpacity={peakCut ? 1 : .35} connectNulls={false} dot={false} activeDot={{ r: 3.5, fill: "var(--color-chart-2)", stroke: "var(--color-background)", strokeWidth: 2 }} isAnimationActive={false} /></AreaChart></ResponsiveContainer> : <div className="flex h-full items-center justify-center rounded-lg border border-dashed border-border/60 text-sm text-muted-foreground">当前时间范围暂无历史探测数据</div>}</div>
         </section>
 
         <section className="grid grid-cols-2 gap-2 sm:grid-cols-4"><CompactStat label="最低延迟" value={formatLatency(stats.min)} icon={Activity} /><CompactStat label="平均延迟" value={formatLatency(stats.average)} icon={Gauge} /><CompactStat label="P50" value={formatLatency(stats.p50)} icon={Clock3} /><CompactStat label="最高延迟" value={formatLatency(stats.max)} icon={AlertTriangle} /></section>
