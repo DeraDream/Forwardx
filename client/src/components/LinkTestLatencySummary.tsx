@@ -16,6 +16,8 @@ export type LinkTestDetail = {
   groupLabel?: string | null;
   fromHostId?: number | null;
   toHostId?: number | null;
+  targetIp?: string | null;
+  targetPort?: number | null;
   hopIndex?: number | null;
   hopCount?: number | null;
 };
@@ -102,6 +104,8 @@ export function parseLinkTestMessage(raw: unknown): ParsedLinkTestMessage {
           groupLabel: typeof item?.groupLabel === "string" ? item.groupLabel : null,
           fromHostId: positiveHostId(item?.fromHostId),
           toHostId: positiveHostId(item?.toHostId),
+          targetIp: typeof item?.targetIp === "string" ? item.targetIp.trim() || null : null,
+          targetPort: positiveInteger(item?.targetPort),
           hopIndex: nonNegativeInteger(item?.hopIndex),
           hopCount: positiveInteger(item?.hopCount),
         }))

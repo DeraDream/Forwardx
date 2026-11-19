@@ -31,6 +31,9 @@ test("kernel NAT chain probes convert remaining-path latency into per-hop latenc
     message: null,
     hopLabel: "1/3",
     routeLabel: "entry -> relay",
+    fromHostId: 1,
+    targetIp: "203.0.113.2",
+    targetPort: 443,
   }, options), null);
   assert.equal(recordHopTestResult(2, {
     success: true,
@@ -49,6 +52,9 @@ test("kernel NAT chain probes convert remaining-path latency into per-hop latenc
 
   assert.ok(aggregate);
   assert.equal(aggregate.latencyMs, 130);
+  assert.equal(aggregate.details[0].fromHostId, 1);
+  assert.equal(aggregate.details[0].targetIp, "203.0.113.2");
+  assert.equal(aggregate.details[0].targetPort, 443);
   assert.deepEqual(aggregate.details.map((detail) => detail.latencyMs), [5, 118, 7]);
 });
 

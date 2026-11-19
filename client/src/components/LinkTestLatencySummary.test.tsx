@@ -474,3 +474,14 @@ test("multi-hop branch details include each measured exit", () => {
   assert.match(html, /出口甲/);
   assert.match(html, /出口乙/);
 });
+
+test("parses the actual upstream TCP target for topology edge matching", () => {
+  const parsed = parseLinkTestMessage(JSON.stringify({ details: [{
+    success: true, latencyMs: 42, fromHostId: 2, targetIp: "frontier.lazycat.cv", targetPort: 37360,
+  }] }));
+  assert.deepEqual(parsed.details[0], {
+    success: true, latencyMs: 42, message: null, hopLabel: null, routeLabel: null, method: null,
+    pending: false, groupKey: null, groupLabel: null, fromHostId: 2, toHostId: null,
+    targetIp: "frontier.lazycat.cv", targetPort: 37360, hopIndex: null, hopCount: null,
+  });
+});

@@ -9,6 +9,9 @@ export type HopTestResult = {
   method?: "tcp" | "ping" | string | null;
   fromHostId?: number | null;
   toHostId?: number | null;
+  // The actual TCP/Ping destination; it is the canonical topology-edge key.
+  targetIp?: string | null;
+  targetPort?: number | null;
   groupKey?: string | null;
   groupLabel?: string | null;
 };
