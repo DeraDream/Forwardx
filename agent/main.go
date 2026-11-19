@@ -37,7 +37,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.234"
+var Version = "2.2.235"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -258,6 +258,8 @@ var failoverMu sync.Mutex
 var failoverProxies = map[string]*failoverProxy{}
 var lastTCPingAt time.Time
 var tcpingScheduleMu sync.Mutex
+var lastTopologySegmentAt time.Time
+var topologySegmentScheduleMu sync.Mutex
 var agentMetricsWakeCh = make(chan struct{}, 1)
 var agentMetricsForceTCPing atomic.Bool
 var agentLogMu sync.Mutex

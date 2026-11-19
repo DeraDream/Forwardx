@@ -1451,22 +1451,25 @@ func collectTCPing(cfg Config, ruleProbes []ruleLatencyProbe, probes []tunnelPro
 	}
 
 	segmentTasks := []tcpingTask{}
-	for _, probe := range topologySegments {
-		method := strings.ToLower(strings.TrimSpace(probe.Method))
-		if probe.RuleID <= 0 || strings.TrimSpace(probe.SegmentKey) == "" || strings.TrimSpace(probe.TargetIP) == "" {
-			continue
+	segmentProbeDue := topologySegmentsDue(force, time.Now())
+	if segmentProbeDue {
+		for _, probe := range topologySegments {
+			method := strings.ToLower(strings.TrimSpace(probe.Method))
+			if probe.RuleID <= 0 || strings.TrimSpace(probe.SegmentKey) == "" || strings.TrimSpace(probe.TargetIP) == "" {
+				continue
+			}
+			if method != "ping" && probe.TargetPort <= 0 {
+				continue
+			}
+			if method != "ping" {
+				method = "tcp"
+			}
+			segmentTasks = append(segmentTasks, tcpingTask{
+				Kind: "topologySegment", RuleID: probe.RuleID, TargetHostID: probe.TargetHostID,
+				TargetIP: probe.TargetIP, TargetPort: probe.TargetPort, Method: method,
+				TopologyKey: probe.SegmentKey, ProbeKey: "topology:" + probe.SegmentKey,
+			})
 		}
-		if method != "ping" && probe.TargetPort <= 0 {
-			continue
-		}
-		if method != "ping" {
-			method = "tcp"
-		}
-		segmentTasks = append(segmentTasks, tcpingTask{
-			Kind: "topologySegment", RuleID: probe.RuleID, TargetHostID: probe.TargetHostID,
-			TargetIP: probe.TargetIP, TargetPort: probe.TargetPort, Method: method,
-			TopologyKey: probe.SegmentKey, ProbeKey: "topology:" + probe.SegmentKey,
-		})
 	}
 
 	forwardGroupTasks := []tcpingTask{}
@@ -1512,9 +1515,14 @@ func collectTCPing(cfg Config, ruleProbes []ruleLatencyProbe, probes []tunnelPro
 	ruleLimit := tcpingDynamicBatchLimit(len(ordinaryRuleTasks), tcpingRuleBatchSize, ruleRounds, 256)
 	probeLimit := len(forwardGroupTasks)
 	serviceLimit := tcpingDynamicBatchLimit(len(serviceTasks), tcpingProbeBatchSize, 1, 96)
+	// Topology segments are independent of managed landing-service probes.
+	// Reusing serviceLimit here made every segment batch empty whenever a host
+	// had no service probes (the normal forwarding-only topology case).
+	segmentLimit := topologySegmentBatchLimit(len(segmentTasks), force)
 	if force {
 		ruleLimit = len(ordinaryRuleTasks)
 		serviceLimit = len(serviceTasks)
+		segmentLimit = len(segmentTasks)
 	}
 	tunnelProbeLimit := len(tunnelTasks)
 	tcpingCursorMu.Lock()
@@ -1524,8 +1532,17 @@ func collectTCPing(cfg Config, ruleProbes []ruleLatencyProbe, probes []tunnelPro
 	selected = append(selected, rotateTCPingTasks(tunnelTasks, &tcpingTunnelCursor, tunnelProbeLimit)...)
 	selected = append(selected, rotateTCPingTasks(forwardGroupTasks, &tcpingForwardGroupCursor, probeLimit)...)
 	selected = append(selected, rotateTCPingTasks(serviceTasks, &tcpingServiceCursor, serviceLimit)...)
-	selected = append(selected, rotateTCPingTasks(segmentTasks, &tcpingTopologyCursor, serviceLimit)...)
+	selected = append(selected, rotateTCPingTasks(segmentTasks, &tcpingTopologyCursor, segmentLimit)...)
 	tcpingCursorMu.Unlock()
+	selectedSegments := 0
+	for _, task := range selected {
+		if task.Kind == "topologySegment" {
+			selectedSegments++
+		}
+	}
+	if len(topologySegments) > 0 && shouldLogAgentReport("topology-segment-collect", 30*time.Second) {
+		logf("topology segment collect configured=%d selected=%d force=%v", len(topologySegments), selectedSegments, force)
+	}
 	if len(selected) == 0 {
 		return
 	}
@@ -1555,6 +1572,12 @@ func collectTCPing(cfg Config, ruleProbes []ruleLatencyProbe, probes []tunnelPro
 			}
 		} else {
 			agentTCPingReportGate.commit(reportPlan)
+			if len(segments) > 0 {
+				markTopologySegmentsCollected(time.Now())
+			}
+			if len(topologySegments) > 0 && shouldLogAgentReport("topology-segment-report", 30*time.Second) {
+				logf("topology segment report ok configured=%d selected=%d reported=%d force=%v", len(topologySegments), selectedSegments, len(segments), force)
+			}
 			if agentVerboseLogs && (len(tunnels) > 0 || len(forwardGroups) > 0 || len(services) > 0) {
 				total, timeouts, avgLatency := summarizeTCPingReport(results, tunnels, forwardGroups, services)
 				if shouldLogAgentReport("tcping-report-ok", agentReportLogInterval) {
@@ -1738,6 +1761,33 @@ func tcpingRoundsForWindow(interval time.Duration, window time.Duration) int {
 		return 1
 	}
 	return int((window + interval - 1) / interval)
+}
+
+const topologySegmentBackgroundInterval = 100 * time.Second
+
+func topologySegmentBatchLimit(segmentCount int, force bool) int {
+	if force {
+		return segmentCount
+	}
+	return tcpingDynamicBatchLimit(segmentCount, tcpingProbeBatchSize, 1, 256)
+}
+
+// Other health probes may need a faster collector. Keep topology segments on
+// their own 100-second background cadence unless the visible topology requests
+// a forced interactive collection.
+func topologySegmentsDue(force bool, now time.Time) bool {
+	if force {
+		return true
+	}
+	topologySegmentScheduleMu.Lock()
+	defer topologySegmentScheduleMu.Unlock()
+	return lastTopologySegmentAt.IsZero() || now.Sub(lastTopologySegmentAt) >= topologySegmentBackgroundInterval
+}
+
+func markTopologySegmentsCollected(now time.Time) {
+	topologySegmentScheduleMu.Lock()
+	lastTopologySegmentAt = now
+	topologySegmentScheduleMu.Unlock()
 }
 
 func summarizeTCPingReport(results, tunnels, forwardGroups, services []map[string]any) (int, int, string) {

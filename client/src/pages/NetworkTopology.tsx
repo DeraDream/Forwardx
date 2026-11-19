@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { topologyPathEdgeIds } from "./networkTopologyPaths";
 import { topologyRuleHref } from "./topologyRuleLink";
 import { improveTopologyOrder } from "./topologyLayout";
-import { routeTopologyGraph, topologyRoutePath } from "./topologyRouting";
+import { routeSmoothLayeredTopologyGraph, topologyRoutePath } from "./topologyRouting";
 import { topologyEnabledFlag, visibleTopologyTunnelVariants } from "./topologyTunnelVariants";
 import { combineTopologyHostVariants, joinTopologyHostPaths, MAX_TOPOLOGY_VARIANTS, type TopologyExpansionState } from "./topologyExpansion";
 import {
@@ -413,6 +413,13 @@ export function buildPhysicalPaths(
   return { paths, ...state };
 }
 
+// This filter belongs only to the relationship overview. The per-rule link
+// view must continue to show every configured direct forward.
+export function relationshipOverviewPaths(paths: PhysicalPath[]) {
+  const entriesWithRelayChains = new Set(paths.filter((path) => path.relays.length > 0).map((path) => path.entry.id));
+  return paths.filter((path) => path.relays.length > 0 || entriesWithRelayChains.has(path.entry.id));
+}
+
 function buildGraph(paths: PhysicalPath[]) {
   const nodeMap = new Map<string, PhysicalNode>();
   const edgeMap = new Map<string, TopologyEdge>();
@@ -593,7 +600,7 @@ function buildGraph(paths: PhysicalPath[]) {
   // The relationship overview is a layered physical graph: shared HK→SG and
   // HK→JP legs are represented once, while the router reserves lanes around
   // cards so a dense connection bends rather than crossing a node.
-  const routed = routeTopologyGraph(positionedNodes, edges, directOnlySinkIds);
+  const routed = routeSmoothLayeredTopologyGraph(positionedNodes, edges, directOnlySinkIds);
   return { nodes: positionedNodes, edges, ...routed };
 }
 
@@ -752,6 +759,7 @@ function NetworkTopologyContent() {
   const [layoutMode, setLayoutMode] = useState<"lanes" | "graph">("lanes");
   const [qualityTarget, setQualityTarget] = useState<LinkQualityTarget | null>(null);
   const probeTopologySegments = trpc.rules.probeTopologySegments.useMutation();
+  const stopTopologySegments = trpc.rules.stopTopologySegments.useMutation();
 
   const hostsQuery = trpc.hosts.options.useQuery(undefined, {
     refetchInterval: pollingInterval("slow"),
@@ -814,7 +822,9 @@ function NetworkTopologyContent() {
   );
   const rateRuleIds = useMemo(() => topologyRuleIds.slice(0, 100), [topologyRuleIds]);
   const topologyProbeKeyRef = useRef("");
+  const topologyProbeRuleIdsRef = useRef<number[]>([]);
   useEffect(() => {
+    topologyProbeRuleIdsRef.current = rateRuleIds;
     const key = rateRuleIds.join(",");
     if (!key || topologyProbeKeyRef.current === key) return;
     topologyProbeKeyRef.current = key;
@@ -822,6 +832,10 @@ function NetworkTopologyContent() {
     // values still come from the normal Agent collector, not browser probes.
     probeTopologySegments.mutate({ ruleIds: rateRuleIds });
   }, [probeTopologySegments, rateRuleIds]);
+  useEffect(() => () => {
+    const ruleIds = topologyProbeRuleIdsRef.current;
+    if (ruleIds.length > 0) stopTopologySegments.mutate({ ruleIds });
+  }, [stopTopologySegments]);
   const topologySegmentQuery = trpc.rules.topologySegmentLatency.useQuery(
     { ruleIds: rateRuleIds },
     { enabled: rateRuleIds.length > 0, refetchInterval: pollingInterval("active"), staleTime: 0, refetchOnWindowFocus: false },
@@ -904,7 +918,8 @@ function NetworkTopologyContent() {
     () => activeEntry === "all" ? paths : paths.filter((path) => path.entry.id === activeEntry),
     [paths, activeEntry],
   );
-  const graph = useMemo(() => buildGraph(visiblePaths), [visiblePaths]);
+  const overviewPaths = useMemo(() => relationshipOverviewPaths(visiblePaths), [visiblePaths]);
+  const graph = useMemo(() => buildGraph(overviewPaths), [overviewPaths]);
   const canvasWidth = graph.width;
   const canvasHeight = graph.height;
   const selectedPath = visiblePaths.find((path) => path.id === selectedPathId) || null;

@@ -157,6 +157,58 @@ export function routeNaturalTopologyGraph(nodes: TopologyRoutingNode[], inputEdg
   return { positions, edgeRoutes, width, height, centerY: height / 2 };
 }
 
+/**
+ * Layered relationship view: retain the deterministic entry → relay → landing
+ * placement, but draw each physical edge as a Bézier lane rather than as a
+ * right-angle circuit. Long direct-to-landing edges reserve an outside lane,
+ * so they pass below the relay layer instead of through its cards.
+ */
+export function routeSmoothLayeredTopologyGraph(nodes: TopologyRoutingNode[], inputEdges: TopologyRoutingEdge[], directOnly: Set<string>) {
+  const base = routeTopologyGraph(nodes, inputEdges, directOnly);
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const outgoing = new Map<string, TopologyRoutingEdge[]>();
+  const incoming = new Map<string, TopologyRoutingEdge[]>();
+  for (const edge of inputEdges) {
+    if (!base.positions.has(edge.from) || !base.positions.has(edge.to)) continue;
+    outgoing.set(edge.from, [...(outgoing.get(edge.from) || []), edge]);
+    incoming.set(edge.to, [...(incoming.get(edge.to) || []), edge]);
+  }
+  for (const list of [...outgoing.values(), ...incoming.values()]) list.sort((a, b) => a.id.localeCompare(b.id));
+  const bottom = Math.max(...[...base.positions.values()].map((box) => box.y + box.height));
+  const top = Math.min(...[...base.positions.values()].map((box) => box.y));
+  let lowestLane = bottom;
+  const edgeRoutes = new Map<string, TopologyPoint[]>();
+  [...base.edgeRoutes.keys()].sort().forEach((edgeId, index) => {
+    const edge = inputEdges.find((candidate) => candidate.id === edgeId)!;
+    const from = base.positions.get(edge.from)!;
+    const to = base.positions.get(edge.to)!;
+    const fromEdges = outgoing.get(edge.from) || [];
+    const toEdges = incoming.get(edge.to) || [];
+    const start = { x: from.x + from.width, y: from.y + from.height * (fromEdges.indexOf(edge) + 1) / (fromEdges.length + 1) };
+    const end = { x: to.x, y: to.y + to.height * (toEdges.indexOf(edge) + 1) / (toEdges.length + 1) };
+    const sourceColumn = byId.get(edge.from)?.column || 0;
+    const targetColumn = byId.get(edge.to)?.column || sourceColumn + 1;
+    const spansRelayLayer = targetColumn - sourceColumn > 1;
+    const isDirectLanding = directOnly.has(edge.to);
+    const distance = Math.max(80, end.x - start.x);
+    let controlY1 = start.y;
+    let controlY2 = end.y;
+    if (spansRelayLayer) {
+      const laneY = isDirectLanding ? bottom + 44 + index * 14 : top - 44 - index * 14;
+      controlY1 = laneY;
+      controlY2 = laneY;
+      if (isDirectLanding) lowestLane = Math.max(lowestLane, laneY);
+    }
+    edgeRoutes.set(edge.id, [
+      start,
+      { x: start.x + distance * 0.34, y: controlY1, curve: true },
+      { x: end.x - distance * 0.34, y: controlY2, curve: true },
+      end,
+    ]);
+  });
+  return { ...base, edgeRoutes, height: Math.max(base.height, lowestLane + 56), centerY: Math.max(base.centerY, (top + lowestLane) / 2) };
+}
+
 export function topologyRoutePath(points: TopologyPoint[]) {
   if (points.length === 4 && points[1]?.curve && points[2]?.curve) {
     return `M ${points[0].x} ${points[0].y} C ${points[1].x} ${points[1].y} ${points[2].x} ${points[2].y} ${points[3].x} ${points[3].y}`;

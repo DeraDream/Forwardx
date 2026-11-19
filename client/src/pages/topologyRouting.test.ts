@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { routeTopologyGraph, topologyRoutePath, type TopologyBox, type TopologyPoint } from "./topologyRouting";
+import { routeSmoothLayeredTopologyGraph, routeTopologyGraph, topologyRoutePath, type TopologyBox, type TopologyPoint } from "./topologyRouting";
 
 type Segment = { a: TopologyPoint; b: TopologyPoint; edge: string };
 function segments(routes: Map<string, TopologyPoint[]>) {
@@ -31,6 +31,20 @@ test("non-planar multi-exit and long links do not pass through cards or overlap"
   for (const line of lines) for (const [id, box] of result.positions) assert.equal(intersectsCard(line, box), false, `${line.edge} crossed card ${id}`);
   for (let i = 0; i < lines.length; i++) for (let j = i+1; j < lines.length; j++) if (lines[i].edge !== lines[j].edge) assert.equal(collinearOverlap(lines[i], lines[j]), false, `${lines[i].edge} overlaps ${lines[j].edge}`);
   assert.match(topologyRoutePath(result.edgeRoutes.get("long")!), /^M .* L /);
+});
+
+test("relationship overview uses smooth curves and routes long direct exits outside relay cards", () => {
+  const nodes = [
+    { id: "entry", column: 0, row: 0 }, { id: "relay", column: 1, row: 0 },
+    { id: "landing", column: 2, row: 0 }, { id: "direct", column: 2, row: 1 },
+  ];
+  const result = routeSmoothLayeredTopologyGraph(nodes, [
+    { id: "chain-a", from: "entry", to: "relay" }, { id: "chain-b", from: "relay", to: "landing" },
+    { id: "direct-exit", from: "entry", to: "direct" },
+  ], new Set(["direct"]));
+  assert.match(topologyRoutePath(result.edgeRoutes.get("chain-a")!), /^M .* C /);
+  const direct = result.edgeRoutes.get("direct-exit")!;
+  assert.ok(direct[1].y > result.positions.get("relay")!.y + result.positions.get("relay")!.height);
 });
 
 test("routed edges stay clear across a range of dense mixed-direction graphs", () => {

@@ -4,7 +4,7 @@ import * as db from "../db";
 import { lookupAddressGeo } from "../hostGeo";
 import { requireRuleAccess } from "./helpers";
 import { appendPanelLog } from "../_core/panelLogger";
-import { markHostTopologyTrafficWatching, requestHostTcping, requestTopologyHostTcping } from "../agentEvents";
+import { clearTopologyHostTcping, markHostTopologyTrafficWatching, requestTopologyHostTcping } from "../agentEvents";
 import { ruleTrafficQueryCache as trafficQueryCache } from "../ruleLatencyQueryCache";
 
 const TRAFFIC_RETENTION_HOURS = 24 * 3;
@@ -131,8 +131,20 @@ export const trafficRulesRouter = router({
         .filter((rule: any) => requestedIds.has(Number(rule.id)) || requestedIds.has(Number(rule.forwardGroupRuleId || 0)))
         .map((rule: any) => Number(rule.hostId || 0))
         .filter((hostId: number) => hostId > 0)));
-      hostIds.forEach((hostId) => requestHostTcping(hostId, 30_000));
+      hostIds.forEach((hostId) => requestTopologyHostTcping(hostId, 10_000));
       return { requestedHosts: hostIds.length };
+    }),
+  stopTopologySegments: protectedProcedure
+    .input(z.object({ ruleIds: z.array(z.number().int().positive()).max(100) }))
+    .mutation(async ({ input, ctx }) => {
+      const requestedIds = new Set<number>(input.ruleIds);
+      const visibleRules = await db.getForwardRules(ctx.user.role === "admin" ? undefined : ctx.user.id);
+      const hostIds = Array.from(new Set<number>((visibleRules || [])
+        .filter((rule: any) => requestedIds.has(Number(rule.id)) || requestedIds.has(Number(rule.forwardGroupRuleId || 0)))
+        .map((rule: any) => Number(rule.hostId || 0))
+        .filter((hostId: number) => hostId > 0)));
+      hostIds.forEach(clearTopologyHostTcping);
+      return { stoppedHosts: hostIds.length };
     }),
   topologySegmentLatency: protectedProcedure
     .input(z.object({ ruleIds: z.array(z.number().int().positive()).max(100) }))

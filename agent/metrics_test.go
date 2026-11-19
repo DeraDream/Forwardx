@@ -1788,6 +1788,46 @@ func TestTCPingDynamicBatchLimitScalesWithoutUnboundedRuns(t *testing.T) {
 	}
 }
 
+func TestTopologySegmentsUseOneHundredSecondBackgroundCadence(t *testing.T) {
+	topologySegmentScheduleMu.Lock()
+	previous := lastTopologySegmentAt
+	lastTopologySegmentAt = time.Time{}
+	topologySegmentScheduleMu.Unlock()
+	t.Cleanup(func() {
+		topologySegmentScheduleMu.Lock()
+		lastTopologySegmentAt = previous
+		topologySegmentScheduleMu.Unlock()
+	})
+	now := time.Now()
+	if !topologySegmentsDue(false, now) {
+		t.Fatal("first topology segment collection should be due")
+	}
+	markTopologySegmentsCollected(now)
+	if topologySegmentsDue(false, now.Add(99*time.Second)) {
+		t.Fatal("background topology collection ran before 100 seconds")
+	}
+	if !topologySegmentsDue(false, now.Add(100*time.Second)) {
+		t.Fatal("background topology collection should run after 100 seconds")
+	}
+	if !topologySegmentsDue(true, now.Add(time.Second)) {
+		t.Fatal("interactive topology request must bypass the background cadence")
+	}
+}
+
+func TestTopologySegmentBatchDoesNotDependOnServiceProbes(t *testing.T) {
+	// Forwarding-only hosts normally have no managed landing services. Their
+	// topology segments must still be selected for collection.
+	if got := topologySegmentBatchLimit(7, false); got != 7 {
+		t.Fatalf("topology segment batch without services = %d, want 7", got)
+	}
+	if got := topologySegmentBatchLimit(300, false); got != 256 {
+		t.Fatalf("bounded topology segment batch = %d, want 256", got)
+	}
+	if got := topologySegmentBatchLimit(300, true); got != 300 {
+		t.Fatalf("forced topology segment batch = %d, want 300", got)
+	}
+}
+
 func TestTCPingDueIntervalScalesWithWorkAndServiceRequirements(t *testing.T) {
 	if got := tcpingDueInterval(nil, 20, 2); got != 100*time.Second {
 		t.Fatalf("small workload interval = %s", got)

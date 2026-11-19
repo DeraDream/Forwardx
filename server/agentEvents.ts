@@ -433,6 +433,12 @@ export function requestTopologyHostTcping(hostId: number, minIntervalMs = 10_000
   return requestHostTcping(id, Math.max(minIntervalMs * 2, 30_000));
 }
 
+export function clearTopologyHostTcping(hostId: number) {
+  const id = Number(hostId);
+  hostTopologyTcpingRequestedAt.delete(id);
+  hostTcpingRequestUntil.delete(id);
+}
+
 export function requestHostTcping(hostId: number, ttlMs = 60_000) {
   const id = Number(hostId);
   if (!Number.isFinite(id) || id <= 0) return false;

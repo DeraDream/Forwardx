@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { buildPhysicalPaths } from "./NetworkTopology";
+import { buildPhysicalPaths, relationshipOverviewPaths } from "./NetworkTopology";
 
 const hosts = [1,2,3,4,5,6].map((id) => ({ id, name: `host-${id}`, ip: `192.0.2.${id}`, isOnline: true }));
 const tunnel = { id: 100, mode: "tls", hopHostIds: [2,3], loadBalanceEnabled: true, loadBalanceStrategy: "round_robin", loadBalanceExits: [{ hostId: 4, isEnabled: true }] };
@@ -20,6 +20,17 @@ test("nested multi-exit tunnel branches are expanded in rules and full chains", 
   const fullPaths = result.paths.filter((path) => path.name === "nested full chain").map(pathIds);
   assert.deepEqual(rulePaths, [["host:1","host:2","host:3","host:5","target:198.51.100.9:443"],["host:1","host:2","host:4","host:5","target:198.51.100.9:443"]]);
   assert.deepEqual(fullPaths, [["host:1","host:2","host:3","host:5","host:6"],["host:1","host:2","host:4","host:5","host:6"]]);
+});
+
+test("relationship overview keeps an entry's direct landing but omits standalone direct forwards", () => {
+  const rules = [
+    { id: 1, name: "IX chain", hostId: 1, forwardGroupId: 20, targetIp: "198.51.100.10", targetPort: 443 },
+    { id: 2, name: "IX direct", hostId: 1, targetIp: "198.51.100.11", targetPort: 443 },
+    { id: 3, name: "unrelated direct", hostId: 6, targetIp: "198.51.100.12", targetPort: 443 },
+  ];
+  const groups = [{ id: 20, groupMode: "chain", members: [{ memberType: "host", hostId: 1, isEnabled: true }, { memberType: "host", hostId: 2, isEnabled: true }] }];
+  const result = buildPhysicalPaths(rules, hosts, [], groups, [], [], "all", "");
+  assert.deepEqual(relationshipOverviewPaths(result.paths).map((path) => path.name).sort(), ["IX chain", "IX direct"]);
 });
 
 test("missing references and cycles are marked incomplete rather than drawn as direct routes", () => {
