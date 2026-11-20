@@ -1187,9 +1187,9 @@ function NetworkTopologyContent() {
   const segmentProbeFor = (path: PhysicalPath, edge: TopologyEdge) => segmentProbes[segmentProbeKey(path, edge)] || null;
   // A graph edge is one physical leg even when several logical rules reuse it.
   // Show the freshest physical measurement instead of presenting it as several paths.
-  const physicalEdgeMeasurementLabel = (edge: TopologyEdge, edgePaths: PhysicalPath[]) => {
+  const physicalEdgeMeasurementLabel = (edge: TopologyEdge, edgePaths: PhysicalPath[], includePending = true) => {
     const candidates = [
-      ...edgePaths.map((path) => segmentProbeFor(path, edge)).filter((probe): probe is TopologySegmentProbe => !!probe).map((probe) => ({
+      ...edgePaths.map((path) => segmentProbeFor(path, edge)).filter((probe): probe is TopologySegmentProbe => !!probe && (includePending || !["pending", "running"].includes(probe.status))).map((probe) => ({
         at: probe.requestedAt,
         pending: ["pending", "running"].includes(probe.status),
         success: probe.success && probe.latencyMs !== null,
@@ -1207,9 +1207,11 @@ function NetworkTopologyContent() {
     // overwrite a successful measurement of the same source -> next-hop leg.
     return summarizePhysicalTopologySegmentLabels(candidates, edgeMeasurementLabel(edge));
   };
-  const pathEdgeMeasurementLabel = (_path: PhysicalPath, edge: TopologyEdge) => {
+  const pathEdgeMeasurementLabel = (path: PhysicalPath, edge: TopologyEdge) => {
+    const ownProbe = segmentProbeFor(path, edge);
+    if (ownProbe && ["pending", "running"].includes(ownProbe.status)) return "探测中";
     const edgePaths = paths.filter((candidate) => topologyPathEdgeIds([candidate.entry, ...candidate.relays, candidate.landing].map((node) => node.id)).includes(edge.id));
-    return physicalEdgeMeasurementLabel(edge, edgePaths);
+    return physicalEdgeMeasurementLabel(edge, edgePaths, false);
   };
   const requestSegmentProbe = async (path: PhysicalPath, edge: TopologyEdge) => {
     const ruleId = Number(path.ruleId || 0);
@@ -1349,13 +1351,16 @@ function NetworkTopologyContent() {
   const selectPath = (path: PhysicalPath) => { setSelectedPathId(path.id); setSelectedNodeId(null); setSelectedEdgeId(null); setSharedEdgeSelection(null); };
   const graphPopupAnchor = (event: MouseEvent<SVGElement>, point: { x: number; y: number }) => {
     const svgBounds = event.currentTarget.ownerSVGElement?.getBoundingClientRect();
-    const anchorX = svgBounds ? svgBounds.left + point.x * (svgBounds.width / graph.width) : event.clientX;
-    const anchorY = svgBounds ? svgBounds.top + point.y * (svgBounds.height / graph.height) : event.clientY;
-    const width = Math.min(480, window.innerWidth - 32);
+    const rootBounds = canvasRef.current?.closest(".network-topology-root")?.getBoundingClientRect();
+    const viewportX = svgBounds ? svgBounds.left + point.x * (svgBounds.width / graph.width) : event.clientX;
+    const viewportY = svgBounds ? svgBounds.top + point.y * (svgBounds.height / graph.height) : event.clientY;
+    const anchorX = viewportX - (rootBounds?.left || 0);
+    const anchorY = viewportY - (rootBounds?.top || 0);
+    const width = Math.min(440, (rootBounds?.width || window.innerWidth) - 32);
     return {
-      left: Math.max(width / 2 + 16, Math.min(anchorX, window.innerWidth - width / 2 - 16)),
+      left: Math.max(width / 2 + 16, Math.min(anchorX, (rootBounds?.width || window.innerWidth) - width / 2 - 16)),
       top: anchorY,
-      above: anchorY > 260,
+      above: true,
     };
   };
   const selectGraphEdge = (edge: TopologyEdge, probe = false, anchor?: { left: number; top: number; above: boolean }) => {
@@ -1380,7 +1385,7 @@ function NetworkTopologyContent() {
     : [];
 
   return (
-    <div className="space-y-5 text-slate-800">
+    <div className="network-topology-root relative space-y-5 text-slate-800">
       <style>{`
         @keyframes topoDashFlow { to { stroke-dashoffset: -24; } }
         .edge-flow-active { stroke-dasharray: 6 6; animation: topoDashFlow .85s linear infinite; }
@@ -1414,7 +1419,7 @@ function NetworkTopologyContent() {
           {detailTab === "history" && <div className="text-xs"><div className="mb-5 flex justify-between text-slate-500"><span>最近 24 小时往返延迟曲线 (ms)</span><b className="font-mono text-blue-600">当前逐跳合计 {selectedPathMetrics?.latestLatencyMs != null ? `${Math.round(selectedPathMetrics.latestLatencyMs)} ms` : "—"}</b></div><div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">{selectedPathHistoryQuery.isLoading ? <div className="py-16 text-center text-slate-400">正在加载真实历史延迟…</div> : selectedHistoryPolyline ? <><svg viewBox="0 0 100 48" preserveAspectRatio="none" className="h-40 w-full"><defs><linearGradient id="topology-history-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#2563EB" stopOpacity=".22" /><stop offset="1" stopColor="#2563EB" stopOpacity="0" /></linearGradient></defs><polyline points={`0,48 ${selectedHistoryPolyline} 100,48`} fill="url(#topology-history-area)" stroke="none" /><polyline points={selectedHistoryPolyline} fill="none" stroke="#2563EB" strokeWidth="1.5" vectorEffect="non-scaling-stroke" /></svg><div className="mt-2 flex justify-between font-mono text-[10px] text-slate-400"><span>24H 前</span><span>现在</span></div></> : <div className="py-16 text-center text-slate-400">当前路径暂无真实历史延迟记录。</div>}</div><div className="mt-5 rounded-2xl border border-blue-100 bg-blue-50/60 p-4 text-slate-600">历史趋势来自规则真实 TCPing 记录；未检测到的数据不会使用模拟值补全。</div></div>}
         </div>
       </section>}
-      {sharedEdgeSelection && <section className="fixed z-50 w-[min(30rem,calc(100vw-2rem))] max-h-[min(24rem,calc(100vh-2rem))] overflow-y-auto rounded-xl border border-slate-200 bg-white p-4 shadow-xl" style={{ left: sharedEdgeSelection.anchor?.left ?? "50%", top: sharedEdgeSelection.anchor ? sharedEdgeSelection.anchor.above ? sharedEdgeSelection.anchor.top - 10 : sharedEdgeSelection.anchor.top + 10 : "50%", transform: sharedEdgeSelection.anchor ? sharedEdgeSelection.anchor.above ? "translate(-50%, -100%)" : "translateX(-50%)" : "translate(-50%, -50%)" }}><div className="flex items-start justify-between gap-3"><div><h3 className="text-[13px] font-bold text-slate-900">选择经过此共享链路的路径</h3><p className="mt-1 text-[11px] text-slate-500">该物理链路被 {sharedEdgeCandidates.length} 条逻辑链路共用，请选择完整路径。</p></div><button type="button" onClick={() => setSharedEdgeSelection(null)} className="rounded-md px-1.5 py-1 text-[11px] text-slate-400 hover:bg-slate-50 hover:text-slate-700">取消</button></div><div className="mt-3 space-y-1.5">{sharedEdgeCandidates.map((path) => { const nodes = [path.entry, ...path.relays, path.landing]; return <button type="button" key={path.id} onClick={() => { selectPath(path); setSelectedEdgeId(sharedEdgeSelection.edgeId); if (sharedEdgeSelection.probe && path.ruleId) { const [from, to] = sharedEdgeSelection.edgeId.split("=>"); void requestSegmentProbe(path, { id: sharedEdgeSelection.edgeId, from, to }); } }} className="w-full rounded-lg border border-slate-200 bg-slate-50/60 p-2.5 text-left transition hover:border-primary/40 hover:bg-primary/5"><div className="mb-1.5 flex items-center justify-between gap-3"><b className="truncate text-xs text-slate-800">{path.name}</b><RouteTypeLabel category={path.category} /></div><div className="flex flex-wrap items-center gap-1 text-[10px]">{nodes.map((node, index) => <span key={`${node.id}:${index}`} className="inline-flex items-center gap-1">{index > 0 && <span className="text-slate-400">→</span>}<span className={cn("rounded border px-1.5 py-0.5", index === 0 ? "border-blue-200 bg-blue-50 text-blue-700" : index === nodes.length - 1 ? "border-amber-200 bg-amber-50 text-amber-800" : "border-emerald-200 bg-emerald-50 text-emerald-700")}>{node.label}</span></span>)}</div></button>; })}</div></section>}
+      {sharedEdgeSelection && <section className="absolute z-50 w-[min(27.5rem,calc(100vw-2rem))] max-h-[18rem] overflow-y-auto rounded-xl border border-slate-200 bg-white p-4 shadow-xl" style={{ left: sharedEdgeSelection.anchor?.left ?? "50%", top: sharedEdgeSelection.anchor ? sharedEdgeSelection.anchor.above ? sharedEdgeSelection.anchor.top - 10 : sharedEdgeSelection.anchor.top + 10 : "50%", transform: sharedEdgeSelection.anchor ? sharedEdgeSelection.anchor.above ? "translate(-50%, -100%)" : "translateX(-50%)" : "translate(-50%, -50%)" }}><div className="flex items-start justify-between gap-3"><div><h3 className="text-[13px] font-bold text-slate-900">选择经过此共享链路的路径</h3><p className="mt-1 text-[11px] text-slate-500">该物理链路被 {sharedEdgeCandidates.length} 条逻辑链路共用，请选择完整路径。</p></div><button type="button" onClick={() => setSharedEdgeSelection(null)} className="rounded-md px-1.5 py-1 text-[11px] text-slate-400 hover:bg-slate-50 hover:text-slate-700">取消</button></div><div className="mt-3 space-y-1.5">{sharedEdgeCandidates.map((path) => { const nodes = [path.entry, ...path.relays, path.landing]; return <button type="button" key={path.id} onClick={() => { selectPath(path); setSelectedEdgeId(sharedEdgeSelection.edgeId); if (sharedEdgeSelection.probe && path.ruleId) { const [from, to] = sharedEdgeSelection.edgeId.split("=>"); void requestSegmentProbe(path, { id: sharedEdgeSelection.edgeId, from, to }); } }} className="w-full rounded-lg border border-slate-200 bg-slate-50/60 p-2.5 text-left transition hover:border-primary/40 hover:bg-primary/5"><div className="mb-1.5 flex items-center justify-between gap-3"><b className="truncate text-xs text-slate-800">{path.name}</b><RouteTypeLabel category={path.category} /></div><div className="flex flex-wrap items-center gap-1 text-[10px]">{nodes.map((node, index) => <span key={`${node.id}:${index}`} className="inline-flex items-center gap-1">{index > 0 && <span className="text-slate-400">→</span>}<span className={cn("rounded border px-1.5 py-0.5", index === 0 ? "border-blue-200 bg-blue-50 text-blue-700" : index === nodes.length - 1 ? "border-amber-200 bg-amber-50 text-amber-800" : "border-emerald-200 bg-emerald-50 text-emerald-700")}>{node.label}</span></span>)}</div></button>; })}</div></section>}
       {probeMessage && <p className="text-xs text-slate-500">{probeMessage}</p>}
       <LinkQualityDialog target={qualityTarget} open={!!qualityTarget} onOpenChange={(open) => !open && setQualityTarget(null)} />
       {networkProfileTarget && <HostNetworkProfileDialog hostId={networkProfileTarget.hostId} hostName={networkProfileTarget.hostName} open onOpenChange={(open) => !open && setNetworkProfileTarget(null)} />}
