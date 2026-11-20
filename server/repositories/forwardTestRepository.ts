@@ -29,16 +29,20 @@ export async function hasActiveForwardTests() {
 
 const FORWARD_TEST_LEASE_SECONDS = 8;
 
-export async function getPendingForwardTestsByHost(hostId: number, leaseSeconds = FORWARD_TEST_LEASE_SECONDS) {
+// Claiming an unbounded backlog marks jobs running before the Agent has even
+// accepted them; keep each heartbeat/pull within the Agent worker capacity.
+export async function getPendingForwardTestsByHost(hostId: number, leaseSeconds = FORWARD_TEST_LEASE_SECONDS, limit = 16) {
   const cutoff = Math.floor((Date.now() - Math.max(1, leaseSeconds) * 1000) / 1000);
+  const boundedLimit = Math.max(1, Math.min(64, Math.floor(limit) || 16));
   return queryRaw<any>(
     `SELECT *
        FROM ${quoteIdentifier("forward_tests")}
       WHERE ${quoteIdentifier("hostId")} = ?
         AND (${quoteIdentifier("status")} = 'pending'
           OR (${quoteIdentifier("status")} = 'running' AND ${quoteIdentifier("updatedAt")} < ?))
-      ORDER BY ${quoteIdentifier("createdAt")} ASC, ${quoteIdentifier("id")} ASC`,
-    [hostId, cutoff],
+      ORDER BY ${quoteIdentifier("createdAt")} ASC, ${quoteIdentifier("id")} ASC
+      LIMIT ?`,
+    [hostId, cutoff, boundedLimit],
   );
 }
 

@@ -905,6 +905,32 @@ async function diagnosticSegments(scope: "rule" | "tunnel" | "chain" | "full-cha
 }
 
 export const diagnosticsRouter = router({
+  startSegment: protectedProcedure
+    .input(z.object({ ruleId: z.number().int().positive(), fromHostId: z.number().int().positive(), targetAddress: z.string().trim().min(1).max(253) }))
+    .mutation(async ({ input, ctx }) => {
+      const rule = await ensureAccess("rule", input.ruleId, ctx.user) as any;
+      const targetAddress = input.targetAddress.trim().toLowerCase();
+      const segment = (await diagnosticSegments("rule", rule)).find((item) => (
+        Number(item.fromHostId) === input.fromHostId
+        && String(item.targetIp || "").trim().toLowerCase() === targetAddress
+      ));
+      if (!segment) throw new Error("所选节点连线不是该规则可探测的实际链路");
+      const host = await db.getHostById(segment.fromHostId) as any;
+      if (!host?.isOnline) throw new Error(`${host?.name || "源主机"} Agent 离线，无法探测此链路`);
+      if (!isAgentVersionAtLeast(host?.agentVersion, DIAGNOSTIC_AGENT_VERSION)) throw new Error(`${host?.name || "源主机"} Agent 版本过低，无法探测此链路`);
+      const diagnosticId = `topology-segment-${input.ruleId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const testId = await db.createForwardTest({
+        ruleId: 0, hostId: segment.fromHostId, userId: Number(ctx.user.id), status: "pending",
+        listenOk: false, targetReachable: false, forwardOk: false,
+        message: JSON.stringify({ kind: "diagnostic-hop", diagnosticId, targetIp: segment.targetIp, targetPort: segment.targetPort,
+          method: segment.method, latencyMode: "sum", sourcePort: Number(segment.sourcePort || 0), sourceProtocol: segment.sourceProtocol || "both",
+          expectedRuleId: Number(segment.expectedRuleId || rule.id), expectedForwardType: segment.expectedForwardType || String(rule.forwardType || ""),
+          sampleCount: 1, isFinalTarget: segment.isFinalTarget === true, hopLabel: "1/1", routeLabel: segment.routeLabel }),
+      } as any);
+      pushAgentSelfTest(segment.fromHostId, diagnosticId);
+      return { diagnosticId, testId: Number(testId) };
+    }),
+
   start: protectedProcedure
     .input(z.object({
       scope: z.enum(["rule", "tunnel", "chain", "full-chain"]),
