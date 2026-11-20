@@ -925,7 +925,7 @@ export const diagnosticsRouter = router({
         message: JSON.stringify({ kind: "diagnostic-hop", diagnosticId, targetIp: segment.targetIp, targetPort: segment.targetPort,
           method: segment.method, latencyMode: "sum", sourcePort: Number(segment.sourcePort || 0), sourceProtocol: segment.sourceProtocol || "both",
           expectedRuleId: Number(segment.expectedRuleId || rule.id), expectedForwardType: segment.expectedForwardType || String(rule.forwardType || ""),
-          sampleCount: 1, isFinalTarget: segment.isFinalTarget === true, hopLabel: "1/1", routeLabel: segment.routeLabel }),
+          sampleCount: 5, isFinalTarget: segment.isFinalTarget === true, hopLabel: "1/1", routeLabel: segment.routeLabel }),
       } as any);
       pushAgentSelfTest(segment.fromHostId, diagnosticId);
       return { diagnosticId, testId: Number(testId) };

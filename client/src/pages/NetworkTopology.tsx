@@ -869,6 +869,7 @@ function NetworkTopologyContent() {
   // Segment probes are independent diagnostic jobs: clicking an edge must never
   // enqueue the complete route self-test.
   const [segmentProbeTestIds, setSegmentProbeTestIds] = useState<Record<string, number>>({});
+  const [pendingSegmentProbeKeys, setPendingSegmentProbeKeys] = useState<Set<string>>(() => new Set());
   const selectedRuleId = Number(/^rule:(\d+)(?::|$)/.exec(selectedPathId || "")?.[1] || 0);
   // Start with the complete network; operators can narrow the graph to one entry VPS.
   const [entryFilter, setEntryFilter] = useState<string | null>("all");
@@ -1106,14 +1107,19 @@ function NetworkTopologyContent() {
     ? graph.nodes.find((node) => node.id === selectedNodeId) || null
     : null;
   const selectedEdge = graph.edges.find((edge) => edge.id === selectedEdgeId) || null;
-  const edgeMeasurementLabel = (edge: TopologyEdge) => {
+  const edgeMeasurementLabel = (edge: TopologyEdge, path?: PhysicalPath | null) => {
     const sourceId = Number(edge.from.replace(/^host:/, ""));
     const targetId = Number(edge.to.replace(/^host:/, ""));
     const targetNode = graph.nodes.find((node) => node.id === edge.to);
+    const scopedRuleIds = path
+      ? new Set((path.segmentRuleIds || [Number(path.ruleId || 0)]).map(Number).filter((id) => id > 0))
+      : null;
     // Plain IP targets use the node label; its subtitle is the port. External
     // SS landings keep their endpoint in the subtitle, so accept both forms.
     const targetAddresses = [targetNode?.label, targetNode?.subtitle].map((value) => String(value || "").trim()).filter(Boolean);
-    const allDetails = [...testByRule.values()].flatMap((test: any) => (test.parsed.details || []).map((detail: any) => ({ ...detail, recordedAt: test.recordedAt })));
+    const allDetails = [...testByRule.entries()].flatMap(([ruleId, test]: any) => scopedRuleIds && !scopedRuleIds.has(ruleId)
+      ? []
+      : (test.parsed.details || []).map((detail: any) => ({ ...detail, ruleId, recordedAt: test.recordedAt })));
     const details = allDetails
       .filter((detail: any) => detail.fromHostId === sourceId && detail.toHostId === targetId)
       .sort((a: any, b: any) => b.recordedAt - a.recordedAt);
@@ -1135,7 +1141,11 @@ function NetworkTopologyContent() {
     }
     // A direct rule has a normal forward-test result rather than a chain
     // summary. Match its source host and the displayed target address.
-    const directRuleIds = new Set((rulesQuery.data || []).filter((rule: any) => Number(rule.hostId) === sourceId && targetAddresses.includes(String(rule.targetIp || "").trim())).map((rule: any) => Number(rule.id)));
+    const directRuleIds = new Set((rulesQuery.data || []).filter((rule: any) => (
+      Number(rule.hostId) === sourceId
+      && targetAddresses.includes(String(rule.targetIp || "").trim())
+      && (!scopedRuleIds || scopedRuleIds.has(Number(rule.id)))
+    )).map((rule: any) => Number(rule.id)));
     const directTests = [...testByRule.entries()]
       .filter(([ruleId, test]) => directRuleIds.has(ruleId) && test.status !== "pending")
       .map(([, test]) => test)
@@ -1144,12 +1154,20 @@ function NetworkTopologyContent() {
     const test = directTests[0];
     return test.status === "timeout" || test.status === "failed" ? "超时" : typeof test.latencyMs === "number" ? `${Math.round(test.latencyMs)} ms` : "待探测";
   };
-  const segmentProbeKey = (path: PhysicalPath, edge: TopologyEdge) => `${path.ruleId || 0}:${edge.id}`;
-  const segmentProbeFor = (path: PhysicalPath, edge: TopologyEdge) => segmentProbeById.get(segmentProbeTestIds[segmentProbeKey(path, edge)] || 0) as any;
+  const segmentProbeKey = (path: PhysicalPath, edge: TopologyEdge) => `${path.id}:${edge.id}`;
+  const segmentProbeFor = (path: PhysicalPath, edge: TopologyEdge) => {
+    const key = segmentProbeKey(path, edge);
+    if (pendingSegmentProbeKeys.has(key)) return { status: "pending", success: false } as any;
+    const testId = segmentProbeTestIds[key] || 0;
+    if (!testId) return null;
+    // Once a path segment owns a diagnostic job, never fall back to another
+    // rule's cached edge value while the new status request is still loading.
+    return segmentProbeById.get(testId) || { id: testId, status: "pending", success: false } as any;
+  };
   const pathEdgeMeasurementLabel = (path: PhysicalPath, edge: TopologyEdge) => {
     const test = segmentProbeFor(path, edge);
     if (test) return ["pending", "running"].includes(String(test.status)) ? "探测中" : test.success && Number.isFinite(Number(test.latencyMs)) ? `${Math.round(Number(test.latencyMs))} ms` : "超时";
-    return edgeMeasurementLabel(edge);
+    return edgeMeasurementLabel(edge, path);
   };
   const edgeIsProbing = (edge: TopologyEdge) => visiblePaths.some((path) => {
     const test = segmentProbeFor(path, edge);
@@ -1163,11 +1181,16 @@ function NetworkTopologyContent() {
     const key = segmentProbeKey(path, edge);
     const current = segmentProbeFor(path, edge);
     if (!ruleId || !Number.isSafeInteger(fromHostId) || fromHostId <= 0 || !targetAddress || ["pending", "running"].includes(String(current?.status || ""))) return;
+    setPendingSegmentProbeKeys((previous) => new Set(previous).add(key));
     try {
       const result = await startSegmentProbe.mutateAsync({ ruleId, fromHostId, targetAddress });
       setSegmentProbeTestIds((previous) => ({ ...previous, [key]: Number(result.testId) }));
       setProbeMessage(`已下发 ${targetAddress} 单跳 RTT 探测…`);
-    } catch (error) { setProbeMessage(`单跳探测请求失败：${error instanceof Error ? error.message : String(error)}`); }
+    } catch (error) {
+      setProbeMessage(`单跳探测请求失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setPendingSegmentProbeKeys((previous) => { const next = new Set(previous); next.delete(key); return next; });
+    }
   };
   const requestPathProbe = async (ruleId: number) => {
     if (ruleId <= 0) return;
@@ -1319,7 +1342,7 @@ function NetworkTopologyContent() {
         <div className="flex gap-2 border-b border-slate-100 px-5 pb-2 pt-3">{([ ["basic", "基本信息"], ["performance", "性能指标"], ["history", "历史趋势"] ] as const).map(([key, label]) => <button key={key} type="button" onClick={() => setDetailTab(key)} className={cn("rounded-lg px-3 py-1.5 text-xs", detailTab === key ? "border border-primary/30 bg-primary/10 font-semibold text-primary" : "font-medium text-slate-500 hover:bg-slate-50 hover:text-slate-800")}>{label}</button>)}</div>
         <div className="p-5">
           {detailTab === "basic" && <div className="space-y-4 text-xs"><DetailRow label="链路名称"><b className="text-slate-900">{selectedPath.name}</b><span className="ml-2 font-mono text-slate-400">{selectedPath.id}</span></DetailRow><DetailRow label="链路类型"><span className="rounded-md bg-slate-100 px-2 py-1 font-medium text-slate-600">{categoryLabel(selectedPath.category)}</span></DetailRow><DetailRow label="链路路径"><div className="flex flex-wrap justify-end gap-1">{selectedPathNodes.map((node, i) => <span key={`${node.id}:${i}`} className="inline-flex items-center gap-1">{i > 0 && <span className="text-slate-400">→</span>}<span className={cn("rounded-md border px-2 py-0.5", i === 0 ? "border-blue-200 bg-blue-50 text-blue-700" : i === selectedPathNodes.length - 1 ? "border-amber-200 bg-amber-50 text-amber-800" : "border-emerald-200 bg-emerald-50 text-emerald-700")}>{node.label}</span></span>)}</div></DetailRow><DetailRow label="节点数量"><b>{selectedPathNodes.length}</b></DetailRow><DetailRow label="24H 流量"><span className="font-mono"><span>{selectedPathMetrics ? formatTopologyBytes(selectedPathMetrics.bytesIn) : "—"}</span><b className="ml-1 text-emerald-600">↓</b><span className="mx-2 text-slate-300">/</span><span>{selectedPathMetrics ? formatTopologyBytes(selectedPathMetrics.bytesOut) : "—"}</span><b className="ml-1 text-amber-500">↑</b></span></DetailRow><DetailRow label="平均延迟"><span className="rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1 font-mono font-semibold text-blue-600">{selectedPathMetrics?.latestLatencyMs != null ? `${Math.round(selectedPathMetrics.latestLatencyMs)} ms` : "待探测"}</span></DetailRow><DetailRow label="创建时间"><span className="font-mono text-slate-600">{selectedRule?.createdAt ? new Date(selectedRule.createdAt).toLocaleString("zh-CN", { hour12: false }) : "—"}</span></DetailRow></div>}
-          {detailTab === "performance" && <div className="space-y-5 text-xs"><div className="grid gap-3 sm:grid-cols-2"><MetricCard label="实时下行吞吐" value={`↓ ${selectedPathMetrics ? `${formatTopologyBytes(selectedPathMetrics.bytesInPerSecond)}/s` : "—"}`} tone="emerald" /><MetricCard label="实时上行吞吐" value={`↑ ${selectedPathMetrics ? `${formatTopologyBytes(selectedPathMetrics.bytesOutPerSecond)}/s` : "—"}`} tone="amber" /></div><div className="grid gap-3 sm:grid-cols-2"><MetricCard label="24H 丢包率" value={selectedPacketLoss == null ? "暂无记录" : `${selectedPacketLoss.toFixed(1)}%`} tone="slate" /><MetricCard label="网络抖动 (Jitter)" value={selectedJitter == null ? "暂无记录" : `${selectedJitter.toFixed(1)} ms`} tone="slate" /></div><div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4"><h4 className="mb-3 font-bold text-slate-700">单跳 RTT 耗时分布</h4>{selectedPathNodes.slice(1).map((node, index, hops) => { const label = edgeMeasurementLabel({ id: `${selectedPathNodes[index].id}=>${node.id}`, from: selectedPathNodes[index].id, to: node.id }); const latency = Number.parseFloat(label); const maxLatency = Math.max(...hops.map((hop, hopIndex) => Number.parseFloat(edgeMeasurementLabel({ id: `${selectedPathNodes[hopIndex].id}=>${hop.id}`, from: selectedPathNodes[hopIndex].id, to: hop.id })) || 0), 1); const width = Number.isFinite(latency) ? `${Math.max(6, latency / maxLatency * 100)}%` : "0%"; return <div key={`${node.id}:${index}`} className="mb-3 last:mb-0"><div className="mb-1.5 flex justify-between text-slate-500"><span>第 {index + 1} 跳 ({selectedPathNodes[index].label} → {node.label})</span><b className="font-mono text-blue-600">{label}</b></div><div className="h-1.5 overflow-hidden rounded-full bg-slate-200"><div className={cn("h-full rounded-full", index === 0 ? "bg-blue-500" : "bg-emerald-500")} style={{ width }} /></div></div>; })}</div><button type="button" disabled={!selectedPath.ruleId || startRuleLatencyTest.isPending} onClick={() => selectedPath.ruleId && void requestPathProbe(selectedPath.ruleId)} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-primary py-3 text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"><Activity className="h-4 w-4" />立即执行端到端 RTT 探测</button></div>}
+          {detailTab === "performance" && <div className="space-y-5 text-xs"><div className="grid gap-3 sm:grid-cols-2"><MetricCard label="实时下行吞吐" value={`↓ ${selectedPathMetrics ? `${formatTopologyBytes(selectedPathMetrics.bytesInPerSecond)}/s` : "—"}`} tone="emerald" /><MetricCard label="实时上行吞吐" value={`↑ ${selectedPathMetrics ? `${formatTopologyBytes(selectedPathMetrics.bytesOutPerSecond)}/s` : "—"}`} tone="amber" /></div><div className="grid gap-3 sm:grid-cols-2"><MetricCard label="24H 丢包率" value={selectedPacketLoss == null ? "暂无记录" : `${selectedPacketLoss.toFixed(1)}%`} tone="slate" /><MetricCard label="网络抖动 (Jitter)" value={selectedJitter == null ? "暂无记录" : `${selectedJitter.toFixed(1)} ms`} tone="slate" /></div><div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4"><h4 className="mb-3 font-bold text-slate-700">单跳 RTT 耗时分布</h4>{selectedPathNodes.slice(1).map((node, index, hops) => { const label = pathEdgeMeasurementLabel(selectedPath, { id: `${selectedPathNodes[index].id}=>${node.id}`, from: selectedPathNodes[index].id, to: node.id }); const latency = Number.parseFloat(label); const maxLatency = Math.max(...hops.map((hop, hopIndex) => Number.parseFloat(pathEdgeMeasurementLabel(selectedPath, { id: `${selectedPathNodes[hopIndex].id}=>${hop.id}`, from: selectedPathNodes[hopIndex].id, to: hop.id })) || 0), 1); const width = Number.isFinite(latency) ? `${Math.max(6, latency / maxLatency * 100)}%` : "0%"; return <div key={`${node.id}:${index}`} className="mb-3 last:mb-0"><div className="mb-1.5 flex justify-between text-slate-500"><span>第 {index + 1} 跳 ({selectedPathNodes[index].label} → {node.label})</span><b className="font-mono text-blue-600">{label}</b></div><div className="h-1.5 overflow-hidden rounded-full bg-slate-200"><div className={cn("h-full rounded-full", index === 0 ? "bg-blue-500" : "bg-emerald-500")} style={{ width }} /></div></div>; })}</div><button type="button" disabled={!selectedPath.ruleId || startRuleLatencyTest.isPending} onClick={() => selectedPath.ruleId && void requestPathProbe(selectedPath.ruleId)} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-primary py-3 text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"><Activity className="h-4 w-4" />立即执行端到端 RTT 探测</button></div>}
           {detailTab === "history" && <div className="text-xs"><div className="mb-5 flex justify-between text-slate-500"><span>最近 24 小时往返延迟曲线 (ms)</span><b className="font-mono text-blue-600">当前 {selectedPathMetrics?.latestLatencyMs != null ? `${Math.round(selectedPathMetrics.latestLatencyMs)} ms` : "—"}</b></div><div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">{selectedPathHistoryQuery.isLoading ? <div className="py-16 text-center text-slate-400">正在加载真实历史延迟…</div> : selectedHistoryPolyline ? <><svg viewBox="0 0 100 48" preserveAspectRatio="none" className="h-40 w-full"><defs><linearGradient id="topology-history-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#2563EB" stopOpacity=".22" /><stop offset="1" stopColor="#2563EB" stopOpacity="0" /></linearGradient></defs><polyline points={`0,48 ${selectedHistoryPolyline} 100,48`} fill="url(#topology-history-area)" stroke="none" /><polyline points={selectedHistoryPolyline} fill="none" stroke="#2563EB" strokeWidth="1.5" vectorEffect="non-scaling-stroke" /></svg><div className="mt-2 flex justify-between font-mono text-[10px] text-slate-400"><span>24H 前</span><span>现在</span></div></> : <div className="py-16 text-center text-slate-400">当前路径暂无真实历史延迟记录。</div>}</div><div className="mt-5 rounded-2xl border border-blue-100 bg-blue-50/60 p-4 text-slate-600">历史趋势来自规则真实 TCPing 记录；未检测到的数据不会使用模拟值补全。</div></div>}
         </div>
       </section>}
