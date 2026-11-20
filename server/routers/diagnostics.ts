@@ -932,11 +932,10 @@ export const diagnosticsRouter = router({
       if (!host?.isOnline) throw new Error(`${host?.name || "源主机"} Agent 离线，无法探测此链路`);
       if (!isAgentVersionAtLeast(host?.agentVersion, DIAGNOSTIC_AGENT_VERSION)) throw new Error(`${host?.name || "源主机"} Agent 版本过低，无法探测此链路`);
       const diagnosticId = `topology-segment-${input.ruleId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      // Intermediate nodes are physical host-to-host legs. Probe the next host
-      // itself instead of its forwarding listener, whose TCP result can fail
-      // merely because a later landing target is offline.
-      const probeMethod = segment.isFinalTarget === true ? segment.method : "ping";
-      const probePort = probeMethod === "ping" ? 0 : segment.targetPort;
+      // A topology edge always represents physical RTT. Use ICMP for managed
+      // hosts, external IPs and domains alike; forwarding ports are irrelevant.
+      const probeMethod = "ping";
+      const probePort = 0;
       const testId = await db.createForwardTest({
         ruleId: 0, hostId: segment.fromHostId, userId: Number(ctx.user.id), status: "pending",
         listenOk: false, targetReachable: false, forwardOk: false,

@@ -56,6 +56,14 @@ test("automatic segment selection is scoped by rule, source and target and uses 
   assert.equal(selected?.isTimeout, true);
 });
 
+test("topology selection ignores newer legacy TCP rows when physical RTT requires ping", () => {
+  const selected = latestAutomaticTopologySegment([
+    { ruleId: 31, sourceHostId: 4, targetHostId: 5, targetAddress: "203.0.113.5", method: "ping", latencyMs: 2, recordedAt: 100 },
+    { ruleId: 31, sourceHostId: 4, targetHostId: 5, targetAddress: "203.0.113.5", method: "tcp", latencyMs: 202, recordedAt: 200 },
+  ], { ruleIds: new Set([31]), sourceHostId: 4, targetHostId: 5, targetAddresses: ["203.0.113.5"], method: "ping" });
+  assert.equal(selected?.latencyMs, 2);
+});
+
 test("automatic external target segments can be matched by address", () => {
   const selected = latestAutomaticTopologySegment([
     { ruleId: 7, sourceHostId: 1, targetHostId: null, targetAddress: "edge.example.com", latencyMs: 18, recordedAt: 10 },

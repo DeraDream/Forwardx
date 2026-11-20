@@ -1115,10 +1115,13 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
         // arbitrary segment identifiers.
         const expectedKey = `topology-v1:${sourceHostId}:${targetAddress.toLowerCase()}:${targetPort}:${method}`;
         if (String(report.segmentKey).trim() !== expectedKey) continue;
-        const runtimeRules = (sourceRuntimeRules as any[]).filter((rule: any) => (
-          (Number(rule.id) === Number(report.ruleId) || Number(rule.forwardGroupRuleId || 0) === Number(report.ruleId))
-          && rule.isEnabled !== false && !rule.pendingDelete
-        ));
+        const normalizedTargetAddress = targetAddress.toLowerCase();
+        const runtimeRules = (sourceRuntimeRules as any[]).filter((rule: any) => {
+          if (rule.isEnabled === false || rule.pendingDelete) return false;
+          const ownsReport = Number(rule.id) === Number(report.ruleId) || Number(rule.forwardGroupRuleId || 0) === Number(report.ruleId);
+          const sharesPingTarget = method === "ping" && String(rule.targetIp || "").trim().toLowerCase() === normalizedTargetAddress;
+          return ownsReport || sharesPingTarget;
+        });
         if (runtimeRules.length === 0) continue;
         const targetHostId = targetHostIdByAddress.get(targetAddress.toLowerCase()) || null;
         for (const runtimeRule of runtimeRules) acceptedSegments.push({
@@ -1129,7 +1132,11 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
         });
       }
     }
-    if (acceptedSegments.length > 0) await db.recordTopologySegmentLatency(acceptedSegments);
+    if (acceptedSegments.length > 0) {
+      const uniqueSegments = new Map<string, any>();
+      for (const sample of acceptedSegments) uniqueSegments.set(`${sample.ruleId}:${sample.segmentKey}`, sample);
+      await db.recordTopologySegmentLatency(Array.from(uniqueSegments.values()));
+    }
     const topologyGatePlan = agentTcpingReportGate.plan({
       hostId: Number(host.id),
       force,
@@ -1702,17 +1709,6 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
             healthPending: !!report.healthPending,
           },
           gateReport: { ...report, latencyMs, isTimeout },
-          topologySample: {
-            ruleId: Number(rule.forwardGroupRuleId || rule.id),
-            sourceHostId: Number(host.id),
-            targetAddress: String(report.targetIp || rule.targetIp || "").trim(),
-            targetPort: Number(report.targetPort || rule.targetPort || 0),
-            method: report.method === "ping" ? "ping" : "tcp",
-            latencyMs,
-            isTimeout,
-            probeCount: Number(report.probeCount) || 1,
-            probeSuccesses: Number(report.probeSuccesses) || 0,
-          },
         };
       }
 
@@ -1758,17 +1754,6 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
           latencyMs: combined.latencyMs,
           isTimeout: combined.isTimeout,
         },
-        topologySample: {
-          ruleId: Number(rule.forwardGroupRuleId || rule.id),
-          sourceHostId: Number(host.id),
-          targetAddress: String(report.targetIp || rule.targetIp || "").trim(),
-          targetPort: Number(report.targetPort || rule.targetPort || 0),
-          method: report.method === "ping" ? "ping" : "tcp",
-          latencyMs: report.isTimeout ? null : baseLatency,
-          isTimeout: !!report.isTimeout || baseLatency === null,
-          probeCount: Number(report.probeCount) || 1,
-          probeSuccesses: Number(report.probeSuccesses) || 0,
-        },
       };
     });
     const validRuleStats = ruleStats.filter((entry): entry is NonNullable<typeof entry> => !!entry);
@@ -1786,28 +1771,6 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
 
     if (stats.length > 0) {
       await db.insertTcpingStats(stats);
-      const topologySamplesByKey = new Map<string, any>();
-      for (const entry of acceptedRuleStats) {
-        const sample = entry.topologySample;
-        const targetAddress = String(sample.targetAddress || "").trim();
-        const targetPort = Number(sample.targetPort || 0);
-        if (!targetAddress || (sample.method !== "ping" && targetPort <= 0)) continue;
-        const segmentKey = `topology-v1:${sample.sourceHostId}:${targetAddress.toLowerCase()}:${targetPort}:${sample.method}`;
-        topologySamplesByKey.set(`${sample.ruleId}:${segmentKey}`, { ...sample, targetAddress, targetPort, segmentKey });
-      }
-      if (topologySamplesByKey.size > 0) {
-        const targetHostIdByAddress = new Map<string, number>();
-        for (const candidate of await db.getHosts()) {
-          for (const address of [(candidate as any).entryIp, (candidate as any).ipv4, (candidate as any).ip, (candidate as any).publicIp, (candidate as any).exitIp]) {
-            const normalized = String(address || "").trim().toLowerCase();
-            if (normalized && !targetHostIdByAddress.has(normalized)) targetHostIdByAddress.set(normalized, Number((candidate as any).id));
-          }
-        }
-        await db.recordTopologySegmentLatency(Array.from(topologySamplesByKey.values()).map((sample: any) => ({
-          ...sample,
-          targetHostId: targetHostIdByAddress.get(String(sample.targetAddress).toLowerCase()) || null,
-        })));
-      }
       clearRuleLatencyQueryCaches();
       db.scheduleForwardGroupFailover(Array.from(new Set(stats
         .filter((stat) => ruleGatePlan.transitionRuleIds.has(Number(stat.ruleId)))

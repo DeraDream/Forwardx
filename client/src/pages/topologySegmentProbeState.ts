@@ -19,6 +19,7 @@ export type AutomaticTopologySegment = {
   sourceHostId: number;
   targetHostId?: number | null;
   targetAddress?: string | null;
+  method?: "ping" | "tcp" | string;
   latencyMs?: number | null;
   isTimeout?: boolean;
   recordedAt?: Date | string | number | null;
@@ -62,12 +63,13 @@ export function mergeTopologySegmentProbeResults(
 
 export function latestAutomaticTopologySegment(
   rows: AutomaticTopologySegment[],
-  input: { ruleIds: Set<number>; sourceHostId: number; targetHostId: number; targetAddresses: string[] },
+  input: { ruleIds: Set<number>; sourceHostId: number; targetHostId: number; targetAddresses: string[]; method?: string },
 ) {
   const addresses = new Set(input.targetAddresses.map((address) => address.trim().toLowerCase()).filter(Boolean));
   return rows
     .filter((row) => {
       if (!input.ruleIds.has(Number(row.ruleId)) || Number(row.sourceHostId) !== input.sourceHostId) return false;
+      if (input.method && String(row.method || "").toLowerCase() !== input.method.toLowerCase()) return false;
       if (input.targetHostId > 0 && Number(row.targetHostId || 0) === input.targetHostId) return true;
       return addresses.has(String(row.targetAddress || "").trim().toLowerCase());
     })

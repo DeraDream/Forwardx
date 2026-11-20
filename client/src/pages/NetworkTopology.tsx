@@ -1126,63 +1126,11 @@ function NetworkTopologyContent() {
     const targetNode = graph.nodes.find((node) => node.id === edge.to);
     const ruleIds = new Set((path.segmentRuleIds || [Number(path.ruleId || 0)]).map(Number).filter((id) => id > 0));
     const targetAddresses = [targetNode?.label, targetNode?.subtitle].map((value) => String(value || "").trim()).filter(Boolean);
-    return latestAutomaticTopologySegment(automaticSegments, { ruleIds, sourceHostId, targetHostId, targetAddresses });
+    return latestAutomaticTopologySegment(automaticSegments, { ruleIds, sourceHostId, targetHostId, targetAddresses, method: "ping" });
   };
   const automaticSegmentLabel = (segment: AutomaticTopologySegment) => segment.isTimeout || segment.latencyMs == null
     ? "超时"
     : `${Math.round(Number(segment.latencyMs))} ms`;
-  const edgeMeasurementLabel = (edge: TopologyEdge, path?: PhysicalPath | null) => {
-    const sourceId = Number(edge.from.replace(/^host:/, ""));
-    const targetId = Number(edge.to.replace(/^host:/, ""));
-    const targetNode = graph.nodes.find((node) => node.id === edge.to);
-    const scopedRuleIds = path
-      ? new Set((path.segmentRuleIds || [Number(path.ruleId || 0)]).map(Number).filter((id) => id > 0))
-      : null;
-    // Plain IP targets use the node label; its subtitle is the port. External
-    // SS landings keep their endpoint in the subtitle, so accept both forms.
-    const targetAddresses = [targetNode?.label, targetNode?.subtitle].map((value) => String(value || "").trim()).filter(Boolean);
-    const automatic = automaticEdgeMeasurement(edge, path);
-    const automaticAt = automatic ? new Date(automatic.recordedAt || 0).getTime() : 0;
-    const allDetails = [...testByRule.entries()].flatMap(([ruleId, test]: any) => scopedRuleIds && !scopedRuleIds.has(ruleId)
-      ? []
-      : (test.parsed.details || []).map((detail: any) => ({ ...detail, ruleId, recordedAt: test.recordedAt })));
-    const details = allDetails
-      .filter((detail: any) => detail.fromHostId === sourceId && detail.toHostId === targetId)
-      .sort((a: any, b: any) => b.recordedAt - a.recordedAt);
-    if (details.length) {
-      // A merged physical edge can belong to several rules/ports. Show only the
-      // newest Rules-page test result; never concatenate unrelated port tests.
-      const detail = details[0];
-      if (automatic && automaticAt > detail.recordedAt) return automaticSegmentLabel(automatic);
-      return detail.pending ? "探测中" : !detail.success ? "超时" : `${Math.round(Number(detail.latencyMs) || 0)} ms`;
-    }
-    // Every hop is measured by its upstream Agent against a concrete address.
-    // This also covers external SS / domains, which deliberately have no host ID.
-    const targetAddressSet = new Set(targetAddresses.map((address) => address.toLowerCase()));
-    const addressMatchedDetails = allDetails
-      .filter((detail: any) => detail.fromHostId === sourceId && (targetAddressSet.has(String(detail.targetIp || "").trim().toLowerCase()) || targetAddresses.some((address) => String(detail.routeLabel || detail.message || "").includes(address))))
-      .sort((a: any, b: any) => b.recordedAt - a.recordedAt);
-    if (addressMatchedDetails.length) {
-      const detail = addressMatchedDetails[0];
-      if (automatic && automaticAt > detail.recordedAt) return automaticSegmentLabel(automatic);
-      return detail.pending ? "探测中" : !detail.success ? "超时" : `${Math.round(Number(detail.latencyMs) || 0)} ms`;
-    }
-    // A direct rule has a normal forward-test result rather than a chain
-    // summary. Match its source host and the displayed target address.
-    const directRuleIds = new Set((rulesQuery.data || []).filter((rule: any) => (
-      Number(rule.hostId) === sourceId
-      && targetAddresses.includes(String(rule.targetIp || "").trim())
-      && (!scopedRuleIds || scopedRuleIds.has(Number(rule.id)))
-    )).map((rule: any) => Number(rule.id)));
-    const directTests = [...testByRule.entries()]
-      .filter(([ruleId, test]) => directRuleIds.has(ruleId) && test.status !== "pending")
-      .map(([, test]) => test)
-      .sort((a, b) => b.recordedAt - a.recordedAt);
-    if (!directTests.length) return automatic ? automaticSegmentLabel(automatic) : "待探测";
-    const test = directTests[0];
-    if (automatic && automaticAt > test.recordedAt) return automaticSegmentLabel(automatic);
-    return test.status === "timeout" || test.status === "failed" ? "超时" : typeof test.latencyMs === "number" ? `${Math.round(test.latencyMs)} ms` : "待探测";
-  };
   const segmentProbeKey = (path: PhysicalPath, edge: TopologyEdge) => topologySegmentProbeKey(path.id, edge.id);
   const segmentProbeFor = (path: PhysicalPath, edge: TopologyEdge) => segmentProbes[segmentProbeKey(path, edge)] || null;
   // A graph edge is one physical leg even when several logical rules reuse it.
@@ -1205,7 +1153,7 @@ function NetworkTopologyContent() {
     // Agents collect reused physical legs in one burst. If one logical rule's
     // downstream target is offline, do not let that route-specific failure
     // overwrite a successful measurement of the same source -> next-hop leg.
-    return summarizePhysicalTopologySegmentLabels(candidates, edgeMeasurementLabel(edge));
+    return summarizePhysicalTopologySegmentLabels(candidates, "待探测");
   };
   const pathEdgeMeasurementLabel = (path: PhysicalPath, edge: TopologyEdge) => {
     const ownProbe = segmentProbeFor(path, edge);

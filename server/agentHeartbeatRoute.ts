@@ -333,6 +333,26 @@ export function forwardXUDPTargetAddress(rule: any): string {
   return String(rule?.targetIp || rule?._originalTargetIp || "").trim();
 }
 
+export function buildTopologyPingProbes(hostId: unknown, ruleLatencyProbes: any[]) {
+  const sourceHostId = Number(hostId || 0);
+  const probesByTarget = new Map<string, any>();
+  if (sourceHostId <= 0) return [];
+  for (const probe of ruleLatencyProbes) {
+    const ruleId = Number(probe?.ruleId || 0);
+    const targetIp = String(probe?.targetIp || "").trim();
+    const targetKey = targetIp.toLowerCase();
+    if (ruleId <= 0 || !targetKey || probesByTarget.has(targetKey)) continue;
+    probesByTarget.set(targetKey, {
+      ruleId,
+      segmentKey: `topology-v1:${sourceHostId}:${targetKey}:0:ping`,
+      targetIp,
+      targetPort: 0,
+      method: "ping",
+    });
+  }
+  return Array.from(probesByTarget.values());
+}
+
 type NginxStreamServerOptions = {
   name: string;
   listenPort: number;
@@ -6167,10 +6187,9 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     ruleLatencyProbes.sort(
       (left: any, right: any) => Number(left.ruleId) - Number(right.ruleId),
     );
-    // Current Agents intentionally reuse the ordinary rule-latency network
-    // measurement for topology. Keep this section empty to clear any legacy
-    // standalone segment tasks instead of probing the same endpoint twice.
-    const topologySegmentProbes: any[] = [];
+    // Topology displays physical RTT, not forwarding-listener behavior. Probe
+    // every distinct next-hop address once with ICMP, independent of rule port.
+    const topologySegmentProbes = buildTopologyPingProbes(host.id, ruleLatencyProbes);
     const hostProbeServices = await db.getHostProbeTasksForHost(host.id);
     if (landingHostEnabled) {
       for (const service of await db.getLandingServicesForHost(Number(host.id), false)) {
