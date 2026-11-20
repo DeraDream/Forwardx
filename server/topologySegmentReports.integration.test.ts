@@ -27,7 +27,8 @@ test("topology segment report persists an Agent's reconciled next hop", () => {
       await runtime.executeRaw('INSERT INTO hosts (id, name, ip, entryIp, hostType, agentToken, userId) VALUES (?,?,?,?,?,?,?)', [2, "next", "10.23.0.2", "10.23.0.2", "slave", "next-token", 1]);
       // The saved rule still has its logical destination. The Agent reports
       // the reconciled physical listener selected by a forwarding chain.
-      await runtime.executeRaw('INSERT INTO forward_rules (id, hostId, name, sourcePort, targetIp, targetPort, isEnabled, isRunning, userId) VALUES (?,?,?,?,?,?,?,?,?)', [101, 1, "chain", 20001, "logical.example", 443, 1, 1, 1]);
+      await runtime.executeRaw('INSERT INTO forward_rules (id, hostId, name, sourcePort, targetIp, targetPort, protocol, isEnabled, isRunning, userId) VALUES (?,?,?,?,?,?,?,?,?,?)', [101, 1, "chain", 20001, "logical.example", 443, "tcp", 1, 1, 1]);
+      await runtime.executeRaw('INSERT INTO forward_rules (id, hostId, name, sourcePort, targetIp, targetPort, protocol, forwardGroupRuleId, isEnabled, isRunning, userId) VALUES (?,?,?,?,?,?,?,?,?,?,?)', [102, 1, "runtime child", 20002, "10.23.0.2", 31001, "tcp", 100, 1, 1, 1]);
 
       const app = express();
       app.use(express.json());
@@ -44,8 +45,19 @@ test("topology segment report persists an Agent's reconciled next hop", () => {
         }] }),
       });
       assert.equal(response.status, 200, await response.text());
-      const rows = await runtime.queryRaw('SELECT ruleId,sourceHostId,targetHostId,targetAddress,targetPort,latencyMs,isTimeout FROM topology_segment_latency_stats');
-      assert.deepEqual(rows.map((row) => [Number(row.ruleId), Number(row.sourceHostId), Number(row.targetHostId), row.targetAddress, Number(row.targetPort), Number(row.latencyMs), Number(row.isTimeout)]), [[101, 1, 2, '10.23.0.2', 31001, 18, 0]]);
+      const reusedResponse = await fetch('http://127.0.0.1:' + server.address().port + '/api/agent/tcping', {
+        method: 'POST', headers: { authorization: 'Bearer segment-token', 'content-type': 'application/json' },
+        body: JSON.stringify({ force: true, results: [{
+          ruleId: 102, sourcePort: 20002, targetIp: '10.23.0.2', targetPort: 31001,
+          method: 'tcping', latencyMs: 2, isTimeout: false, probeCount: 3, probeSuccesses: 3,
+        }] }),
+      });
+      assert.equal(reusedResponse.status, 200, await reusedResponse.text());
+      const rows = await runtime.queryRaw('SELECT ruleId,sourceHostId,targetHostId,targetAddress,targetPort,latencyMs,isTimeout FROM topology_segment_latency_stats ORDER BY id');
+      assert.deepEqual(rows.map((row) => [Number(row.ruleId), Number(row.sourceHostId), Number(row.targetHostId), row.targetAddress, Number(row.targetPort), Number(row.latencyMs), Number(row.isTimeout)]), [
+        [101, 1, 2, '10.23.0.2', 31001, 18, 0],
+        [100, 1, 2, '10.23.0.2', 31001, 2, 0],
+      ]);
       await new Promise((resolve) => server.close(resolve));
     } finally { await runtime.closeDatabase(); }
   `;

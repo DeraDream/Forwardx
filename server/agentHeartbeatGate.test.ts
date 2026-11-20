@@ -10,7 +10,6 @@ import {
   buildNginxTunnelServerCertificate,
   buildNginxTunnelTlsClientOptions,
   buildGostRuleListener,
-  buildTopologySegmentProbes,
   forwardXUDPTargetAddress,
   selectEffectiveForwardRateLimit,
   selectProtocolGuardRateLimit,
@@ -500,17 +499,6 @@ test("serves saturated heartbeat reconciliation in FIFO order", () => {
     release();
   }
   second();
-});
-
-test("rule latency probes are also dispatched as periodic topology segment probes", () => {
-  assert.deepEqual(buildTopologySegmentProbes(9, [
-    { ruleId: 21, targetIp: "82.109.97.96", targetPort: 29539, method: "tcping" },
-    { ruleId: 22, targetIp: "217.116.173.144", targetPort: 0, method: "ping" },
-    { ruleId: 0, targetIp: "invalid", targetPort: 443, method: "tcp" },
-  ]), [
-    { ruleId: 21, segmentKey: "topology-v1:9:82.109.97.96:29539:tcp", targetIp: "82.109.97.96", targetPort: 29539, method: "tcp" },
-    { ruleId: 22, segmentKey: "topology-v1:9:217.116.173.144:0:ping", targetIp: "217.116.173.144", targetPort: 0, method: "ping" },
-  ]);
 });
 
 test("busy heartbeat responses preserve cached state sections on the Agent", () => {

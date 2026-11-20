@@ -333,22 +333,6 @@ export function forwardXUDPTargetAddress(rule: any): string {
   return String(rule?.targetIp || rule?._originalTargetIp || "").trim();
 }
 
-export function buildTopologySegmentProbes(hostId: unknown, ruleLatencyProbes: any[]) {
-  const sourceHostId = Number(hostId || 0);
-  return ruleLatencyProbes.map((probe: any) => {
-    const method = String(probe.method || "").toLowerCase() === "ping" ? "ping" : "tcp";
-    const targetIp = String(probe.targetIp || "").trim();
-    const targetPort = method === "ping" ? 0 : Number(probe.targetPort || 0);
-    return {
-      ruleId: Number(probe.ruleId),
-      segmentKey: `topology-v1:${sourceHostId}:${targetIp.toLowerCase()}:${targetPort}:${method}`,
-      targetIp,
-      targetPort,
-      method,
-    };
-  }).filter((probe: any) => sourceHostId > 0 && probe.ruleId > 0 && probe.targetIp && (probe.method === "ping" || probe.targetPort > 0));
-}
-
 type NginxStreamServerOptions = {
   name: string;
   listenPort: number;
@@ -6183,7 +6167,10 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     ruleLatencyProbes.sort(
       (left: any, right: any) => Number(left.ruleId) - Number(right.ruleId),
     );
-    const topologySegmentProbes = buildTopologySegmentProbes(host.id, ruleLatencyProbes);
+    // Current Agents intentionally reuse the ordinary rule-latency network
+    // measurement for topology. Keep this section empty to clear any legacy
+    // standalone segment tasks instead of probing the same endpoint twice.
+    const topologySegmentProbes: any[] = [];
     const hostProbeServices = await db.getHostProbeTasksForHost(host.id);
     if (landingHostEnabled) {
       for (const service of await db.getLandingServicesForHost(Number(host.id), false)) {
