@@ -33,6 +33,7 @@ import { AGENT_ASSET_NAMES } from "../agentAssets";
 import { maskSecret } from "../ddns";
 import { reconcileHostDdnsRecords } from "../hostDdns";
 import type { DatabaseConfig } from "../dbRuntime";
+import { clearNetworkProfileProviderCache, NETWORK_PROFILE_KEY_PROVIDERS, validateNetworkProfileProvider } from "../agentNetworkProfileRoutes";
 import { defaultSqlitePath } from "../dbRuntime";
 import {
   getDatabaseSwitchJob,
@@ -1707,6 +1708,14 @@ function publicSystemSettings(all: Record<string, string | null>, activeProtocol
       ipapiKeyMasked: "",
       abuseIpdbConfigured: false,
       abuseIpdbKeyMasked: "",
+      ipinfoConfigured: false, ipinfoKeyMasked: "",
+      ipregistryConfigured: false, ipregistryKeyMasked: "",
+      ip2locationConfigured: false, ip2locationKeyMasked: "",
+      proxycheckConfigured: false, proxycheckKeyMasked: "",
+      scamalyticsConfigured: false, scamalyticsKeyMasked: "",
+      dbIpConfigured: false, dbIpKeyMasked: "",
+      ipdataConfigured: false, ipdataKeyMasked: "",
+      ipqsConfigured: false, ipqsKeyMasked: "",
     },
     database: databaseSettingsSummary(all, false),
     mysql: {
@@ -1800,6 +1809,11 @@ function publicSystemSettings(all: Record<string, string | null>, activeProtocol
 }
 
 export const systemRouter = router({
+  networkProfileApiValidate: adminProcedure.input(z.object({ provider: z.enum(["ipinfo", "ipregistry", "ipapi", "ip2location", "proxycheck", "abuseipdb", "scamalytics", "dbip", "ipdata", "ipqs"]) })).mutation(async ({ input }) => {
+    if (!NETWORK_PROFILE_KEY_PROVIDERS.includes(input.provider)) throw new Error("Unsupported network profile provider");
+    return validateNetworkProfileProvider(input.provider);
+  }),
+
   health: publicProcedure.query(() => {
     return { status: "ok", timestamp: new Date().toISOString() };
   }),
@@ -1889,6 +1903,14 @@ export const systemRouter = router({
         ipapiKeyMasked: maskSecret(all.networkProfileIpapiApiKey),
         abuseIpdbConfigured: !!String(all.networkProfileAbuseIpdbApiKey || "").trim(),
         abuseIpdbKeyMasked: maskSecret(all.networkProfileAbuseIpdbApiKey),
+        ipinfoConfigured: !!String(all.networkProfileIpinfoApiKey || "").trim(), ipinfoKeyMasked: maskSecret(all.networkProfileIpinfoApiKey),
+        ipregistryConfigured: !!String(all.networkProfileIpregistryApiKey || "").trim(), ipregistryKeyMasked: maskSecret(all.networkProfileIpregistryApiKey),
+        ip2locationConfigured: !!String(all.networkProfileIp2locationApiKey || "").trim(), ip2locationKeyMasked: maskSecret(all.networkProfileIp2locationApiKey),
+        proxycheckConfigured: !!String(all.networkProfileProxycheckApiKey || "").trim(), proxycheckKeyMasked: maskSecret(all.networkProfileProxycheckApiKey),
+        scamalyticsConfigured: !!String(all.networkProfileScamalyticsApiKey || "").trim(), scamalyticsKeyMasked: maskSecret(all.networkProfileScamalyticsApiKey),
+        dbIpConfigured: !!String(all.networkProfileDbIpApiKey || "").trim(), dbIpKeyMasked: maskSecret(all.networkProfileDbIpApiKey),
+        ipdataConfigured: !!String(all.networkProfileIpdataApiKey || "").trim(), ipdataKeyMasked: maskSecret(all.networkProfileIpdataApiKey),
+        ipqsConfigured: !!String(all.networkProfileIpqsApiKey || "").trim(), ipqsKeyMasked: maskSecret(all.networkProfileIpqsApiKey),
       },
       database: databaseSettingsSummary(all),
       mysql: {
@@ -2121,6 +2143,16 @@ export const systemRouter = router({
           clearIpapiApiKey: z.boolean().optional(),
           abuseIpdbApiKey: z.string().max(512).optional(),
           clearAbuseIpdbApiKey: z.boolean().optional(),
+          scamalyticsApiKey: z.string().max(512).optional(),
+          dbIpApiKey: z.string().max(512).optional(),
+          ipdataApiKey: z.string().max(512).optional(),
+          ipqsApiKey: z.string().max(512).optional(),
+          ipinfoApiKey: z.string().max(512).optional(), clearIpinfoApiKey: z.boolean().optional(),
+          ipregistryApiKey: z.string().max(512).optional(), clearIpregistryApiKey: z.boolean().optional(),
+          ip2locationApiKey: z.string().max(512).optional(), clearIp2locationApiKey: z.boolean().optional(),
+          proxycheckApiKey: z.string().max(512).optional(), clearProxycheckApiKey: z.boolean().optional(),
+          clearScamalyticsApiKey: z.boolean().optional(), clearDbIpApiKey: z.boolean().optional(),
+          clearIpdataApiKey: z.boolean().optional(), clearIpqsApiKey: z.boolean().optional(),
         }).optional(),
         email: z.object({
           enabled: z.boolean().optional(),
@@ -2359,7 +2391,23 @@ export const systemRouter = router({
         if (input.networkProfileApi.abuseIpdbApiKey !== undefined && input.networkProfileApi.abuseIpdbApiKey.trim()) {
           next.networkProfileAbuseIpdbApiKey = input.networkProfileApi.abuseIpdbApiKey.trim();
         }
+        if (input.networkProfileApi.scamalyticsApiKey?.trim()) next.networkProfileScamalyticsApiKey = input.networkProfileApi.scamalyticsApiKey.trim();
+        if (input.networkProfileApi.dbIpApiKey?.trim()) next.networkProfileDbIpApiKey = input.networkProfileApi.dbIpApiKey.trim();
+        if (input.networkProfileApi.ipdataApiKey?.trim()) next.networkProfileIpdataApiKey = input.networkProfileApi.ipdataApiKey.trim();
+        if (input.networkProfileApi.ipqsApiKey?.trim()) next.networkProfileIpqsApiKey = input.networkProfileApi.ipqsApiKey.trim();
+        const profileKeys = [
+          ["Ipinfo", "ipinfoApiKey", "clearIpinfoApiKey"], ["Ipregistry", "ipregistryApiKey", "clearIpregistryApiKey"],
+          ["Ip2location", "ip2locationApiKey", "clearIp2locationApiKey"], ["Proxycheck", "proxycheckApiKey", "clearProxycheckApiKey"],
+          ["Scamalytics", "scamalyticsApiKey", "clearScamalyticsApiKey"], ["DbIp", "dbIpApiKey", "clearDbIpApiKey"],
+          ["Ipdata", "ipdataApiKey", "clearIpdataApiKey"], ["Ipqs", "ipqsApiKey", "clearIpqsApiKey"],
+        ] as const;
+        for (const [name, keyField, clearField] of profileKeys) {
+          const value = input.networkProfileApi[keyField];
+          if (input.networkProfileApi[clearField]) (next as any)[`networkProfile${name}ApiKey`] = null;
+          if (typeof value === "string" && value.trim()) (next as any)[`networkProfile${name}ApiKey`] = value.trim();
+        }
         await db.setSettings(next);
+        clearNetworkProfileProviderCache();
         console.info("[Settings] network profile API credentials updated");
       }
       if (input.email) {

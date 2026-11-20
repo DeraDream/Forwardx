@@ -4242,6 +4242,18 @@ function SystemInfoSection() {
   const [agentPreferPanelInstall, setAgentPreferPanelInstall] = useState(false);
   const [networkProfileIpapiKey, setNetworkProfileIpapiKey] = useState("");
   const [networkProfileAbuseIpdbKey, setNetworkProfileAbuseIpdbKey] = useState("");
+  const [networkProfileScamalyticsKey, setNetworkProfileScamalyticsKey] = useState("");
+  const [networkProfileDbIpKey, setNetworkProfileDbIpKey] = useState("");
+  const [networkProfileIpdataKey, setNetworkProfileIpdataKey] = useState("");
+  const [networkProfileIpqsKey, setNetworkProfileIpqsKey] = useState("");
+  const [networkProfileIpinfoKey, setNetworkProfileIpinfoKey] = useState("");
+  const [networkProfileIpregistryKey, setNetworkProfileIpregistryKey] = useState("");
+  const [networkProfileIp2locationKey, setNetworkProfileIp2locationKey] = useState("");
+  const [networkProfileProxycheckKey, setNetworkProfileProxycheckKey] = useState("");
+  const validateNetworkProfileApi = trpc.system.networkProfileApiValidate.useMutation({
+    onSuccess: () => toast.success("API Key 验证通过"),
+    onError: (error) => toast.error(`API Key 验证失败：${error.message}`),
+  });
   const [agentUpgradeWaveSize, setAgentUpgradeWaveSize] = useState("5");
   const [agentUpgradeWaveIntervalSeconds, setAgentUpgradeWaveIntervalSeconds] = useState("15");
   const [ddnsEnabled, setDdnsEnabled] = useState(false);
@@ -4733,7 +4745,9 @@ function SystemInfoSection() {
   const handleSaveNetworkProfileApi = () => {
     const ipapiApiKey = networkProfileIpapiKey.trim();
     const abuseIpdbApiKey = networkProfileAbuseIpdbKey.trim();
-    if (!ipapiApiKey && !abuseIpdbApiKey) {
+    const scamalyticsApiKey = networkProfileScamalyticsKey.trim(); const dbIpApiKey = networkProfileDbIpKey.trim(); const ipdataApiKey = networkProfileIpdataKey.trim(); const ipqsApiKey = networkProfileIpqsKey.trim();
+    const ipinfoApiKey = networkProfileIpinfoKey.trim(); const ipregistryApiKey = networkProfileIpregistryKey.trim(); const ip2locationApiKey = networkProfileIp2locationKey.trim(); const proxycheckApiKey = networkProfileProxycheckKey.trim();
+    if (!ipapiApiKey && !abuseIpdbApiKey && !scamalyticsApiKey && !dbIpApiKey && !ipdataApiKey && !ipqsApiKey && !ipinfoApiKey && !ipregistryApiKey && !ip2locationApiKey && !proxycheckApiKey) {
       toast.info("请输入需要保存的 API Key");
       return;
     }
@@ -4741,27 +4755,22 @@ function SystemInfoSection() {
       networkProfileApi: {
         ipapiApiKey: ipapiApiKey || undefined,
         abuseIpdbApiKey: abuseIpdbApiKey || undefined,
+        scamalyticsApiKey: scamalyticsApiKey || undefined, dbIpApiKey: dbIpApiKey || undefined, ipdataApiKey: ipdataApiKey || undefined, ipqsApiKey: ipqsApiKey || undefined,
+        ipinfoApiKey: ipinfoApiKey || undefined, ipregistryApiKey: ipregistryApiKey || undefined, ip2locationApiKey: ip2locationApiKey || undefined, proxycheckApiKey: proxycheckApiKey || undefined,
       },
     }, {
       onSuccess: () => {
         setNetworkProfileIpapiKey("");
-        setNetworkProfileAbuseIpdbKey("");
+        setNetworkProfileAbuseIpdbKey(""); setNetworkProfileScamalyticsKey(""); setNetworkProfileDbIpKey(""); setNetworkProfileIpdataKey(""); setNetworkProfileIpqsKey(""); setNetworkProfileIpinfoKey(""); setNetworkProfileIpregistryKey(""); setNetworkProfileIp2locationKey(""); setNetworkProfileProxycheckKey("");
         utils.system.getSettings.invalidate();
       },
     });
   };
 
-  const handleClearNetworkProfileApiKey = (provider: "ipapi" | "abuseipdb") => {
-    saveSystemSettings("networkProfileApi", {
-      networkProfileApi: provider === "ipapi"
-        ? { clearIpapiApiKey: true }
-        : { clearAbuseIpdbApiKey: true },
-    }, {
-      onSuccess: () => {
-        if (provider === "ipapi") setNetworkProfileIpapiKey("");
-        else setNetworkProfileAbuseIpdbKey("");
-        utils.system.getSettings.invalidate();
-      },
+  const handleClearNetworkProfileApiKey = (provider: "ipinfo" | "ipregistry" | "ipapi" | "ip2location" | "proxycheck" | "abuseipdb" | "scamalytics" | "dbip" | "ipdata" | "ipqs") => {
+    const clearFields: Record<string, string> = { ipinfo: "clearIpinfoApiKey", ipregistry: "clearIpregistryApiKey", ipapi: "clearIpapiApiKey", ip2location: "clearIp2locationApiKey", proxycheck: "clearProxycheckApiKey", abuseipdb: "clearAbuseIpdbApiKey", scamalytics: "clearScamalyticsApiKey", dbip: "clearDbIpApiKey", ipdata: "clearIpdataApiKey", ipqs: "clearIpqsApiKey" };
+    saveSystemSettings("networkProfileApi", { networkProfileApi: { [clearFields[provider]]: true } }, {
+      onSuccess: () => { utils.system.getSettings.invalidate(); },
     });
   };
 
@@ -5092,16 +5101,7 @@ function SystemInfoSection() {
                   onChange={(event) => setNetworkProfileIpapiKey(event.target.value)}
                   placeholder={settings?.networkProfileApi?.ipapiKeyMasked || "输入 ipapi.is API Key"}
                 />
-                {settings?.networkProfileApi?.ipapiConfigured ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => handleClearNetworkProfileApiKey("ipapi")}
-                    disabled={isSavingSetting("networkProfileApi")}
-                  >
-                    删除
-                  </Button>
-                ) : null}
+                {settings?.networkProfileApi?.ipapiConfigured && <><Button type="button" variant="outline" onClick={() => validateNetworkProfileApi.mutate({ provider: "ipapi" })} disabled={validateNetworkProfileApi.isPending}>验证</Button><Button type="button" variant="outline" onClick={() => handleClearNetworkProfileApiKey("ipapi")} disabled={isSavingSetting("networkProfileApi")}>删除</Button></>}
               </div>
               <p className="text-xs text-muted-foreground">用于 IP 类型、机房 / VPN / Proxy / Tor 等分类字段。</p>
             </div>
@@ -5122,20 +5122,23 @@ function SystemInfoSection() {
                   onChange={(event) => setNetworkProfileAbuseIpdbKey(event.target.value)}
                   placeholder={settings?.networkProfileApi?.abuseIpdbKeyMasked || "输入 AbuseIPDB API Key"}
                 />
-                {settings?.networkProfileApi?.abuseIpdbConfigured ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => handleClearNetworkProfileApiKey("abuseipdb")}
-                    disabled={isSavingSetting("networkProfileApi")}
-                  >
-                    删除
-                  </Button>
-                ) : null}
+                {settings?.networkProfileApi?.abuseIpdbConfigured && <><Button type="button" variant="outline" onClick={() => validateNetworkProfileApi.mutate({ provider: "abuseipdb" })} disabled={validateNetworkProfileApi.isPending}>验证</Button><Button type="button" variant="outline" onClick={() => handleClearNetworkProfileApiKey("abuseipdb")} disabled={isSavingSetting("networkProfileApi")}>删除</Button></>}
               </div>
               <p className="text-xs text-muted-foreground">用于 AbuseIPDB 官方风险评分；未配置时不会请求该接口。</p>
             </div>
 
+            <div className="grid gap-3 sm:grid-cols-2">
+              {([
+                ["ipinfo", "IPinfo API Key", networkProfileIpinfoKey, setNetworkProfileIpinfoKey, "ipinfoConfigured", "ipinfoKeyMasked"],
+                ["ipregistry", "ipregistry API Key", networkProfileIpregistryKey, setNetworkProfileIpregistryKey, "ipregistryConfigured", "ipregistryKeyMasked"],
+                ["ip2location", "IP2Location API Key", networkProfileIp2locationKey, setNetworkProfileIp2locationKey, "ip2locationConfigured", "ip2locationKeyMasked"],
+                ["proxycheck", "ProxyCheck API Key", networkProfileProxycheckKey, setNetworkProfileProxycheckKey, "proxycheckConfigured", "proxycheckKeyMasked"],
+                ["scamalytics", "Scamalytics API Key", networkProfileScamalyticsKey, setNetworkProfileScamalyticsKey, "scamalyticsConfigured", "scamalyticsKeyMasked"],
+                ["dbip", "DB-IP API Key", networkProfileDbIpKey, setNetworkProfileDbIpKey, "dbIpConfigured", "dbIpKeyMasked"],
+                ["ipdata", "IPdata API Key", networkProfileIpdataKey, setNetworkProfileIpdataKey, "ipdataConfigured", "ipdataKeyMasked"],
+                ["ipqs", "IPQualityScore API Key", networkProfileIpqsKey, setNetworkProfileIpqsKey, "ipqsConfigured", "ipqsKeyMasked"],
+              ] as const).map(([provider, label, value, setValue, configuredField, maskedField]) => { const api = settings?.networkProfileApi as any; const configured = !!api?.[configuredField]; return <div key={provider} className="space-y-1.5"><div className="flex items-center justify-between gap-2"><Label>{label}</Label><Badge variant="outline">{configured ? "已配置" : "未配置"}</Badge></div><div className="flex gap-2"><Input type="password" autoComplete="off" value={value} onChange={(event) => setValue(event.target.value)} placeholder={api?.[maskedField] || `输入 ${label}`} />{configured && <><Button type="button" variant="outline" onClick={() => validateNetworkProfileApi.mutate({ provider })} disabled={validateNetworkProfileApi.isPending}>验证</Button><Button type="button" variant="outline" onClick={() => handleClearNetworkProfileApiKey(provider)} disabled={isSavingSetting("networkProfileApi")}>删除</Button></>}</div></div>; })}
+            </div>
             <div className="flex justify-end">
               <Button onClick={handleSaveNetworkProfileApi} disabled={isSavingSetting("networkProfileApi")}>
                 保存 API Key

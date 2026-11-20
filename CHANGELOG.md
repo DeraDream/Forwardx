@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.4.96] - 2026-11-20
+
+### Added
+
+- 网络画像风险库新增 Scamalytics、DB-IP、IPdata 与 IPQualityScore 的面板安全代理聚合，并在风险视图展示结果。
+- 系统设置新增 IPinfo、ipregistry、ipapi.is、IP2Location、ProxyCheck、AbuseIPDB 及上述风险库的统一 API Key 管理、状态、删除与服务端有效性验证。
+
+### Changed
+
+- 网络画像 Agent 升级至 `2.2.239`：Key 始终保存在 Panel，Agent 通过认证代理取得结果；IPinfo、ipregistry 和 IP2Location 未配置 Key 时保留公开数据源回退。
+
+Agent 升级至 `2.2.239`，ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.4.95] - 2026-11-20
 
 ### Added

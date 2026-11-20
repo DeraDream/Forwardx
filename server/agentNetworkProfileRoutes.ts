@@ -16,6 +16,13 @@ const NETWORK_PROFILE_PROXY_PROVIDERS = new Set([
   "ipapi",
   "proxycheck",
   "abuseipdb",
+  "scamalytics",
+  "dbip",
+  "ipdata",
+  "ipqs",
+  "ipinfo",
+  "ipregistry",
+  "ip2location",
 ]);
 
 type NetworkProfileProxyCacheEntry = {
@@ -32,6 +39,32 @@ type NetworkProfileProxyRequest = {
 
 const networkProfileProxyCache = new Map<string, NetworkProfileProxyCacheEntry>();
 
+const networkProfileKeySettings: Record<string, string> = {
+  ipinfo: "networkProfileIpinfoApiKey",
+  ipregistry: "networkProfileIpregistryApiKey",
+  ipapi: "networkProfileIpapiApiKey",
+  ip2location: "networkProfileIp2locationApiKey",
+  proxycheck: "networkProfileProxycheckApiKey",
+  abuseipdb: "networkProfileAbuseIpdbApiKey",
+  scamalytics: "networkProfileScamalyticsApiKey",
+  dbip: "networkProfileDbIpApiKey",
+  ipdata: "networkProfileIpdataApiKey",
+  ipqs: "networkProfileIpqsApiKey",
+};
+
+async function networkProfileProviderKey(provider: string) {
+  const setting = networkProfileKeySettings[provider];
+  return setting ? String((await db.getSetting(setting)) || "").trim() : "";
+}
+
+export const NETWORK_PROFILE_KEY_PROVIDERS = Object.keys(networkProfileKeySettings);
+
+export function clearNetworkProfileProviderCache(provider?: string) {
+  for (const key of networkProfileProxyCache.keys()) {
+    if (!provider || key.startsWith(`${provider}:`)) networkProfileProxyCache.delete(key);
+  }
+}
+
 async function networkProfileProxyRequest(ip: string, provider: string): Promise<NetworkProfileProxyRequest> {
   const escapedIp = encodeURIComponent(ip);
   if (provider === "ipapi") {
@@ -47,11 +80,48 @@ async function networkProfileProxyRequest(ip: string, provider: string): Promise
       },
     };
   }
+  if (provider === "ipinfo") {
+    const apiKey = await networkProfileProviderKey(provider);
+    if (!apiKey) throw new Error("IPinfo API key is not configured");
+    return { url: `https://ipinfo.io/${escapedIp}?token=${encodeURIComponent(apiKey)}`, headers: {} };
+  }
+  if (provider === "ipregistry") {
+    const apiKey = await networkProfileProviderKey(provider);
+    if (!apiKey) throw new Error("ipregistry API key is not configured");
+    return { url: `https://api.ipregistry.co/${escapedIp}?key=${encodeURIComponent(apiKey)}`, headers: {} };
+  }
+  if (provider === "ip2location") {
+    const apiKey = await networkProfileProviderKey(provider);
+    if (!apiKey) throw new Error("IP2Location API key is not configured");
+    return { url: `https://api.ip2location.io/?key=${encodeURIComponent(apiKey)}&ip=${escapedIp}&format=json`, headers: {} };
+  }
   if (provider === "proxycheck") {
-    return { url: `https://proxycheck.io/v2/${escapedIp}?vpn=1&asn=1&risk=1&days=7`, headers: {} as Record<string, string> };
+    const apiKey = await networkProfileProviderKey(provider);
+    const key = apiKey ? `&key=${encodeURIComponent(apiKey)}` : "";
+    return { url: `https://proxycheck.io/v2/${escapedIp}?vpn=1&asn=1&risk=1&days=7${key}`, headers: {} };
+  }
+  if (provider === "scamalytics") {
+    const apiKey = await networkProfileProviderKey(provider);
+    if (!apiKey) throw new Error("Scamalytics API key is not configured");
+    return { url: `https://api11.scamalytics.com/${encodeURIComponent(apiKey)}/?ip=${escapedIp}`, headers: {} };
+  }
+  if (provider === "dbip") {
+    const apiKey = await networkProfileProviderKey(provider);
+    if (!apiKey) throw new Error("DB-IP API key is not configured");
+    return { url: `https://api.db-ip.com/v2/${encodeURIComponent(apiKey)}/${escapedIp}`, headers: {} };
+  }
+  if (provider === "ipdata") {
+    const apiKey = await networkProfileProviderKey(provider);
+    if (!apiKey) throw new Error("IPdata API key is not configured");
+    return { url: `https://api.ipdata.co/${escapedIp}?api-key=${encodeURIComponent(apiKey)}`, headers: {} };
+  }
+  if (provider === "ipqs") {
+    const apiKey = await networkProfileProviderKey(provider);
+    if (!apiKey) throw new Error("IPQualityScore API key is not configured");
+    return { url: `https://www.ipqualityscore.com/api/json/ip/${encodeURIComponent(apiKey)}/${escapedIp}`, headers: {} };
   }
   if (provider === "abuseipdb") {
-    const apiKey = String((await db.getSetting("networkProfileAbuseIpdbApiKey")) || "").trim();
+    const apiKey = await networkProfileProviderKey(provider);
     if (!apiKey) throw new Error("AbuseIPDB API key is not configured");
     return {
       url: `https://api.abuseipdb.com/api/v2/check?ipAddress=${escapedIp}&maxAgeInDays=90&verbose=`,
@@ -73,6 +143,13 @@ function pruneNetworkProfileProxyCache(now = Date.now()) {
     if (!oldest) break;
     networkProfileProxyCache.delete(oldest);
   }
+}
+
+export async function validateNetworkProfileProvider(provider: string) {
+  if (!NETWORK_PROFILE_KEY_PROVIDERS.includes(provider)) throw new Error("unsupported network profile provider");
+  if (provider !== "proxycheck" && !await networkProfileProviderKey(provider)) throw new Error("API key is not configured");
+  await fetchNetworkProfileProxyPayload("1.1.1.1", provider);
+  return { valid: true };
 }
 
 async function fetchNetworkProfileProxyPayload(ip: string, provider: string) {
