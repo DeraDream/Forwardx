@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { protectedProcedure, router } from "../_core/trpc";
 import * as db from "../db";
-import { pushAgentSelfTest } from "../agentEvents";
+import { pushAgentSelfTest, requestTopologyHostTcping } from "../agentEvents";
 import { isAgentVersionAtLeast } from "../agentRouteUtils";
 import { summarizeForwardGroupRuntime } from "../forwardGroupRuntimeStatus";
 import {
@@ -905,6 +905,19 @@ async function diagnosticSegments(scope: "rule" | "tunnel" | "chain" | "full-cha
 }
 
 export const diagnosticsRouter = router({
+  latestSegments: protectedProcedure
+    .input(z.object({ ruleIds: z.array(z.number().int().positive()).max(1000) }))
+    .query(async ({ input, ctx }) => {
+      const ruleIds = Array.from(new Set(input.ruleIds));
+      const rules = await Promise.all(ruleIds.map((ruleId) => db.getForwardRuleById(ruleId)));
+      const allowedRules = rules.filter((rule: any) => rule && (String(ctx.user.role) === "admin" || Number(rule.userId) === Number(ctx.user.id))) as any[];
+      const allowedRuleIds = allowedRules.map((rule) => Number(rule.id));
+      const segmentLists = await Promise.all(allowedRules.map((rule) => diagnosticSegments("rule", rule).catch(() => [])));
+      const sourceHostIds = new Set(segmentLists.flat().map((segment) => Number(segment.fromHostId)).filter((hostId) => hostId > 0));
+      for (const hostId of sourceHostIds) requestTopologyHostTcping(hostId);
+      return db.getLatestTopologySegmentLatency(allowedRuleIds);
+    }),
+
   startSegment: protectedProcedure
     .input(z.object({ ruleId: z.number().int().positive(), fromHostId: z.number().int().positive(), targetAddress: z.string().trim().min(1).max(253) }))
     .mutation(async ({ input, ctx }) => {
@@ -919,13 +932,18 @@ export const diagnosticsRouter = router({
       if (!host?.isOnline) throw new Error(`${host?.name || "源主机"} Agent 离线，无法探测此链路`);
       if (!isAgentVersionAtLeast(host?.agentVersion, DIAGNOSTIC_AGENT_VERSION)) throw new Error(`${host?.name || "源主机"} Agent 版本过低，无法探测此链路`);
       const diagnosticId = `topology-segment-${input.ruleId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      // Intermediate nodes are physical host-to-host legs. Probe the next host
+      // itself instead of its forwarding listener, whose TCP result can fail
+      // merely because a later landing target is offline.
+      const probeMethod = segment.isFinalTarget === true ? segment.method : "ping";
+      const probePort = probeMethod === "ping" ? 0 : segment.targetPort;
       const testId = await db.createForwardTest({
         ruleId: 0, hostId: segment.fromHostId, userId: Number(ctx.user.id), status: "pending",
         listenOk: false, targetReachable: false, forwardOk: false,
-        message: JSON.stringify({ kind: "diagnostic-hop", diagnosticId, targetIp: segment.targetIp, targetPort: segment.targetPort,
-          method: segment.method, latencyMode: "sum", sourcePort: Number(segment.sourcePort || 0), sourceProtocol: segment.sourceProtocol || "both",
+        message: JSON.stringify({ kind: "diagnostic-hop", diagnosticId, targetIp: segment.targetIp, targetPort: probePort,
+          method: probeMethod, latencyMode: "sum", sourcePort: Number(segment.sourcePort || 0), sourceProtocol: segment.sourceProtocol || "both",
           expectedRuleId: Number(segment.expectedRuleId || rule.id), expectedForwardType: segment.expectedForwardType || String(rule.forwardType || ""),
-          sampleCount: 5, isFinalTarget: segment.isFinalTarget === true, hopLabel: "1/1", routeLabel: segment.routeLabel }),
+          sampleCount: 3, quick: true, isFinalTarget: segment.isFinalTarget === true, hopLabel: "1/1", routeLabel: segment.routeLabel }),
       } as any);
       pushAgentSelfTest(segment.fromHostId, diagnosticId);
       return { diagnosticId, testId: Number(testId) };

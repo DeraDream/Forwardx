@@ -14,6 +14,16 @@ export type TopologySegmentProbeResult = {
   latencyMs?: unknown;
 };
 
+export type AutomaticTopologySegment = {
+  ruleId: number;
+  sourceHostId: number;
+  targetHostId?: number | null;
+  targetAddress?: string | null;
+  latencyMs?: number | null;
+  isTimeout?: boolean;
+  recordedAt?: Date | string | number | null;
+};
+
 export function topologySegmentProbeKey(pathId: string, edgeId: string) {
   return `${pathId}:${edgeId}`;
 }
@@ -48,6 +58,31 @@ export function mergeTopologySegmentProbeResults(
     }
   }
   return changed ? next : current;
+}
+
+export function latestAutomaticTopologySegment(
+  rows: AutomaticTopologySegment[],
+  input: { ruleIds: Set<number>; sourceHostId: number; targetHostId: number; targetAddresses: string[] },
+) {
+  const addresses = new Set(input.targetAddresses.map((address) => address.trim().toLowerCase()).filter(Boolean));
+  return rows
+    .filter((row) => {
+      if (!input.ruleIds.has(Number(row.ruleId)) || Number(row.sourceHostId) !== input.sourceHostId) return false;
+      if (input.targetHostId > 0 && Number(row.targetHostId || 0) === input.targetHostId) return true;
+      return addresses.has(String(row.targetAddress || "").trim().toLowerCase());
+    })
+    .sort((a, b) => new Date(b.recordedAt || 0).getTime() - new Date(a.recordedAt || 0).getTime())[0] || null;
+}
+
+export function summarizePhysicalTopologySegmentLabels(
+  candidates: Array<{ at: number; pending: boolean; success: boolean; label: string }>,
+  fallback: string,
+) {
+  const ordered = [...candidates].sort((a, b) => b.at - a.at);
+  const newest = ordered[0];
+  if (newest?.pending) return "探测中";
+  const sameBurst = newest ? ordered.filter((candidate) => newest.at - candidate.at <= 5_000) : [];
+  return sameBurst.find((candidate) => candidate.success)?.label || newest?.label || fallback;
 }
 
 export function summarizeTopologySegmentLabels(labels: string[]) {

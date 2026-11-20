@@ -5011,8 +5011,8 @@ function SystemInfoSection() {
   }
 
   return (
-    <div className="space-y-4">
-      <div className="grid gap-4 lg:grid-cols-2">
+    <div className="flex flex-col gap-4 [&>*]:order-2">
+      <div className="order-0 grid gap-4 lg:grid-cols-2">
         <Card className="border-border/40 bg-card/60 backdrop-blur-md">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
@@ -6031,7 +6031,7 @@ function SystemInfoSection() {
         </DialogContent>
       </Dialog>
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="order-1 grid gap-4 lg:grid-cols-2">
         {/* 版本升级 */}
         <Card className="border-border/40 bg-card/60 backdrop-blur-md">
           <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">

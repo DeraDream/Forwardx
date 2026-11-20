@@ -25,6 +25,7 @@ import {
 import { billingMonthlyBoundary, billingStartOfCalendarDay } from "@shared/billingTime";
 import { expireStalePendingOrders, recoverStaleProcessingPaymentOrders } from "./payment";
 import { applyFullChainLatencyTestResult, startFullChainLatencyCheck } from "./fullChainRuntime";
+import { clearExpiredPanelUpgradeLog } from "./panelUpgradeLog";
 
 type TimedOutForwardTest = {
   id: number;
@@ -353,6 +354,7 @@ async function recoverPendingSelfTestSweep() {
 
 async function runTcpingCleanup() {
   try {
+    clearExpiredPanelUpgradeLog();
     await Promise.all([
       db.cleanOldHostMetrics(72),
       db.cleanOldTrafficStats(72),

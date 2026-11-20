@@ -2468,11 +2468,11 @@ export async function getLatestTopologySegmentLatency(ruleIds: number[]) {
   const rows = await queryRaw<any>(
     `SELECT s.* FROM ${q("topology_segment_latency_stats")} s
       INNER JOIN (
-        SELECT ${q("segmentKey")} AS ${q("segmentKey")}, MAX(${q("recordedAt")}) AS ${q("recordedAt")}
+        SELECT ${q("ruleId")} AS ${q("ruleId")}, ${q("segmentKey")} AS ${q("segmentKey")}, MAX(${q("recordedAt")}) AS ${q("recordedAt")}
           FROM ${q("topology_segment_latency_stats")}
          WHERE ${q("ruleId")} IN (${ids.map(() => "?").join(",")})
-         GROUP BY ${q("segmentKey")}
-      ) latest ON latest.${q("segmentKey")} = s.${q("segmentKey")} AND latest.${q("recordedAt")} = s.${q("recordedAt")}
+         GROUP BY ${q("ruleId")}, ${q("segmentKey")}
+      ) latest ON latest.${q("ruleId")} = s.${q("ruleId")} AND latest.${q("segmentKey")} = s.${q("segmentKey")} AND latest.${q("recordedAt")} = s.${q("recordedAt")}
      WHERE s.${q("ruleId")} IN (${ids.map(() => "?").join(",")})`,
     [...ids, ...ids],
   );

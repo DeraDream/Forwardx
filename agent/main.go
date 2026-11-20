@@ -37,7 +37,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.239"
+var Version = "2.2.240"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -2685,6 +2685,7 @@ type selfTest struct {
 	ExpectedRuleID       int    `json:"expectedRuleId,omitempty"`
 	ExpectedForwardType  string `json:"expectedForwardType,omitempty"`
 	SampleCount          int    `json:"sampleCount,omitempty"`
+	Quick                bool   `json:"quick,omitempty"`
 	IsFinalTarget        bool   `json:"isFinalTarget,omitempty"`
 	Protocol             string `json:"protocol"`
 	Method               string `json:"method"`

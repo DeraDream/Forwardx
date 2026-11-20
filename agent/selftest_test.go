@@ -50,6 +50,17 @@ func TestTunnelSelfTestsRetryTransientListenerReadiness(t *testing.T) {
 	}
 }
 
+func TestQuickDiagnosticFitsInsideTwoSecondProbeBudget(t *testing.T) {
+	probe := selfTest{Kind: "diagnostic-hop", Quick: true, SampleCount: 3}
+	if attempts := selfTestTCPAttempts(probe); attempts != 3 {
+		t.Fatalf("quick attempts=%d, want 3", attempts)
+	}
+	worstCase := time.Duration(selfTestTCPAttempts(probe))*selfTestQuickAttemptTimeout + 2*selfTestQuickSampleDelay
+	if worstCase >= 2*time.Second {
+		t.Fatalf("quick diagnostic budget=%s, want under 2s", worstCase)
+	}
+}
+
 func TestTunnelAndMultiEntrySelfTestsWaitForRuntime(t *testing.T) {
 	for _, test := range []selfTest{
 		{Kind: "tunnel"},

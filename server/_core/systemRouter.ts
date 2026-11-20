@@ -33,6 +33,7 @@ import { AGENT_ASSET_NAMES } from "../agentAssets";
 import { maskSecret } from "../ddns";
 import { reconcileHostDdnsRecords } from "../hostDdns";
 import type { DatabaseConfig } from "../dbRuntime";
+import { appendPersistentPanelUpgradeLog } from "../panelUpgradeLog";
 import { clearNetworkProfileProviderCache, NETWORK_PROFILE_KEY_PROVIDERS, validateNetworkProfileProvider } from "../agentNetworkProfileRoutes";
 import { defaultSqlitePath } from "../dbRuntime";
 import {
@@ -1135,6 +1136,14 @@ export async function checkPanelUpdateTask(force = false): Promise<UpdateInfo> {
   return getLatestUpdateInfoCached(!!force);
 }
 
+function persistUpgradeLog(text: string) {
+  try {
+    appendPersistentPanelUpgradeLog(text);
+  } catch (error) {
+    console.error(`[Upgrade] Failed to persist upgrade log: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 function appendUpgradeLog(line: string) {
   const text = line.trimEnd();
   if (!text) return;
@@ -1142,6 +1151,7 @@ function appendUpgradeLog(line: string) {
   if (upgradeJob.logs.length > 300) {
     upgradeJob.logs = upgradeJob.logs.slice(-300);
   }
+  persistUpgradeLog(text);
 }
 
 function normalizeUpgradeCommand(
@@ -1187,6 +1197,7 @@ function setUpgradeWaitingForAssets(targetVersion: string, reason: string, mode:
     ],
     error: reason,
   };
+  persistUpgradeLog(["========== panel version task ==========", ...upgradeJob.logs].join("\n"));
 }
 
 export function getPanelUpgradeRuntimeStatus() {
@@ -1267,6 +1278,7 @@ async function startPanelVersionTask(targetVersionInput: string | null | undefin
     ],
     error: null,
   };
+  persistUpgradeLog(["========== panel version task ==========", ...upgradeJob.logs].join("\n"));
   const child = spawn(command, {
     shell: true,
     cwd: process.cwd(),

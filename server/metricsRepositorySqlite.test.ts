@@ -99,6 +99,14 @@ test("SQLite host metric summaries seek only the latest two rows per host", asyn
     assert.equal(segments[0].successRate, 0.5);
     assert.equal(Math.round(Number(segments[0].jitterMs)), 10);
 
+    await metrics.recordTopologySegmentLatency([{
+      ruleId: 2, sourceHostId: 1, targetHostId: 2,
+      targetAddress: "198.51.100.2", targetPort: 443, segmentKey: "topology-v1:1:198.51.100.2:443:tcp",
+      method: "tcp", latencyMs: 55, isTimeout: false, recordedAt: new Date((now + 1) * 1000),
+    }]);
+    const sharedSegments = await metrics.getLatestTopologySegmentLatency([1, 2]);
+    assert.deepEqual(sharedSegments.map((segment) => [segment.ruleId, segment.latencyMs]).sort((a, b) => Number(a[0]) - Number(b[0])), [[1, 40], [2, 55]]);
+
     await metrics.cleanOldHostMetrics(72);
     const [{ count }] = await runtime.queryRaw<{ count: number }>(
       `SELECT COUNT(*) AS count FROM host_metrics WHERE hostId = ?`,

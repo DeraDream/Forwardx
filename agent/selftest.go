@@ -17,8 +17,10 @@ const selfTestRuntimeReadinessWindow = 20 * time.Second
 const selfTestActionWaitWindow = 4 * time.Second
 const selfTestPostActionReadinessWindow = 5 * time.Second
 const selfTestTCPAttemptTimeout = 1500 * time.Millisecond
+const selfTestQuickAttemptTimeout = 500 * time.Millisecond
 const selfTestWireGuardAttemptTimeout = 2500 * time.Millisecond
 const selfTestPingTimeout = 1500 * time.Millisecond
+const selfTestQuickSampleDelay = 80 * time.Millisecond
 const selfTestRetryBaseDelay = 250 * time.Millisecond
 const selfTestRetryMaxDelay = 750 * time.Millisecond
 
@@ -206,9 +208,9 @@ func diagnosticAverage(samples []int) int {
 
 func diagnosticPortInspection(t selfTest) map[string]any {
 	result := map[string]any{
-		"sourcePort":      t.SourcePort,
-		"sourceProtocol":  strings.TrimSpace(t.SourceProtocol),
-		"expectedRuleId":  t.ExpectedRuleID,
+		"sourcePort":          t.SourcePort,
+		"sourceProtocol":      strings.TrimSpace(t.SourceProtocol),
+		"expectedRuleId":      t.ExpectedRuleID,
 		"expectedForwardType": strings.TrimSpace(t.ExpectedForwardType),
 	}
 	if t.SourcePort <= 0 {
@@ -303,8 +305,12 @@ func handleSelfTest(cfg Config, t selfTest) {
 	dnsMs, dnsAddresses, dnsError, dnsSkipped := 0, []string(nil), "", false
 	var portInspection map[string]any
 	if diagnostic {
-		dnsMs, dnsAddresses, dnsError, dnsSkipped = diagnosticDNSLookup(t.TargetIP)
-		portInspection = diagnosticPortInspection(t)
+		if t.Quick {
+			dnsSkipped = true
+		} else {
+			dnsMs, dnsAddresses, dnsError, dnsSkipped = diagnosticDNSLookup(t.TargetIP)
+			portInspection = diagnosticPortInspection(t)
+		}
 	}
 
 	method := strings.ToLower(strings.TrimSpace(t.Method))
@@ -323,9 +329,17 @@ func handleSelfTest(cfg Config, t selfTest) {
 		detail := ""
 		for attempt := 0; attempt < sampleCount; attempt++ {
 			if attempt > 0 {
-				time.Sleep(180 * time.Millisecond)
+				if t.Quick {
+					time.Sleep(selfTestQuickSampleDelay)
+				} else {
+					time.Sleep(180 * time.Millisecond)
+				}
 			}
-			sample, ok, sampleDetail := pingLatency(t.TargetIP, selfTestPingTimeout)
+			timeout := selfTestPingTimeout
+			if t.Quick {
+				timeout = selfTestQuickAttemptTimeout
+			}
+			sample, ok, sampleDetail := pingLatency(t.TargetIP, timeout)
 			if ok {
 				samples = append(samples, sample)
 			} else if sampleDetail != "" {
@@ -384,6 +398,9 @@ func handleSelfTest(cfg Config, t selfTest) {
 	for attempt := 0; ; attempt++ {
 		if attempt > 0 {
 			delay := selfTestRetryDelay(attempt)
+			if t.Quick {
+				delay = selfTestQuickSampleDelay
+			}
 			if readinessWindow > 0 {
 				remaining := readinessWindow - time.Since(startedAt)
 				if remaining <= 0 {
@@ -396,6 +413,9 @@ func handleSelfTest(cfg Config, t selfTest) {
 			time.Sleep(delay)
 		}
 		attemptTimeout := selfTestTCPAttemptTimeout
+		if t.Quick {
+			attemptTimeout = selfTestQuickAttemptTimeout
+		}
 		if t.WireGuardPeerID != "" && t.TunnelID > 0 {
 			attemptTimeout = selfTestWireGuardAttemptTimeout
 		}
@@ -419,9 +439,17 @@ func handleSelfTest(cfg Config, t selfTest) {
 			sampleAttempts = connectionAttempts
 			sampleCount := selfTestTCPSampleCount(t)
 			for attempts := 1; attempts < sampleCount; attempts++ {
-				time.Sleep(180 * time.Millisecond)
+				if t.Quick {
+					time.Sleep(selfTestQuickSampleDelay)
+				} else {
+					time.Sleep(180 * time.Millisecond)
+				}
 				sampleAttempts++
-				sample, ok, _ := tcpLatencyResolved(t.TargetIP, t.TargetPort, selfTestTCPAttemptTimeout)
+				sampleTimeout := selfTestTCPAttemptTimeout
+				if t.Quick {
+					sampleTimeout = selfTestQuickAttemptTimeout
+				}
+				sample, ok, _ := tcpLatencyResolved(t.TargetIP, t.TargetPort, sampleTimeout)
 				if ok {
 					latencies = append(latencies, sample)
 				}
@@ -482,6 +510,9 @@ func handleSelfTest(cfg Config, t selfTest) {
 }
 
 func selfTestTCPAttempts(t selfTest) int {
+	if t.Quick {
+		return 3
+	}
 	switch strings.ToLower(strings.TrimSpace(t.Kind)) {
 	case "diagnostic-hop", "tunnel", "tunnel-hop", "forward-via-tunnel", "forward-via-tunnel-entry", "forward-chain", "full-chain":
 		return 4

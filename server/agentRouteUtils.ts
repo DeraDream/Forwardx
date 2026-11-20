@@ -131,6 +131,7 @@ export function buildMetaAgentSelfTestPayload(
       expectedRuleId: agentInteger(meta.expectedRuleId),
       expectedForwardType: String(meta.expectedForwardType || ""),
       sampleCount: Math.max(1, Math.min(8, agentInteger(meta.sampleCount) || 1)),
+      quick: meta.quick === true,
       isFinalTarget: meta.isFinalTarget === true,
       targetIp: meta.targetIp,
       targetPort: agentInteger(meta.targetPort),

@@ -206,6 +206,7 @@ export type SelfTestMeta =
       expectedRuleId?: number;
       expectedForwardType?: string;
       sampleCount?: number;
+      quick?: boolean;
       isFinalTarget?: boolean;
       hopLabel?: string;
       routeLabel?: string;
