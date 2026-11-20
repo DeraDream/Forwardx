@@ -314,6 +314,7 @@ const GOST_UDP_LISTENER_METADATA = {
 const AGENT_STATE_SECTION_NAMES = [
   "runningRules",
   "ruleLatencyProbes",
+  "topologySegmentProbes",
   "tunnelProbes",
   "forwardGroupProbes",
   "hostProbeServices",
@@ -330,6 +331,22 @@ export function buildGostRuleListener(protocol: "tcp" | "udp") {
 
 export function forwardXUDPTargetAddress(rule: any): string {
   return String(rule?.targetIp || rule?._originalTargetIp || "").trim();
+}
+
+export function buildTopologySegmentProbes(hostId: unknown, ruleLatencyProbes: any[]) {
+  const sourceHostId = Number(hostId || 0);
+  return ruleLatencyProbes.map((probe: any) => {
+    const method = String(probe.method || "").toLowerCase() === "ping" ? "ping" : "tcp";
+    const targetIp = String(probe.targetIp || "").trim();
+    const targetPort = method === "ping" ? 0 : Number(probe.targetPort || 0);
+    return {
+      ruleId: Number(probe.ruleId),
+      segmentKey: `topology-v1:${sourceHostId}:${targetIp.toLowerCase()}:${targetPort}:${method}`,
+      targetIp,
+      targetPort,
+      method,
+    };
+  }).filter((probe: any) => sourceHostId > 0 && probe.ruleId > 0 && probe.targetIp && (probe.method === "ping" || probe.targetPort > 0));
 }
 
 type NginxStreamServerOptions = {
@@ -6166,6 +6183,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     ruleLatencyProbes.sort(
       (left: any, right: any) => Number(left.ruleId) - Number(right.ruleId),
     );
+    const topologySegmentProbes = buildTopologySegmentProbes(host.id, ruleLatencyProbes);
     const hostProbeServices = await db.getHostProbeTasksForHost(host.id);
     if (landingHostEnabled) {
       for (const service of await db.getLandingServicesForHost(Number(host.id), false)) {
@@ -6736,13 +6754,14 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     const stateSections = buildAgentStateResponseSections({
       runningRules,
       ruleLatencyProbes,
+      topologySegmentProbes,
       tunnelProbes,
       forwardGroupProbes,
       hostProbeServices,
       guardRules,
       dnsWatch: Array.from(dnsWatches.values()),
     }, agentStateSignatures);
-    const probeStateRefreshed = ["runningRules", "ruleLatencyProbes", "tunnelProbes", "forwardGroupProbes", "hostProbeServices"]
+    const probeStateRefreshed = ["runningRules", "ruleLatencyProbes", "topologySegmentProbes", "tunnelProbes", "forwardGroupProbes", "hostProbeServices"]
       .some((name) => Object.prototype.hasOwnProperty.call(stateSections.payload, name));
     // 有 SSE 长连接时立即将 desiredState + runningRules 推送给 Agent，
     // 无需等待下一个心跳周期即可执行转发规则变更。
@@ -6763,9 +6782,11 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         desiredState,
         runningRules,
         ruleLatencyProbes,
+        topologySegmentProbes,
         stateSignatures: {
           runningRules: stateSections.signatures.runningRules,
           ruleLatencyProbes: stateSections.signatures.ruleLatencyProbes,
+          topologySegmentProbes: stateSections.signatures.topologySegmentProbes,
         },
       });
     }

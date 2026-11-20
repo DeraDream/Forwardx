@@ -968,7 +968,7 @@ function NetworkTopologyContent() {
   );
   const automaticSegmentQuery = trpc.diagnostics.latestSegments.useQuery(
     { ruleIds: topologyRuleIds },
-    { enabled: topologyRuleIds.length > 0, refetchInterval: pollingInterval("normal"), staleTime: 5_000, refetchOnWindowFocus: false, placeholderData: (previousData) => previousData },
+    { enabled: topologyRuleIds.length > 0, refetchInterval: pollingInterval("log"), staleTime: 3_000, refetchOnWindowFocus: false, placeholderData: (previousData) => previousData },
   );
   const automaticSegments = (automaticSegmentQuery.data || []) as AutomaticTopologySegment[];
   const trafficQuery = trpc.rules.trafficSummary.useQuery(
