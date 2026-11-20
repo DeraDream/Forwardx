@@ -23,7 +23,6 @@ import {
   List,
   LogIn,
   Network,
-  RefreshCw,
   Route,
   Scan,
   Search,
@@ -1153,17 +1152,6 @@ function NetworkTopologyContent() {
     return () => cancelAnimationFrame(frame);
   }, [activeEntry, canvasHeight, canvasWidth, category, graph.centerY, graph.nodes.length, isLoading, layoutMode]);
 
-  const handleRefresh = async () => {
-    await Promise.all([
-      rulesQuery.refetch(),
-      hostsQuery.refetch(),
-      tunnelsQuery.refetch(),
-      groupsQuery.refetch(),
-      landingQuery.refetch(),
-      fullChainsQuery.refetch(),
-    ]);
-  };
-
   const focusNode = (nodeId: string) => {
     const position = graph.positions.get(nodeId);
     const canvas = canvasRef.current;
@@ -1243,9 +1231,8 @@ function NetworkTopologyContent() {
         .topo-grid-bg { background-color:#FAFCFF; background-image:radial-gradient(#CBD5E1 1px,transparent 1px); background-size:18px 18px; }
         .no-scrollbar::-webkit-scrollbar { display:none; } .no-scrollbar { scrollbar-width:none; }
       `}</style>
-      <header className="flex flex-col gap-3.5 lg:flex-row lg:items-center lg:justify-between">
-        <div className="flex flex-wrap items-baseline gap-x-3.5 gap-y-1"><h1 className="text-2xl font-bold tracking-tight text-slate-900">关系总览</h1><p className="text-xs text-slate-500 sm:text-[13px]">查看节点之间的链路关系、延迟与转发路径，支持列表与拓扑两种视图。</p></div>
-        <div className="flex flex-wrap items-center gap-3 self-start lg:self-center"><button type="button" onClick={() => void handleRefresh()} disabled={isLoading} className="inline-flex items-center gap-1.5 rounded-[10px] border border-slate-200/90 bg-white px-3.5 py-1.5 text-xs font-medium text-slate-700 shadow-sm transition-all hover:border-primary/50 hover:text-primary"><RefreshCw className={cn("h-3.5 w-3.5", isLoading && "animate-spin")} />刷新</button><span className="font-mono text-xs text-slate-400">实时数据自动更新</span></div>
+      <header className="flex flex-wrap items-baseline gap-x-3.5 gap-y-1">
+        <h1 className="text-2xl font-bold tracking-tight text-slate-900">关系总览</h1><p className="text-xs text-slate-500 sm:text-[13px]">查看节点之间的链路关系、延迟与转发路径，支持列表与拓扑两种视图。</p>
       </header>
 
       <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
