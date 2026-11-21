@@ -364,6 +364,7 @@ async function runTcpingCleanup() {
       db.cleanOldForwardTests(72),
       db.cleanOldForwardGroupEvents(72),
       db.cleanOldHostProbeServiceStats(72),
+      db.cleanOldTopologySegmentIncidents(30 * 24),
       cleanOldAddressGeoCache(),
     ]);
   } catch (error) {

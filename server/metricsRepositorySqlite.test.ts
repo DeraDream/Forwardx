@@ -129,6 +129,27 @@ test("SQLite host metric summaries seek only the latest two rows per host", asyn
     assert.equal(blockedSegment.blocked, true);
     assert.equal(blockedSegment.isTimeout, true);
 
+    const incidentBase = {
+      ruleId: 7, userId: 1, sourceHostId: 1, sourceName: "Source", targetHostId: 2,
+      targetName: "Target", targetAddress: "198.51.100.77", targetPort: 0,
+      segmentKey: "topology-v1:1:198.51.100.77:0:ping", method: "ping" as const,
+      probeCount: 1,
+    };
+    await metrics.updateTopologySegmentIncidents([{ ...incidentBase, latencyMs: null, isTimeout: true, probeSuccesses: 0, recordedAt: new Date((now - 20) * 1000) }]);
+    await metrics.updateTopologySegmentIncidents([{ ...incidentBase, latencyMs: null, isTimeout: true, probeSuccesses: 0, recordedAt: new Date(now * 1000) }]);
+    const activeIncidentLogs = await metrics.getTopologyBlockLogs({ userId: 1 });
+    assert.equal(activeIncidentLogs.length, 1);
+    assert.equal(activeIncidentLogs[0].type, "blocked");
+    assert.equal(activeIncidentLogs[0].recoveredAt, null);
+    await metrics.updateTopologySegmentIncidents([{ ...incidentBase, latencyMs: 6, isTimeout: false, probeSuccesses: 1, recordedAt: new Date((now + 5) * 1000) }]);
+    const recoveredIncidentLogs = await metrics.getTopologyBlockLogs({ userId: 1 });
+    assert.deepEqual(recoveredIncidentLogs.map((entry) => entry.type), ["recovered", "blocked"]);
+    assert.equal(recoveredIncidentLogs[0].recoveryLatencyMs, 6);
+    const transientBase = { ...incidentBase, userId: 2, segmentKey: "topology-v1:1:198.51.100.78:0:ping", targetAddress: "198.51.100.78" };
+    await metrics.updateTopologySegmentIncidents([{ ...transientBase, latencyMs: null, isTimeout: true, probeSuccesses: 0, recordedAt: new Date(now * 1000) }]);
+    await metrics.updateTopologySegmentIncidents([{ ...transientBase, latencyMs: 7, isTimeout: false, probeSuccesses: 1, recordedAt: new Date((now + 5) * 1000) }]);
+    assert.equal((await metrics.getTopologyBlockLogs({ userId: 2 })).length, 0);
+
     await metrics.cleanOldHostMetrics(72);
     const [{ count }] = await runtime.queryRaw<{ count: number }>(
       `SELECT COUNT(*) AS count FROM host_metrics WHERE hostId = ?`,

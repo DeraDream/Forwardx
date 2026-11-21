@@ -915,6 +915,14 @@ export const diagnosticsRouter = router({
       return db.getLatestTopologySegmentLatency(allowedRuleIds);
     }),
 
+  topologyBlockLogs: protectedProcedure
+    .input(z.object({ limit: z.number().int().min(1).max(500).default(100) }).optional())
+    .query(async ({ input, ctx }) => db.getTopologyBlockLogs({
+      userId: Number(ctx.user.id),
+      isAdmin: String(ctx.user.role) === "admin",
+      limit: input?.limit || 100,
+    })),
+
   refreshSegments: protectedProcedure
     .input(z.object({ ruleId: z.number().int().positive() }))
     .mutation(async ({ input, ctx }) => {

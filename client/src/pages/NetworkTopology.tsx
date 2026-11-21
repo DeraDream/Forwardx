@@ -857,6 +857,18 @@ function MetricCard({ label, value, tone }: { label: string; value: string; tone
   return <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4"><div className="text-slate-400">{label}</div><b className={cn("mt-2 block font-mono text-sm", tone === "emerald" ? "text-emerald-600" : tone === "amber" ? "text-amber-600" : "text-slate-700")}>{value}</b></div>;
 }
 
+function formatTopologyLogTime(value: Date | string) {
+  return new Date(value).toLocaleString("zh-CN", { hour12: false, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }).replaceAll("/", "-");
+}
+
+function formatTopologyDuration(durationMs: number) {
+  let seconds = Math.max(0, Math.floor(durationMs / 1_000));
+  const days = Math.floor(seconds / 86_400); seconds %= 86_400;
+  const hours = Math.floor(seconds / 3_600); seconds %= 3_600;
+  const minutes = Math.floor(seconds / 60); seconds %= 60;
+  return `${days ? `${days}天` : ""}${hours || days ? `${hours}时` : ""}${minutes || hours || days ? `${minutes}分` : ""}${seconds}秒`;
+}
+
 function NetworkTopologyContent() {
   const [category, setCategory] = useState<TopologyCategory>("all");
   const [search, setSearch] = useState("");
@@ -972,6 +984,21 @@ function NetworkTopologyContent() {
     { enabled: topologyRuleIds.length > 0, refetchInterval: pollingInterval("fast"), refetchIntervalInBackground: true, staleTime: 1_000, refetchOnWindowFocus: true, placeholderData: (previousData) => previousData },
   );
   const automaticSegments = (automaticSegmentQuery.data || []) as AutomaticTopologySegment[];
+  const topologyBlockLogsQuery = trpc.diagnostics.topologyBlockLogs.useQuery(
+    { limit: 200 },
+    { refetchInterval: pollingInterval("fast"), refetchIntervalInBackground: true, staleTime: 1_000 },
+  );
+  const topologyBlockLogs = (topologyBlockLogsQuery.data || []) as Array<{
+    id: string; type: "blocked" | "recovered"; occurredAt: Date | string; failureStartedAt: Date | string;
+    blockedAt: Date | string; recoveredAt: Date | string | null; sourceName: string; targetName: string;
+    targetAddress: string; recoveryLatencyMs: number | null;
+  }>;
+  const [topologyLogNow, setTopologyLogNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!topologyBlockLogs.some((entry) => entry.type === "blocked" && !entry.recoveredAt)) return;
+    const timer = window.setInterval(() => setTopologyLogNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [topologyBlockLogs]);
   useEffect(() => {
     if (!probingRuleIds.size) return;
     const timer = window.setInterval(() => {
@@ -1372,6 +1399,32 @@ function NetworkTopologyContent() {
           {detailTab === "history" && <div className="text-xs"><div className="mb-5 flex justify-between text-slate-500"><span>最近 24 小时往返延迟曲线 (ms)</span><b className="font-mono text-blue-600">当前逐跳合计 {selectedPathMetrics?.latestLatencyMs != null ? `${Math.round(selectedPathMetrics.latestLatencyMs)} ms` : "—"}</b></div><div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">{selectedPathHistoryQuery.isLoading ? <div className="py-16 text-center text-slate-400">正在加载真实历史延迟…</div> : selectedHistoryPolyline ? <><svg viewBox="0 0 100 48" preserveAspectRatio="none" className="h-40 w-full"><defs><linearGradient id="topology-history-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#2563EB" stopOpacity=".22" /><stop offset="1" stopColor="#2563EB" stopOpacity="0" /></linearGradient></defs><polyline points={`0,48 ${selectedHistoryPolyline} 100,48`} fill="url(#topology-history-area)" stroke="none" /><polyline points={selectedHistoryPolyline} fill="none" stroke="#2563EB" strokeWidth="1.5" vectorEffect="non-scaling-stroke" /></svg><div className="mt-2 flex justify-between font-mono text-[10px] text-slate-400"><span>24H 前</span><span>现在</span></div></> : <div className="py-16 text-center text-slate-400">当前路径暂无真实历史延迟记录。</div>}</div><div className="mt-5 rounded-2xl border border-blue-100 bg-blue-50/60 p-4 text-slate-600">历史趋势来自规则真实 TCPing 记录；未检测到的数据不会使用模拟值补全。</div></div>}
         </div>
       </section>}
+
+      <section className="overflow-hidden rounded-xl border border-slate-200/80 bg-white shadow-sm">
+        <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3.5">
+          <div><h2 className="text-sm font-bold text-slate-900">拓扑阻断日志</h2><p className="mt-0.5 text-[11px] text-slate-500">仅记录持续阻断及恢复事件，相同物理边不会重复刷屏。</p></div>
+          <span className="rounded-full bg-slate-100 px-2.5 py-1 font-mono text-[11px] text-slate-500">最近 {topologyBlockLogs.length} 条</span>
+        </div>
+        {topologyBlockLogsQuery.isLoading ? <div className="px-5 py-10 text-center text-xs text-slate-400">正在加载阻断日志…</div> : topologyBlockLogs.length === 0 ? <div className="px-5 py-10 text-center text-xs text-slate-400">暂无阻断或恢复记录</div> : <div className="max-h-[28rem] divide-y divide-slate-100 overflow-y-auto">
+          {topologyBlockLogs.map((entry) => {
+            const failureStartedAt = new Date(entry.failureStartedAt).getTime();
+            const recoveredAt = entry.recoveredAt ? new Date(entry.recoveredAt).getTime() : null;
+            const blockedAt = new Date(entry.blockedAt).getTime();
+            const target = entry.targetAddress && entry.targetAddress !== entry.targetName ? `${entry.targetName}（${entry.targetAddress}）` : entry.targetName;
+            const duration = entry.type === "recovered"
+              ? (recoveredAt || new Date(entry.occurredAt).getTime()) - failureStartedAt
+              : (recoveredAt ? blockedAt : topologyLogNow) - failureStartedAt;
+            const message = entry.type === "recovered"
+              ? `${entry.sourceName} 探测 ${target} 已恢复，阻断共持续 ${formatTopologyDuration(duration)}${entry.recoveryLatencyMs == null ? "" : `，恢复延迟 ${Math.round(entry.recoveryLatencyMs)} ms`}。`
+              : `监测到 ${entry.sourceName} 探测 ${target} 出现阻断，${recoveredAt ? "阻断确认时" : "当前"}已持续 ${formatTopologyDuration(duration)}。`;
+            return <div key={entry.id} className={cn("grid gap-2 px-5 py-3 text-xs sm:grid-cols-[10.5rem_minmax(0,1fr)]", entry.type === "blocked" ? "bg-red-50/45" : "bg-emerald-50/45")}>
+              <time className={cn("font-mono text-[11px] font-semibold", entry.type === "blocked" ? "text-red-600" : "text-emerald-600")}>{formatTopologyLogTime(entry.occurredAt)}</time>
+              <div className={cn("leading-5", entry.type === "blocked" ? "text-red-700" : "text-emerald-700")}><span className={cn("mr-2 inline-flex rounded-md border px-1.5 py-0.5 text-[10px] font-bold", entry.type === "blocked" ? "border-red-200 bg-red-100 text-red-700" : "border-emerald-200 bg-emerald-100 text-emerald-700")}>{entry.type === "blocked" ? "阻断" : "恢复"}</span>{message}</div>
+            </div>;
+          })}
+        </div>}
+      </section>
+
       {sharedEdgeSelection && <section className="absolute z-50 w-[min(27.5rem,calc(100vw-2rem))] max-h-[18rem] overflow-y-auto rounded-xl border border-slate-200 bg-white p-4 shadow-xl" style={{ left: sharedEdgeSelection.anchor?.left ?? "50%", top: sharedEdgeSelection.anchor ? sharedEdgeSelection.anchor.above ? sharedEdgeSelection.anchor.top - 10 : sharedEdgeSelection.anchor.top + 10 : "50%", transform: sharedEdgeSelection.anchor ? sharedEdgeSelection.anchor.above ? "translate(-50%, -100%)" : "translateX(-50%)" : "translate(-50%, -50%)" }}><div className="flex items-start justify-between gap-3"><div><h3 className="text-[13px] font-bold text-slate-900">选择经过此共享链路的路径</h3><p className="mt-1 text-[11px] text-slate-500">该物理链路被 {sharedEdgeCandidates.length} 条逻辑链路共用，请选择完整路径。</p></div><button type="button" onClick={() => setSharedEdgeSelection(null)} className="rounded-md px-1.5 py-1 text-[11px] text-slate-400 hover:bg-slate-50 hover:text-slate-700">取消</button></div><div className="mt-3 space-y-1.5">{sharedEdgeCandidates.map((path) => { const nodes = [path.entry, ...path.relays, path.landing]; return <button type="button" key={path.id} onClick={() => { selectPath(path); setSelectedEdgeId(sharedEdgeSelection.edgeId); if (sharedEdgeSelection.probe && path.ruleId) { const [from, to] = sharedEdgeSelection.edgeId.split("=>"); void requestSegmentProbe(path, { id: sharedEdgeSelection.edgeId, from, to }); } }} className="w-full rounded-lg border border-slate-200 bg-slate-50/60 p-2.5 text-left transition hover:border-primary/40 hover:bg-primary/5"><div className="mb-1.5 flex items-center justify-between gap-3"><b className="truncate text-xs text-slate-800">{path.name}</b><RouteTypeLabel category={path.category} /></div><div className="flex flex-wrap items-center gap-1 text-[10px]">{nodes.map((node, index) => <span key={`${node.id}:${index}`} className="inline-flex items-center gap-1">{index > 0 && <span className="text-slate-400">→</span>}<span className={cn("rounded border px-1.5 py-0.5", index === 0 ? "border-blue-200 bg-blue-50 text-blue-700" : index === nodes.length - 1 ? "border-amber-200 bg-amber-50 text-amber-800" : "border-emerald-200 bg-emerald-50 text-emerald-700")}>{node.label}</span></span>)}</div></button>; })}</div></section>}
       {probeMessage && <p className="text-xs text-slate-500">{probeMessage}</p>}
       <LinkQualityDialog target={qualityTarget} open={!!qualityTarget} onOpenChange={(open) => !open && setQualityTarget(null)} />

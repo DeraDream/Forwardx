@@ -38,6 +38,10 @@ test("latest topology segments are user-scoped and explicit refresh wakes only a
       assert.equal(events.hasHostTcpingRequest(11), true);
       await assert.rejects(() => caller.refreshSegments({ ruleId: 102 }));
       assert.equal(events.hasHostTcpingRequest(12), false);
+      const now = Math.floor(Date.now() / 1000);
+      await runtime.executeRaw('INSERT INTO topology_segment_incidents (userId,sourceHostId,sourceName,targetName,targetAddress,segmentKey,method,failureStartedAt,blockedAt,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?,?,?,?,?), (?,?,?,?,?,?,?,?,?,?,?)', [1, 11, "source", "mine-target", "203.0.113.1", "mine", "ping", now - 20, now - 5, now - 20, now - 5, 2, 12, "other", "other-target", "203.0.113.2", "other", "ping", now - 20, now - 5, now - 20, now - 5]);
+      const logs = await caller.topologyBlockLogs({ limit: 20 });
+      assert.deepEqual(logs.map((entry) => [entry.type, entry.sourceHostId]), [["blocked", 11]]);
     } finally {
       await runtime.closeDatabase();
     }

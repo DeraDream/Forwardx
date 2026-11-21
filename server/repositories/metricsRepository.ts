@@ -2463,6 +2463,125 @@ export async function recordTopologySegmentLatency(samples: TopologySegmentLaten
   );
 }
 
+export type TopologySegmentIncidentSample = TopologySegmentLatencySample & {
+  userId: number;
+  sourceName: string;
+  targetName: string;
+};
+
+/** Persist only confirmed physical-edge block/recovery incidents for the topology log. */
+export async function updateTopologySegmentIncidents(samples: TopologySegmentIncidentSample[]) {
+  const q = quoteIdentifier;
+  const unique = new Map<string, TopologySegmentIncidentSample>();
+  for (const sample of samples) {
+    if (sample.method !== "ping" || sample.userId <= 0 || sample.sourceHostId <= 0 || !sample.segmentKey) continue;
+    unique.set(`${sample.userId}:${sample.sourceHostId}:${sample.segmentKey}`, sample);
+  }
+  for (const sample of unique.values()) {
+    const occurredAt = sample.recordedAt || nowDate();
+    const occurredAtSec = epochSeconds(occurredAt);
+    const openRows = await queryRaw<any>(
+      `SELECT * FROM ${q("topology_segment_incidents")}
+        WHERE ${q("userId")} = ? AND ${q("sourceHostId")} = ? AND ${q("segmentKey")} = ? AND ${q("recoveredAt")} IS NULL
+        ORDER BY ${q("id")} DESC LIMIT 1`,
+      [sample.userId, sample.sourceHostId, sample.segmentKey],
+    );
+    const open = openRows[0];
+    if (!sample.isTimeout && sample.latencyMs != null) {
+      if (!open) continue;
+      if (open.blockedAt == null) {
+        // A short loss recovered before the confirmation threshold: no log.
+        await executeRaw(`DELETE FROM ${q("topology_segment_incidents")} WHERE ${q("id")} = ?`, [Number(open.id)]);
+      } else {
+        await executeRaw(
+          `UPDATE ${q("topology_segment_incidents")}
+              SET ${q("recoveredAt")} = ?, ${q("recoveryLatencyMs")} = ?, ${q("updatedAt")} = ?
+            WHERE ${q("id")} = ? AND ${q("recoveredAt")} IS NULL`,
+          [occurredAtSec, Math.max(0, Math.round(Number(sample.latencyMs))), occurredAtSec, Number(open.id)],
+        );
+      }
+      continue;
+    }
+    if (!sample.isTimeout) continue;
+    if (!open) {
+      await executeRaw(
+        `INSERT INTO ${q("topology_segment_incidents")}
+          (${q("userId")}, ${q("sourceHostId")}, ${q("sourceName")}, ${q("targetHostId")}, ${q("targetName")}, ${q("targetAddress")}, ${q("segmentKey")}, ${q("method")}, ${q("failureStartedAt")}, ${q("createdAt")}, ${q("updatedAt")})
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [sample.userId, sample.sourceHostId, sample.sourceName, sample.targetHostId || null, sample.targetName, sample.targetAddress, sample.segmentKey, sample.method, occurredAtSec, occurredAtSec, occurredAtSec],
+      );
+      continue;
+    }
+    if (open.blockedAt == null && occurredAt.getTime() - rowDate(open.failureStartedAt).getTime() >= 15_000) {
+      await executeRaw(
+        `UPDATE ${q("topology_segment_incidents")} SET ${q("blockedAt")} = ?, ${q("updatedAt")} = ? WHERE ${q("id")} = ? AND ${q("blockedAt")} IS NULL`,
+        [occurredAtSec, occurredAtSec, Number(open.id)],
+      );
+    }
+  }
+}
+
+export type TopologyBlockLogEntry = {
+  id: string;
+  incidentId: number;
+  type: "blocked" | "recovered";
+  occurredAt: Date;
+  failureStartedAt: Date;
+  blockedAt: Date;
+  recoveredAt: Date | null;
+  sourceHostId: number;
+  sourceName: string;
+  targetHostId: number | null;
+  targetName: string;
+  targetAddress: string;
+  recoveryLatencyMs: number | null;
+};
+
+export async function getTopologyBlockLogs(input: { userId: number; isAdmin?: boolean; limit?: number }) {
+  const q = quoteIdentifier;
+  const limit = Math.min(500, Math.max(1, Math.floor(input.limit || 100)));
+  const params: unknown[] = [];
+  const scope = input.isAdmin ? "" : `AND ${q("userId")} = ?`;
+  if (!input.isAdmin) params.push(input.userId);
+  params.push(limit);
+  const rows = await queryRaw<any>(
+    `SELECT * FROM ${q("topology_segment_incidents")}
+      WHERE ${q("blockedAt")} IS NOT NULL ${scope}
+      ORDER BY COALESCE(${q("recoveredAt")}, ${q("blockedAt")}) DESC
+      LIMIT ?`,
+    params,
+  );
+  const entries: TopologyBlockLogEntry[] = [];
+  for (const row of rows) {
+    const base = {
+      incidentId: Number(row.id),
+      failureStartedAt: rowDate(row.failureStartedAt),
+      blockedAt: rowDate(row.blockedAt),
+      recoveredAt: row.recoveredAt == null ? null : rowDate(row.recoveredAt),
+      sourceHostId: Number(row.sourceHostId),
+      sourceName: String(row.sourceName || `Host #${row.sourceHostId}`),
+      targetHostId: Number(row.targetHostId) || null,
+      targetName: String(row.targetName || row.targetAddress || "未知目标"),
+      targetAddress: String(row.targetAddress || ""),
+      recoveryLatencyMs: row.recoveryLatencyMs == null ? null : Number(row.recoveryLatencyMs),
+    };
+    entries.push({ ...base, id: `${row.id}:blocked`, type: "blocked", occurredAt: base.blockedAt });
+    if (base.recoveredAt) entries.push({ ...base, id: `${row.id}:recovered`, type: "recovered", occurredAt: base.recoveredAt });
+  }
+  return entries.sort((left, right) => right.occurredAt.getTime() - left.occurredAt.getTime()).slice(0, limit);
+}
+
+export async function cleanOldTopologySegmentIncidents(retentionHours = 30 * 24) {
+  const q = quoteIdentifier;
+  const cutoff = epochSeconds(new Date(Date.now() - Math.max(1, retentionHours) * 60 * 60 * 1000));
+  await executeRaw(
+    `DELETE FROM ${q("topology_segment_incidents")}
+      WHERE (${q("recoveredAt")} IS NOT NULL AND ${q("recoveredAt")} < ?)
+         OR (${q("blockedAt")} IS NULL AND ${q("updatedAt")} < ?)`,
+    [cutoff, cutoff],
+  );
+}
+
 export async function getLatestTopologySegmentLatency(ruleIds: number[]) {
   const ids = Array.from(new Set(ruleIds.map(Number).filter((id) => Number.isInteger(id) && id > 0)));
   if (ids.length === 0) return [] as TopologySegmentLatencySample[];

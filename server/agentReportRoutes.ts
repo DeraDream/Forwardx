@@ -1100,10 +1100,14 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
     if (parsedSegmentResults.length > 0) {
       const sourceRuntimeRules = await db.getForwardRulesForAgent(sourceHostId);
       const targetHostIdByAddress = new Map<string, number>();
+      const targetHostNameByAddress = new Map<string, string>();
       for (const candidate of await db.getHosts()) {
         for (const address of [(candidate as any).entryIp, (candidate as any).ipv4, (candidate as any).ip, (candidate as any).publicIp, (candidate as any).exitIp]) {
           const normalized = String(address || "").trim().toLowerCase();
-          if (normalized && !targetHostIdByAddress.has(normalized)) targetHostIdByAddress.set(normalized, Number((candidate as any).id));
+          if (normalized && !targetHostIdByAddress.has(normalized)) {
+            targetHostIdByAddress.set(normalized, Number((candidate as any).id));
+            targetHostNameByAddress.set(normalized, String((candidate as any).name || address));
+          }
         }
       }
       for (const report of parsedSegmentResults) {
@@ -1126,6 +1130,8 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
         const targetHostId = targetHostIdByAddress.get(targetAddress.toLowerCase()) || null;
         for (const runtimeRule of runtimeRules) acceptedSegments.push({
           ruleId: Number(runtimeRule.forwardGroupRuleId || runtimeRule.id), sourceHostId, targetHostId,
+          userId: Number(runtimeRule.userId), sourceName: String((host as any).name || `Host #${sourceHostId}`),
+          targetName: targetHostNameByAddress.get(targetAddress.toLowerCase()) || targetAddress,
           targetAddress, targetPort, segmentKey: expectedKey, method,
           latencyMs: report.latencyMs == null ? null : Number(report.latencyMs), isTimeout: !!report.isTimeout,
           probeCount: Number(report.probeCount) || 1, probeSuccesses: Number(report.probeSuccesses) || 0,
@@ -1135,7 +1141,9 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
     if (acceptedSegments.length > 0) {
       const uniqueSegments = new Map<string, any>();
       for (const sample of acceptedSegments) uniqueSegments.set(`${sample.ruleId}:${sample.segmentKey}`, sample);
-      await db.recordTopologySegmentLatency(Array.from(uniqueSegments.values()));
+      const samples = Array.from(uniqueSegments.values());
+      await db.updateTopologySegmentIncidents(samples);
+      await db.recordTopologySegmentLatency(samples);
     }
     const topologyGatePlan = agentTcpingReportGate.plan({
       hostId: Number(host.id),
