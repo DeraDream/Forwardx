@@ -58,3 +58,30 @@ test("missing references and cycles are marked incomplete rather than drawn as d
   const cyclic = buildPhysicalPaths([{ id: 2, hostId: 1, targetRuleId: 3 }, { id: 3, hostId: 2, targetRuleId: 2 }], hosts, [], [], [], [], "all", "");
   assert.equal(cyclic.incomplete, true); assert.equal(cyclic.paths.length, 0);
 });
+
+test("topology nodes retain managed-host and external-target country metadata", () => {
+  const geoHosts = hosts.map((host) => host.id === 1
+    ? { ...host, geoCountryCode: "HK", geoCountryName: "Hong Kong", geoEmoji: "🇭🇰" }
+    : host);
+  const targetGeo = new Map([["example.com", {
+    geoCountryCode: "US",
+    geoCountryName: "United States",
+    geoEmoji: "🇺🇸",
+  }]]);
+  const result = buildPhysicalPaths(
+    [{ id: 9, name: "geo rule", hostId: 1, targetIp: "Example.COM", targetPort: 443 }],
+    geoHosts,
+    [],
+    [],
+    [],
+    [],
+    "all",
+    "",
+    targetGeo,
+  );
+  const path = result.paths[0];
+  assert.equal(path.entry.geoCountryCode, "HK");
+  assert.equal(path.entry.geoCountryName, "Hong Kong");
+  assert.equal(path.landing.geoCountryCode, "US");
+  assert.equal(path.landing.geoCountryName, "United States");
+});
