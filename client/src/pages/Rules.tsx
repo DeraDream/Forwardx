@@ -12,6 +12,11 @@ import {
   type LinkTestPlannedSegment,
 } from "@/components/LinkTestLatencySummary";
 import {
+  mergeLinkTestRouteHost,
+  selectLinkTestTopologySnapshot,
+  type LinkTestTopologySnapshot,
+} from "./linkTestTopologyState";
+import {
   PersistentPagination,
   usePersistentPageRequest,
   useServerPagination,
@@ -6772,8 +6777,10 @@ function RulesContent() {
         if (id > 0) tunnelHostById.set(id, host);
       });
     }
-    const hostForRouteId = (hostId: number) =>
-      hostById.get(Number(hostId)) || tunnelHostById.get(Number(hostId));
+    const hostForRouteId = (hostId: number) => mergeLinkTestRouteHost(
+      hostById.get(Number(hostId)),
+      tunnelHostById.get(Number(hostId)),
+    );
     const chainGroup = rule.forwardGroupId
       ? forwardGroupById.get(Number(rule.forwardGroupId))
       : null;
@@ -12496,28 +12503,24 @@ function SelfTestDialog({
   const [optimisticTesting, setOptimisticTesting] = useState(false);
   const [activeTestId, setActiveTestId] = useState<number | null>(null);
   const manualTestRef = useRef(false);
-  const topologyCacheRef = useRef<{
-    sourceLabel?: string;
-    targetLabel?: string;
-    nodeMeta?: Record<string, any>;
-    plannedSegments: LinkTestPlannedSegment[];
-  } | null>(null);
-  if (plannedSegments && plannedSegments.length > 0) {
-    topologyCacheRef.current = {
-      sourceLabel,
-      targetLabel,
-      nodeMeta,
-      plannedSegments,
-    };
-  }
+  const topologyCacheRef = useRef<LinkTestTopologySnapshot | null>(null);
+  const incomingTopology = plannedSegments?.length
+    ? { sourceLabel, targetLabel, nodeMeta, plannedSegments }
+    : null;
+  // A manual probe refreshes rule and tunnel queries independently. During
+  // that short handoff the rebuilt path can temporarily collapse to a direct
+  // source→target segment. Freeze the last complete topology for the whole
+  // manual task instead of letting the transient path hide intermediate nodes.
+  topologyCacheRef.current = selectLinkTestTopologySnapshot(
+    topologyCacheRef.current,
+    incomingTopology,
+    manualTestRef.current,
+  );
   const stableTopology = topologyCacheRef.current;
-  const effectiveSourceLabel = sourceLabel || stableTopology?.sourceLabel;
-  const effectiveTargetLabel = targetLabel || stableTopology?.targetLabel;
-  const effectiveNodeMeta = nodeMeta || stableTopology?.nodeMeta;
-  const effectivePlannedSegments =
-    plannedSegments && plannedSegments.length > 0
-      ? plannedSegments
-      : stableTopology?.plannedSegments;
+  const effectiveSourceLabel = stableTopology?.sourceLabel || sourceLabel;
+  const effectiveTargetLabel = stableTopology?.targetLabel || targetLabel;
+  const effectiveNodeMeta = stableTopology?.nodeMeta || nodeMeta;
+  const effectivePlannedSegments = stableTopology?.plannedSegments || plannedSegments;
   const { data: latest } = trpc.rules.latestTest.useQuery(
     { ruleId, includeActive: optimisticTesting },
     {
