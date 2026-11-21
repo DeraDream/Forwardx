@@ -98,6 +98,7 @@ const categoryOptions: Array<{ value: TopologyCategory; label: string }> = [
   { value: "group", label: "转发组" },
   { value: "fullchain", label: "全链路" },
 ];
+const categorySortOrder = new Map<TopologyCategory, number>(categoryOptions.map((option, index) => [option.value, index]));
 
 type RouteVisualType = Exclude<TopologyCategory, "all">;
 const routeVisuals: Record<TopologyCategory, { bg: string; border: string; text: string; active: string; badge: string }> = {
@@ -1095,10 +1096,16 @@ function NetworkTopologyContent() {
   const activeEntry = entryFilter === "all" || entryGroups.some((group) => group.entry.id === entryFilter)
     ? entryFilter
     : entryGroups[0]?.entry.id || "all";
-  const visiblePaths = useMemo(
-    () => activeEntry === "all" ? paths : paths.filter((path) => path.entry.id === activeEntry),
-    [paths, activeEntry],
-  );
+  const visiblePaths = useMemo(() => {
+    const filtered = activeEntry === "all" ? paths : paths.filter((path) => path.entry.id === activeEntry);
+    if (category !== "all") return filtered;
+    // The aggregate list follows the category tabs so identical route types
+    // remain adjacent while preserving their existing order within each type.
+    return [...filtered].sort((left, right) => (
+      (categorySortOrder.get(left.category) ?? Number.MAX_SAFE_INTEGER)
+      - (categorySortOrder.get(right.category) ?? Number.MAX_SAFE_INTEGER)
+    ));
+  }, [paths, activeEntry, category]);
   const overviewPaths = useMemo(() => relationshipOverviewPaths(visiblePaths), [visiblePaths]);
   const graph = useMemo(() => buildGraph(overviewPaths), [overviewPaths]);
   const canvasWidth = graph.width;
