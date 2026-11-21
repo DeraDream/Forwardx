@@ -86,8 +86,9 @@ test("a newer physical-leg failure replaces an old success from a previous burst
 });
 
 test("path total is the sum of the displayed segment snapshot", () => {
-  assert.deepEqual(summarizeTopologySegmentLabels(["37 ms", "33 ms", "1 ms"]), { pending: false, timeout: false, blocked: false, latencyMs: 71 });
-  assert.deepEqual(summarizeTopologySegmentLabels(["37 ms", "探测中", "1 ms"]), { pending: true, timeout: false, blocked: false, latencyMs: null });
-  assert.deepEqual(summarizeTopologySegmentLabels(["37 ms", "超时"]), { pending: false, timeout: true, blocked: false, latencyMs: null });
-  assert.deepEqual(summarizeTopologySegmentLabels(["37 ms", "阻断"]), { pending: false, timeout: true, blocked: true, latencyMs: null });
+  assert.deepEqual(summarizeTopologySegmentLabels(["37 ms", "33 ms", "1 ms"]), { pending: false, timeout: false, blocked: false, offline: false, latencyMs: 71 });
+  assert.deepEqual(summarizeTopologySegmentLabels(["37 ms", "探测中", "1 ms"]), { pending: true, timeout: false, blocked: false, offline: false, latencyMs: null });
+  assert.deepEqual(summarizeTopologySegmentLabels(["37 ms", "超时"]), { pending: false, timeout: true, blocked: false, offline: false, latencyMs: null });
+  assert.deepEqual(summarizeTopologySegmentLabels(["37 ms", "阻断"]), { pending: false, timeout: true, blocked: true, offline: false, latencyMs: null });
+  assert.deepEqual(summarizeTopologySegmentLabels(["37 ms", "离线"]), { pending: false, timeout: true, blocked: true, offline: true, latencyMs: null });
 });
