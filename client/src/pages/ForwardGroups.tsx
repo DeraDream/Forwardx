@@ -834,8 +834,7 @@ function ForwardGroupSelfTestDialog({
     if (!isTesting && isSuccess) manualTestRef.current = false;
   }, [isSuccess, isTesting]);
 
-  const plannedSegmentCount = linkTestNodeData.plannedSegments?.length || 0;
-  const probeDialogSizeClass = plannedSegmentCount >= 3 ? "sm:max-w-4xl" : plannedSegmentCount >= 2 ? "sm:max-w-3xl" : "sm:max-w-xl";
+  const probeDialogSizeClass = "sm:max-w-2xl";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

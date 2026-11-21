@@ -6,6 +6,7 @@ export type LinkTestNodeMeta = {
   countryCode?: string | null;
   region?: string | null;
   address?: string | null;
+  online?: boolean | null;
 };
 
 export function countryCodeToEmoji(countryCode: unknown) {
@@ -50,6 +51,11 @@ export function hostNodeMeta(host: any | null | undefined, fallbackLabel?: strin
     countryCode: countryCode || null,
     region: hostRegionText(host) || null,
     address: hostAddressCandidates(host).join(" / ") || null,
+    online: typeof host?.isOnline === "boolean"
+      ? host.isOnline
+      : host?.isOnline == null
+        ? null
+        : !!host.isOnline,
   };
 }
 

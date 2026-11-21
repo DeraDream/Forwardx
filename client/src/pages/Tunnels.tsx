@@ -1973,11 +1973,10 @@ function TunnelSelfTestDialog({
     }
   }, [open, displayTesting, isFailed, isSuccess, status, tunnel?.lastTestAt, parsedMessage.message, tunnelId]);
 
-  const plannedSegmentCount = linkTestNodeData.plannedSegments?.length || 0;
   const isBranchedMultiExit = !!tunnel?.loadBalanceEnabled
     && Array.isArray(tunnel?.loadBalanceExits) && tunnel.loadBalanceExits.length > 0
     && (getTunnelHopIds(tunnel).length >= 3 || enabledHostGroupMembers((entryGroups || []).find((group: any) => Number(group?.id || 0) === Number(tunnel?.entryGroupId || 0))).length > 1);
-  const probeDialogSizeClass = plannedSegmentCount >= 3 ? "sm:max-w-4xl" : plannedSegmentCount >= 2 ? "sm:max-w-3xl" : "sm:max-w-xl";
+  const probeDialogSizeClass = "sm:max-w-2xl";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

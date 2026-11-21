@@ -818,8 +818,8 @@ export function LinkTestProbeView({
       || (/^\p{Regional_Indicator}{2}$/u.test(metaEmoji) ? metaEmoji : "");
     if (!flagUrl) {
       return fallbackFlag
-        ? <span className="text-sm leading-none" aria-hidden="true">{fallbackFlag}</span>
-        : <span className="inline-block h-3.5 w-5" aria-hidden="true" />;
+        ? <span className="text-base leading-none" aria-hidden="true">{fallbackFlag}</span>
+        : <span className="inline-block h-[18px] w-6 rounded-[3px] border border-dashed border-slate-300" aria-hidden="true" />;
     }
     return (
       <>
@@ -828,17 +828,145 @@ export function LinkTestProbeView({
           alt={countryCode}
           loading="lazy"
           referrerPolicy="no-referrer"
-          className="h-3.5 w-5 rounded-[2px] object-cover"
+          className="h-[18px] w-6 rounded-[3px] border border-black/10 object-cover shadow-sm"
           onError={(event) => {
             event.currentTarget.style.display = "none";
             const fallback = event.currentTarget.nextElementSibling as HTMLElement | null;
             if (fallback) fallback.style.display = "inline";
           }}
         />
-        <span className="hidden text-sm leading-none" aria-hidden="true">{fallbackFlag}</span>
+        <span className="hidden text-base leading-none" aria-hidden="true">{fallbackFlag}</span>
       </>
     );
   };
+
+  type TimelineNodeRole = "entry" | "relay" | "landing";
+  const timelineNodeTone = (role: TimelineNodeRole) => role === "entry"
+    ? "border-blue-200 bg-blue-50/70"
+    : role === "landing"
+      ? "border-amber-200 bg-amber-50/70"
+      : "border-emerald-200 bg-emerald-50/70";
+  const timelineRoleLabel = (role: TimelineNodeRole) => role === "entry" ? "入口节点" : role === "landing" ? "落地节点" : "中转节点";
+  const renderTimelineNode = (
+    label: string,
+    segmentMeta: LinkTestNodeMeta | undefined,
+    role: TimelineNodeRole,
+    key: string,
+  ) => {
+    const meta = segmentMeta || lookupNodeMeta(nodeMeta, label);
+    const address = String(meta?.address || "").trim();
+    const region = String(meta?.region || "").trim();
+    const tooltipContent = lookupNodeTooltipContent(nodeTooltips, label, meta);
+    const offline = meta?.online === false;
+    const card = (
+      <div
+        className={cn(
+          "relative flex min-h-[58px] w-full items-center gap-3 overflow-hidden rounded-[10px] border px-3 py-2 text-left shadow-sm",
+          timelineNodeTone(role),
+          tooltipContent ? "cursor-help focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50" : "",
+        )}
+        tabIndex={tooltipContent ? 0 : undefined}
+        title={!tooltipContent ? [label, address, region].filter(Boolean).join(" / ") || label : undefined}
+      >
+        <span className="flex h-[18px] w-6 shrink-0 items-center justify-center">{renderFlag(meta)}</span>
+        <span className="min-w-0 flex-1">
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="truncate text-[13px] font-semibold text-slate-900">{label}</span>
+            {meta?.online != null ? <i className={cn("ml-auto h-2 w-2 shrink-0 rounded-full", offline ? "bg-red-500" : "bg-emerald-500")} /> : null}
+          </span>
+          <span className="mt-0.5 block truncate font-mono text-[11px] text-slate-500">{address || region || "—"}</span>
+        </span>
+        <span className="shrink-0 text-[10px] font-medium text-slate-400">{timelineRoleLabel(role)}</span>
+        {offline ? (
+          <span className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-slate-900/55 text-[11px] font-bold tracking-wide text-white backdrop-blur-[1px]">
+            <span className="rounded-md border border-white/30 bg-red-600/90 px-2.5 py-1 shadow-sm">节点离线</span>
+          </span>
+        ) : null}
+      </div>
+    );
+    if (!tooltipContent) return <div key={key}>{card}</div>;
+    return (
+      <Tooltip key={key}>
+        <TooltipTrigger asChild>{card}</TooltipTrigger>
+        <TooltipContent collisionPadding={12} className="max-w-[320px] p-3 text-xs">{tooltipContent}</TooltipContent>
+      </Tooltip>
+    );
+  };
+  const renderTimelineConnector = (segment: ProbeSegment, key: string) => {
+    const state = getSegmentState(segment);
+    const offline = segment.fromMeta?.online === false || segment.toMeta?.online === false;
+    const blocked = !state.testing && !state.idle && !state.ok && /(?:阻断|blocked)/i.test(String(segment.message || ""));
+    const label = offline ? "离线" : blocked ? "阻断" : state.label || (state.ok ? "--" : "失败");
+    return (
+      <div key={key} className="relative ml-[23px] flex min-h-[52px] items-center pl-8">
+        <span className={cn(
+          "absolute bottom-0 left-0 top-0 border-l-2",
+          offline ? "border-dashed border-slate-300" : blocked ? "border-red-500" : state.testing ? "border-blue-500" : state.idle ? "border-dashed border-amber-400" : state.ok ? "border-emerald-400" : "border-red-400",
+          state.testing ? "animate-pulse" : "",
+        )} />
+        {state.testing ? <span className="absolute left-[-4px] top-1/2 h-2.5 w-2.5 -translate-y-1/2 animate-pulse rounded-full bg-blue-500 shadow-[0_0_0_4px_rgba(59,130,246,.14)]" /> : null}
+        <div className="min-w-0">
+          <span className={cn(
+            "inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 font-mono text-[11px] font-semibold shadow-sm",
+            offline ? "border-slate-200 bg-slate-50 text-slate-500" : blocked ? "border-red-200 bg-red-50 text-red-600" : state.testing ? "border-blue-200 bg-blue-50 text-blue-600" : state.idle ? "border-amber-200 bg-amber-50 text-amber-700" : state.ok ? "border-emerald-200 bg-emerald-50 text-emerald-600" : "border-red-200 bg-red-50 text-red-600",
+          )}>
+            {state.testing ? <span className="h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" /> : null}
+            {label}
+          </span>
+          {!state.testing && !state.ok && segment.message ? <span className="ml-2 text-[10px] text-slate-400" title={segment.message}>{shortNodeLabel(segment.message, 42)}</span> : null}
+        </div>
+      </div>
+    );
+  };
+  const timelineSectionLabel = (segment: ProbeSegment) => {
+    const groupKey = String(segment.groupKey || "");
+    if (groupKey === "tunnel-entry-branches" || groupKey.startsWith("relay-entry-")) return "入口分支";
+    if (groupKey === "tunnel-exit-branches" || groupKey.startsWith("relay-exit-")) return "出口分支";
+    if (parsed.kind === "tunnel-branched-pending" || parsed.kind === "tunnel-branched-summary") return "公共段";
+    return segment.groupLabel || "";
+  };
+  const renderVerticalTimeline = () => (
+    <div className="mx-auto w-full max-w-[38rem] px-1 py-2 sm:px-3">
+      {segments.map((segment, index) => {
+        const previous = segments[index - 1];
+        const next = segments[index + 1];
+        const sectionLabel = timelineSectionLabel(segment);
+        const previousSectionLabel = previous ? timelineSectionLabel(previous) : "";
+        const startsSection = !!sectionLabel && sectionLabel !== previousSectionLabel;
+        const startsNewPath = index === 0 || previous?.to !== segment.from || startsSection;
+        const endsPath = index === segments.length - 1 || next?.from !== segment.to || timelineSectionLabel(next) !== sectionLabel;
+        return (
+          <div key={`vertical-${segment.from}-${segment.to}-${index}`}>
+            {startsSection ? <div className={cn("mb-2 text-xs font-semibold text-slate-500", index > 0 && "mt-5 border-t border-slate-200 pt-4")}>{sectionLabel}</div> : null}
+            {startsNewPath && index > 0 && !startsSection ? <div className="my-3 border-t border-dashed border-slate-200" /> : null}
+            {startsNewPath ? renderTimelineNode(segment.from, segment.fromMeta, "entry", `from-${index}`) : null}
+            {renderTimelineConnector(segment, `connector-${index}`)}
+            {renderTimelineNode(segment.to, segment.toMeta, endsPath ? "landing" : "relay", `to-${index}`)}
+          </div>
+        );
+      })}
+    </div>
+  );
+
+  return (
+    <div className={cn("min-w-0 space-y-3", className)}>
+      {isBranchView ? <div className="text-center text-xs font-medium text-muted-foreground">{branchLabel}</div> : null}
+      {hasSegments ? (
+        <div className="max-h-[56vh] overflow-y-auto overscroll-contain rounded-xl border border-slate-200/80 bg-slate-50/35 p-2 sm:p-3">
+          {renderVerticalTimeline()}
+        </div>
+      ) : !hasResult ? (
+        <div className="rounded-xl border border-dashed border-border/70 px-3 py-6 text-center text-sm text-muted-foreground">尚未运行探测</div>
+      ) : null}
+      <div className="flex items-center justify-between border-t border-border/70 pt-3 text-sm">
+        <span className="text-muted-foreground">{isBranchView ? "最大延迟" : "合计"}</span>
+        <span className={cn("font-semibold tabular-nums", totalLatency !== null ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground")}>
+          {effectiveTesting ? "探测中" : !hasResult ? "等待探测" : parsed.tunnelProbeTimedOut && totalLatency === null ? "超时" : formatLatencyMs(totalLatency)}
+        </span>
+      </div>
+    </div>
+  );
+
   const renderNode = (label: string, segmentMeta?: LinkTestNodeMeta, options?: { wide?: boolean }) => {
     const meta = segmentMeta || lookupNodeMeta(nodeMeta, label);
     const region = String(meta?.region || "").trim();

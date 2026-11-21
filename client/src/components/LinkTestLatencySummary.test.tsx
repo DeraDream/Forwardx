@@ -475,6 +475,34 @@ test("multi-hop branch details include each measured exit", () => {
   assert.match(html, /出口乙/);
 });
 
+test("vertical probe timeline renders flags without icon pills and shows offline or blocked states", () => {
+  const blocked = parseLinkTestMessage(JSON.stringify({
+    details: [{
+      success: false,
+      latencyMs: null,
+      routeLabel: "香港入口 -> 新加坡落地",
+      message: "链路阻断",
+    }],
+  }));
+  const html = renderToStaticMarkup(
+    <LinkTestProbeView
+      parsed={blocked}
+      isSuccess={false}
+      isTesting={false}
+      nodeMeta={{
+        "香港入口": { countryCode: "HK", region: "Hong Kong", address: "192.0.2.1", online: false },
+        "新加坡落地": { countryCode: "SG", region: "Singapore", address: "198.51.100.2", online: true },
+      }}
+    />,
+  );
+
+  assert.match(html, /max-h-\[56vh\]/);
+  assert.match(html, /flagcdn\.com\/24x18\/hk\.png/);
+  assert.match(html, /节点离线/);
+  assert.match(html, /阻断/);
+  assert.doesNotMatch(html, /bg-amber-100|bg-blue-100|bg-emerald-100/);
+});
+
 test("parses the actual upstream TCP target for topology edge matching", () => {
   const parsed = parseLinkTestMessage(JSON.stringify({ details: [{
     success: true, latencyMs: 42, fromHostId: 2, targetIp: "frontier.lazycat.cv", targetPort: 37360,
