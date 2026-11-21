@@ -2547,7 +2547,8 @@ export async function getTopologyBlockLogs(input: { userId: number; isAdmin?: bo
   const rows = await queryRaw<any>(
     `SELECT * FROM ${q("topology_segment_incidents")}
       WHERE ${q("blockedAt")} IS NOT NULL ${scope}
-      ORDER BY COALESCE(${q("recoveredAt")}, ${q("blockedAt")}) DESC
+      ORDER BY CASE WHEN ${q("recoveredAt")} IS NULL THEN 0 ELSE 1 END,
+               COALESCE(${q("recoveredAt")}, ${q("blockedAt")}) DESC
       LIMIT ?`,
     params,
   );
@@ -2568,7 +2569,12 @@ export async function getTopologyBlockLogs(input: { userId: number; isAdmin?: bo
     entries.push({ ...base, id: `${row.id}:blocked`, type: "blocked", occurredAt: base.blockedAt });
     if (base.recoveredAt) entries.push({ ...base, id: `${row.id}:recovered`, type: "recovered", occurredAt: base.recoveredAt });
   }
-  return entries.sort((left, right) => right.occurredAt.getTime() - left.occurredAt.getTime()).slice(0, limit);
+  return entries.sort((left, right) => {
+    const leftActive = left.type === "blocked" && left.recoveredAt === null;
+    const rightActive = right.type === "blocked" && right.recoveredAt === null;
+    if (leftActive !== rightActive) return leftActive ? -1 : 1;
+    return right.occurredAt.getTime() - left.occurredAt.getTime();
+  }).slice(0, limit);
 }
 
 export async function cleanOldTopologySegmentIncidents(retentionHours = 30 * 24) {
