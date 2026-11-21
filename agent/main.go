@@ -37,7 +37,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.241"
+var Version = "2.2.242"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -3314,17 +3314,21 @@ func scheduleAgentTCPing(cfg Config, force bool) bool {
 	for _, probe := range state.RuleLatencyProbes {
 		interval = capForwardGroupHealthSpecInterval(interval, probe.GroupHealth)
 	}
+	now := time.Now()
 	tcpingScheduleMu.Lock()
-	due := lastTCPingAt.IsZero() || time.Since(lastTCPingAt) >= interval
+	ordinaryDue := lastTCPingAt.IsZero() || now.Sub(lastTCPingAt) >= interval
 	tcpingScheduleMu.Unlock()
-	if !force && !due {
+	if force || ordinaryDue {
+		if scheduleTCPingCollection(cfg, state.RuleLatencyProbes, state.TunnelProbes, state.ForwardGroupProbes, state.HostProbeServices, force, state.TopologySegmentProbes) {
+			tcpingScheduleMu.Lock()
+			lastTCPingAt = now
+			tcpingScheduleMu.Unlock()
+			return true
+		}
 		return false
 	}
-	if scheduleTCPingCollection(cfg, state.RuleLatencyProbes, state.TunnelProbes, state.ForwardGroupProbes, state.HostProbeServices, force, state.TopologySegmentProbes) {
-		tcpingScheduleMu.Lock()
-		lastTCPingAt = time.Now()
-		tcpingScheduleMu.Unlock()
-		return true
+	if len(state.TopologySegmentProbes) > 0 && topologySegmentsDue(false, now) {
+		return scheduleTCPingCollection(cfg, nil, nil, nil, nil, false, state.TopologySegmentProbes)
 	}
 	return false
 }

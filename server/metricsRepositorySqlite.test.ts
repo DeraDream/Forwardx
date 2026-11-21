@@ -107,6 +107,28 @@ test("SQLite host metric summaries seek only the latest two rows per host", asyn
     const sharedSegments = await metrics.getLatestTopologySegmentLatency([1, 2]);
     assert.deepEqual(sharedSegments.map((segment) => [segment.ruleId, segment.latencyMs]).sort((a, b) => Number(a[0]) - Number(b[0])), [[1, 40], [2, 55]]);
 
+    const pingKey = "topology-v1:1:198.51.100.9:0:ping";
+    await metrics.recordTopologySegmentLatency([
+      { ruleId: 3, sourceHostId: 1, targetAddress: "198.51.100.9", targetPort: 0, segmentKey: pingKey, method: "ping", latencyMs: 8, isTimeout: false, recordedAt: new Date((now - 30) * 1000) },
+      { ruleId: 3, sourceHostId: 1, targetAddress: "198.51.100.9", targetPort: 0, segmentKey: pingKey, method: "ping", latencyMs: null, isTimeout: true, recordedAt: new Date((now - 10) * 1000) },
+      { ruleId: 3, sourceHostId: 1, targetAddress: "198.51.100.9", targetPort: 0, segmentKey: pingKey, method: "ping", latencyMs: null, isTimeout: true, recordedAt: new Date((now - 6) * 1000) },
+      { ruleId: 3, sourceHostId: 1, targetAddress: "198.51.100.9", targetPort: 0, segmentKey: pingKey, method: "ping", latencyMs: null, isTimeout: true, recordedAt: new Date((now - 2) * 1000) },
+    ]);
+    const graceSegment = (await metrics.getLatestTopologySegmentLatency([3]))[0];
+    assert.equal(graceSegment.blocked, false);
+    assert.equal(graceSegment.isTimeout, false);
+    assert.equal(graceSegment.latencyMs, 8);
+    const blockedPingKey = "topology-v1:1:198.51.100.10:0:ping";
+    await metrics.recordTopologySegmentLatency([
+      { ruleId: 4, sourceHostId: 1, targetAddress: "198.51.100.10", targetPort: 0, segmentKey: blockedPingKey, method: "ping", latencyMs: 9, isTimeout: false, recordedAt: new Date((now - 40) * 1000) },
+      { ruleId: 4, sourceHostId: 1, targetAddress: "198.51.100.10", targetPort: 0, segmentKey: blockedPingKey, method: "ping", latencyMs: null, isTimeout: true, recordedAt: new Date((now - 20) * 1000) },
+      { ruleId: 4, sourceHostId: 1, targetAddress: "198.51.100.10", targetPort: 0, segmentKey: blockedPingKey, method: "ping", latencyMs: null, isTimeout: true, recordedAt: new Date((now - 10) * 1000) },
+      { ruleId: 4, sourceHostId: 1, targetAddress: "198.51.100.10", targetPort: 0, segmentKey: blockedPingKey, method: "ping", latencyMs: null, isTimeout: true, recordedAt: new Date(now * 1000) },
+    ]);
+    const blockedSegment = (await metrics.getLatestTopologySegmentLatency([4]))[0];
+    assert.equal(blockedSegment.blocked, true);
+    assert.equal(blockedSegment.isTimeout, true);
+
     await metrics.cleanOldHostMetrics(72);
     const [{ count }] = await runtime.queryRaw<{ count: number }>(
       `SELECT COUNT(*) AS count FROM host_metrics WHERE hostId = ?`,

@@ -1622,6 +1622,24 @@ func TestExecuteTCPingTaskReportsStableWireGuardDialTimeout(t *testing.T) {
 	}
 }
 
+func TestTopologySegmentPingUsesOneSamplePerFiveSecondCycle(t *testing.T) {
+	requestedCount := 0
+	result := executeTCPingTaskWithProbes(
+		tcpingTask{Kind: "topologySegment", RuleID: 1, Method: "ping", TargetIP: "192.0.2.9", TopologyKey: "edge"},
+		nil,
+		func(_ string, _ time.Duration, count int) probeMeasurement {
+			requestedCount = count
+			return probeMeasurement{LatencyMs: 12, Reachable: true, ProbeCount: count, ProbeSuccesses: count}
+		},
+	)
+	if requestedCount != 1 {
+		t.Fatalf("topology ping count = %d, want one sample per cycle", requestedCount)
+	}
+	if result.Payload == nil || result.Payload["probeCount"] != 1 {
+		t.Fatalf("topology ping result did not preserve one-sample cadence: %v", result.Payload)
+	}
+}
+
 func TestExecuteTCPingTaskPreservesPartialPingLoss(t *testing.T) {
 	task := tcpingTask{
 		Kind:      "service",
@@ -1788,7 +1806,7 @@ func TestTCPingDynamicBatchLimitScalesWithoutUnboundedRuns(t *testing.T) {
 	}
 }
 
-func TestTopologySegmentsUseOneHundredSecondBackgroundCadence(t *testing.T) {
+func TestTopologySegmentsUseFiveSecondContinuousCadence(t *testing.T) {
 	topologySegmentScheduleMu.Lock()
 	previous := lastTopologySegmentAt
 	lastTopologySegmentAt = time.Time{}
@@ -1803,11 +1821,11 @@ func TestTopologySegmentsUseOneHundredSecondBackgroundCadence(t *testing.T) {
 		t.Fatal("first topology segment collection should be due")
 	}
 	markTopologySegmentsCollected(now)
-	if topologySegmentsDue(false, now.Add(99*time.Second)) {
-		t.Fatal("background topology collection ran before 100 seconds")
+	if topologySegmentsDue(false, now.Add(4*time.Second)) {
+		t.Fatal("continuous topology collection ran before five seconds")
 	}
-	if !topologySegmentsDue(false, now.Add(100*time.Second)) {
-		t.Fatal("background topology collection should run after 100 seconds")
+	if !topologySegmentsDue(false, now.Add(5*time.Second)) {
+		t.Fatal("continuous topology collection should run after five seconds")
 	}
 	if !topologySegmentsDue(true, now.Add(time.Second)) {
 		t.Fatal("interactive topology request must bypass the background cadence")
@@ -1820,8 +1838,8 @@ func TestTopologySegmentBatchDoesNotDependOnServiceProbes(t *testing.T) {
 	if got := topologySegmentBatchLimit(7, false); got != 7 {
 		t.Fatalf("topology segment batch without services = %d, want 7", got)
 	}
-	if got := topologySegmentBatchLimit(300, false); got != 256 {
-		t.Fatalf("bounded topology segment batch = %d, want 256", got)
+	if got := topologySegmentBatchLimit(300, false); got != 300 {
+		t.Fatalf("continuous topology segment batch = %d, want all 300", got)
 	}
 	if got := topologySegmentBatchLimit(300, true); got != 300 {
 		t.Fatalf("forced topology segment batch = %d, want 300", got)

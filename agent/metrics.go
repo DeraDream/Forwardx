@@ -1771,18 +1771,17 @@ func tcpingRoundsForWindow(interval time.Duration, window time.Duration) int {
 	return int((window + interval - 1) / interval)
 }
 
-const topologySegmentBackgroundInterval = 100 * time.Second
+const topologySegmentBackgroundInterval = 5 * time.Second
 
-func topologySegmentBatchLimit(segmentCount int, force bool) int {
-	if force {
-		return segmentCount
-	}
-	return tcpingDynamicBatchLimit(segmentCount, tcpingProbeBatchSize, 1, 256)
+func topologySegmentBatchLimit(segmentCount int, _ bool) int {
+	// Every deduplicated physical edge belongs to the same five-second snapshot.
+	// runTCPingTasks already bounds concurrency, so rotating a subset here would
+	// make large topologies silently miss the promised cadence.
+	return segmentCount
 }
 
-// Other health probes may need a faster collector. Keep topology segments on
-// their own 100-second background cadence unless the visible topology requests
-// a forced interactive collection.
+// Physical topology RTT is continuous health state. Keep it on its own
+// five-second cadence, independent of the slower forwarding-rule probes.
 func topologySegmentsDue(force bool, now time.Time) bool {
 	if force {
 		return true
@@ -1993,7 +1992,13 @@ func executeTCPingTaskWithProbes(
 		measurement.ProbeSuccesses = 1
 	} else if (task.Kind == "rule" || task.Kind == "forwardGroup" || task.Kind == "service" || task.Kind == "topologySegment") && task.Method == "ping" {
 		if pingProbe != nil {
-			measurement = pingProbe(task.TargetIP, tcpingProbeTimeout, tcpingPingProbeCount)
+			probeCount := tcpingPingProbeCount
+			if task.Kind == "topologySegment" {
+				// Continuous topology state is one ICMP sample every five seconds;
+				// a five-packet burst can itself exceed that cadence on loss.
+				probeCount = 1
+			}
+			measurement = pingProbe(task.TargetIP, tcpingProbeTimeout, probeCount)
 		}
 	} else if task.Kind == "tunnel" && task.WireGuardPeerID != "" {
 		status := wireGuardProbeTimeout

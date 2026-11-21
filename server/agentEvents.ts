@@ -423,14 +423,18 @@ export function isHostTopologyTrafficWatching(hostId: number, now = Date.now()) 
 }
 
 // Topology is an interactive view: request a fresh Agent measurement when it
-// opens, then no more often than every ten seconds while it remains visible.
-export function requestTopologyHostTcping(hostId: number, minIntervalMs = 10_000, now = Date.now()) {
+// opens, then no more often than every five seconds while it remains visible.
+export function requestTopologyHostTcping(hostId: number, minIntervalMs = 5_000, now = Date.now()) {
   const id = Number(hostId);
   if (!Number.isFinite(id) || id <= 0) return false;
   const lastAt = hostTopologyTcpingRequestedAt.get(id) || 0;
   if (now - lastAt < minIntervalMs) return false;
   hostTopologyTcpingRequestedAt.set(id, now);
-  return requestHostTcping(id, Math.max(minIntervalMs * 2, 30_000));
+  const requested = requestHostTcping(id, Math.max(minIntervalMs * 2, 30_000));
+  // Stable Agents otherwise remain on presence keepalives and may not perform
+  // a full heartbeat for minutes. Wake the SSE stream so forceTcping is read now.
+  pushAgentRefresh(id, "topology-tcping", { urgent: true });
+  return requested;
 }
 
 export function clearTopologyHostTcping(hostId: number) {

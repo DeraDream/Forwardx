@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-test("latest topology segments are user-scoped and request a fresh source probe", () => {
+test("latest topology segments are user-scoped and explicit refresh wakes only allowed sources", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-topology-segments-router-"));
   const databasePath = path.join(directory, "segments.db");
   const script = String.raw`
@@ -31,7 +31,12 @@ test("latest topology segments are user-scoped and request a fresh source probe"
       const caller = diagnosticsRouter.createCaller({ req: { headers: {} }, res: { clearCookie() {} }, user: { id: 1, username: "owner", role: "user", accountEnabled: true }, authSession: null, authFailureReason: null });
       const rows = await caller.latestSegments({ ruleIds: [101, 102] });
       assert.deepEqual(rows.map((row) => [row.ruleId, row.latencyMs]), [[101, 17]]);
+      assert.equal(events.hasHostTcpingRequest(11), false);
+      assert.equal(events.hasHostTcpingRequest(12), false);
+      const refresh = await caller.refreshSegments({ ruleId: 101 });
+      assert.deepEqual(refresh.sourceHostIds, [11]);
       assert.equal(events.hasHostTcpingRequest(11), true);
+      await assert.rejects(() => caller.refreshSegments({ ruleId: 102 }));
       assert.equal(events.hasHostTcpingRequest(12), false);
     } finally {
       await runtime.closeDatabase();

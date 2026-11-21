@@ -2429,6 +2429,8 @@ export type TopologySegmentLatencySample = {
   successRate?: number;
   jitterMs?: number | null;
   sampleCount?: number;
+  blocked?: boolean;
+  failureSince?: Date | null;
 };
 
 export async function recordTopologySegmentLatency(samples: TopologySegmentLatencySample[]) {
@@ -2489,10 +2491,10 @@ export async function getLatestTopologySegmentLatency(ruleIds: number[]) {
   // Keep a compact rolling window per physical leg. This deliberately uses
   // probe counters (rather than rows) so ping packet loss is reflected.
   const history = await queryRaw<any>(
-    `SELECT ${q("segmentKey")}, ${q("latencyMs")}, ${q("probeCount")}, ${q("probeSuccesses")}
+    `SELECT ${q("ruleId")}, ${q("segmentKey")}, ${q("latencyMs")}, ${q("isTimeout")}, ${q("probeCount")}, ${q("probeSuccesses")}, ${q("recordedAt")}
        FROM (
-         SELECT ${q("segmentKey")}, ${q("latencyMs")}, ${q("probeCount")}, ${q("probeSuccesses")},
-                ROW_NUMBER() OVER (PARTITION BY ${q("segmentKey")} ORDER BY ${q("recordedAt")} DESC) AS ${q("sampleRank")}
+         SELECT ${q("ruleId")}, ${q("segmentKey")}, ${q("latencyMs")}, ${q("isTimeout")}, ${q("probeCount")}, ${q("probeSuccesses")}, ${q("recordedAt")},
+                ROW_NUMBER() OVER (PARTITION BY ${q("ruleId")}, ${q("segmentKey")} ORDER BY ${q("recordedAt")} DESC) AS ${q("sampleRank")}
            FROM ${q("topology_segment_latency_stats")}
           WHERE ${q("segmentKey")} IN (${segmentKeys.map(() => "?").join(",")})
        ) recent
@@ -2501,13 +2503,14 @@ export async function getLatestTopologySegmentLatency(ruleIds: number[]) {
   );
   const historyByKey = new Map<string, any[]>();
   for (const row of history) {
-    const key = String(row.segmentKey || "");
+    const key = `${Number(row.ruleId)}:${String(row.segmentKey || "")}`;
     const samples = historyByKey.get(key) || [];
     if (samples.length < 20) samples.push(row);
     historyByKey.set(key, samples);
   }
+  const now = Date.now();
   return latest.map((sample) => {
-    const samples = historyByKey.get(sample.segmentKey) || [];
+    const samples = historyByKey.get(`${sample.ruleId}:${sample.segmentKey}`) || [];
     const probeCount = samples.reduce((sum, row) => sum + Math.max(1, Number(row.probeCount) || 1), 0);
     const successes = samples.reduce((sum, row) => sum + Math.max(0, Number(row.probeSuccesses) || 0), 0);
     const latencies = samples.map((row) => row.latencyMs == null ? null : Number(row.latencyMs)).filter((value): value is number => Number.isFinite(value));
@@ -2515,7 +2518,26 @@ export async function getLatestTopologySegmentLatency(ruleIds: number[]) {
     const jitterMs = latencies.length > 1
       ? Math.sqrt(latencies.reduce((sum, value) => sum + (value - mean) ** 2, 0) / latencies.length)
       : null;
-    return { ...sample, sampleCount: samples.length, successRate: probeCount ? successes / probeCount : 0, jitterMs };
+    const ordered = [...samples].sort((left, right) => rowDate(right.recordedAt).getTime() - rowDate(left.recordedAt).getTime());
+    const latestTimedOut = sample.isTimeout;
+    const consecutiveFailures = latestTimedOut ? ordered.filter((row, index) => (
+      index === 0 || ordered.slice(0, index).every((candidate) => rowBool(candidate.isTimeout))
+    )).filter((row) => rowBool(row.isTimeout)) : [];
+    const failureSince = consecutiveFailures.length
+      ? Math.min(...consecutiveFailures.map((row) => rowDate(row.recordedAt).getTime()))
+      : null;
+    const blocked = latestTimedOut && failureSince !== null && now - failureSince >= 15_000;
+    const lastSuccess = ordered.find((row) => !rowBool(row.isTimeout) && row.latencyMs != null);
+    return {
+      ...sample,
+      latencyMs: latestTimedOut && !blocked && lastSuccess ? Number(lastSuccess.latencyMs) : sample.latencyMs,
+      isTimeout: blocked,
+      blocked,
+      failureSince: failureSince === null ? null : new Date(failureSince),
+      sampleCount: samples.length,
+      successRate: probeCount ? successes / probeCount : 0,
+      jitterMs,
+    };
   });
 }
 

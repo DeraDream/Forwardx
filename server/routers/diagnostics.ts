@@ -912,10 +912,17 @@ export const diagnosticsRouter = router({
       const rules = await Promise.all(ruleIds.map((ruleId) => db.getForwardRuleById(ruleId)));
       const allowedRules = rules.filter((rule: any) => rule && (String(ctx.user.role) === "admin" || Number(rule.userId) === Number(ctx.user.id))) as any[];
       const allowedRuleIds = allowedRules.map((rule) => Number(rule.id));
-      const segmentLists = await Promise.all(allowedRules.map((rule) => diagnosticSegments("rule", rule).catch(() => [])));
-      const sourceHostIds = new Set(segmentLists.flat().map((segment) => Number(segment.fromHostId)).filter((hostId) => hostId > 0));
-      for (const hostId of sourceHostIds) requestTopologyHostTcping(hostId);
       return db.getLatestTopologySegmentLatency(allowedRuleIds);
+    }),
+
+  refreshSegments: protectedProcedure
+    .input(z.object({ ruleId: z.number().int().positive() }))
+    .mutation(async ({ input, ctx }) => {
+      const rule = await ensureAccess("rule", input.ruleId, ctx.user) as any;
+      const segments = await diagnosticSegments("rule", rule);
+      const sourceHostIds = Array.from(new Set(segments.map((segment) => Number(segment.fromHostId)).filter((hostId) => hostId > 0)));
+      for (const hostId of sourceHostIds) requestTopologyHostTcping(hostId, 0);
+      return { requested: sourceHostIds.length, sourceHostIds };
     }),
 
   startSegment: protectedProcedure
