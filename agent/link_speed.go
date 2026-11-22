@@ -562,9 +562,13 @@ func reportSpeedSamples(updates <-chan speedSample, interval time.Duration, repo
 	}
 }
 
+func linkSpeedDirectionOrder() [2]string {
+	return [2]string{"download", "upload"}
+}
+
 func runLinkSpeed(ctx context.Context, task linkSpeedTask, emit func(speedSample), complete func(string, speedMeasurement)) (speedMeasurement, speedMeasurement, error) {
 	var upload, download speedMeasurement
-	for _, direction := range []string{"upload", "download"} {
+	for _, direction := range linkSpeedDirectionOrder() {
 		if ctx.Err() != nil {
 			return upload, download, ctx.Err()
 		}

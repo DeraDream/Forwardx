@@ -265,7 +265,7 @@ export function LinkSpeedTestButton({
   const phasePercent = (direction: LinkSpeedDirection) => {
     if (!status) return 0;
     if (displayState === "completed" ||
-      (direction === "upload" && displayState === "download")) return 100;
+      (direction === "download" && displayState === "upload")) return 100;
     if (displayState !== direction) return status[direction] ? 100 : 0;
     const elapsed = latest?.direction === direction ? latest.elapsedMs : 0;
     return Math.min(100, (elapsed / (status.duration * 1000)) * 100);
@@ -286,7 +286,7 @@ export function LinkSpeedTestButton({
     second: Number(
       (
         (sample.elapsedMs +
-          (sample.direction === "download"
+          (sample.direction === "upload"
             ? (status?.duration || 10) * 1000
             : 0)) /
         1000
@@ -306,8 +306,8 @@ export function LinkSpeedTestButton({
     : t("等待测速数据");
   const gaugeLabel = [
     stateLabel,
-    status?.upload ? `${t("上传")} ${rate(status.upload.mbps)}` : "",
     status?.download ? `${t("下载")} ${rate(status.download.mbps)}` : "",
+    status?.upload ? `${t("上传")} ${rate(status.upload.mbps)}` : "",
     liveDirection ? rate(liveMbps) : "",
   ]
     .filter(Boolean)
@@ -431,17 +431,17 @@ export function LinkSpeedTestButton({
             </LinkSpeedGauge>
             <div className="mx-auto grid max-w-md grid-cols-2 gap-2">
               <PhaseBar
-                direction="upload"
-                label={t("上传")}
-                seconds={phaseSeconds}
-                percent={phasePercent("upload")}
-                animated={motionEnabled}
-              />
-              <PhaseBar
                 direction="download"
                 label={t("下载")}
                 seconds={phaseSeconds}
                 percent={phasePercent("download")}
+                animated={motionEnabled}
+              />
+              <PhaseBar
+                direction="upload"
+                label={t("上传")}
+                seconds={phaseSeconds}
+                percent={phasePercent("upload")}
                 animated={motionEnabled}
               />
             </div>
@@ -569,15 +569,15 @@ export function LinkSpeedTestButton({
             <>
               <div className="grid gap-3 sm:grid-cols-2">
                 <Measurement
-                  direction="upload"
-                  title={t("上传（入口 → 落地 SS → 国际网络）")}
-                  result={status.upload}
-                  udp={status.protocol === "udp"}
-                />
-                <Measurement
                   direction="download"
                   title={t("下载（国际网络 → 落地 SS → 入口）")}
                   result={status.download}
+                  udp={status.protocol === "udp"}
+                />
+                <Measurement
+                  direction="upload"
+                  title={t("上传（入口 → 落地 SS → 国际网络）")}
+                  result={status.upload}
                   udp={status.protocol === "udp"}
                 />
               </div>
@@ -609,18 +609,18 @@ export function LinkSpeedTestButton({
                         ]}
                       />
                       <Area
-                        dataKey="upload"
-                        name="upload"
-                        stroke={LINK_SPEED_UPLOAD_COLOR}
-                        fill={LINK_SPEED_UPLOAD_COLOR}
-                        fillOpacity={0.12}
-                        isAnimationActive={false}
-                      />
-                      <Area
                         dataKey="download"
                         name="download"
                         stroke={LINK_SPEED_DOWNLOAD_COLOR}
                         fill={LINK_SPEED_DOWNLOAD_COLOR}
+                        fillOpacity={0.12}
+                        isAnimationActive={false}
+                      />
+                      <Area
+                        dataKey="upload"
+                        name="upload"
+                        stroke={LINK_SPEED_UPLOAD_COLOR}
+                        fill={LINK_SPEED_UPLOAD_COLOR}
                         fillOpacity={0.12}
                         isAnimationActive={false}
                       />
@@ -652,7 +652,7 @@ export function LinkSpeedTestButton({
                 <div className="flex flex-wrap gap-x-4 gap-y-1">
                   <span>{status.protocol.toUpperCase()}</span>
                   <span>
-                    {status.duration}s ↑ / {status.duration}s ↓
+                    {status.duration}s ↓ / {status.duration}s ↑
                   </span>
                   {status.rateMbps > 0 && (
                     <span>

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +23,12 @@ func validLinkSpeedTask(now time.Time) linkSpeedTask {
 		SSPassword:    "test-password",
 		BenchmarkHost: "panel.example.test",
 		BenchmarkPort: 5202,
+	}
+}
+
+func TestLinkSpeedRunsDownloadBeforeUpload(t *testing.T) {
+	if order := linkSpeedDirectionOrder(); !reflect.DeepEqual(order, [2]string{"download", "upload"}) {
+		t.Fatalf("unexpected speed test direction order: %v", order)
 	}
 }
 

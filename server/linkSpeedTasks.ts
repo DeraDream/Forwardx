@@ -232,7 +232,7 @@ export function reportLinkSpeedTask(hostId: number, report: any) {
   if (op === "prepare") {
     if (report.state !== "ready") return false;
     job.pending.delete(report.taskId);
-    job.status.state = "upload";
+    job.status.state = "download";
     linkSpeedLog(job, `report task=${shortId(report.taskId)} op=prepare state=ready`);
     enqueue(job, "run");
     return true;
@@ -244,7 +244,7 @@ export function reportLinkSpeedTask(hostId: number, report: any) {
     if ([sample.elapsedMs, sample.bytes, sample.mbps].every((value) => Number.isFinite(value) && value >= 0)
       && sample.elapsedMs <= (job.status.duration + 5) * 1000
       && job.status.samples.length < 800
-      && !(last?.direction === "download" && sample.direction === "upload")
+      && !(last?.direction === "upload" && sample.direction === "download")
       && (last?.direction !== sample.direction || (sample.elapsedMs > last.elapsedMs && sample.bytes >= last.bytes))) {
       job.status.state = sample.direction;
       job.status.samples.push({
