@@ -31,11 +31,29 @@ type linkSpeedTask struct {
 	ExpiresAt     int64   `json:"expiresAt"`
 	EntryAddress  string  `json:"entryAddress"`
 	EntryPort     int     `json:"entryPort"`
+	EntryMode     string  `json:"entryMode"`
 	SSMethod      string  `json:"ssMethod"`
 	SSPassword    string  `json:"ssPassword"`
 	BenchmarkHost string  `json:"benchmarkHost"`
 	BenchmarkPort int     `json:"benchmarkPort"`
 	Target        string  `json:"-"`
+}
+
+type linkSpeedLogBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (b *linkSpeedLogBuffer) Write(value []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.Write(value)
+}
+
+func (b *linkSpeedLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.String()
 }
 
 type linkSpeedSession struct {
@@ -46,11 +64,26 @@ type linkSpeedSession struct {
 	running bool
 	target  string
 	cmd     *exec.Cmd
+	output  *linkSpeedLogBuffer
+	cleanup func()
 }
 
 var linkSpeedSessionsMu sync.Mutex
 var linkSpeedSessions = map[string]*linkSpeedSession{}
 var linkSpeedSeen = map[string]time.Time{}
+
+func (s *linkSpeedSession) diagnosticOutput() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.output == nil {
+		return ""
+	}
+	value := strings.TrimSpace(s.output.String())
+	if len(value) > 4000 {
+		value = value[len(value)-4000:]
+	}
+	return value
+}
 
 func (s *linkSpeedSession) close() {
 	s.cancel()
@@ -61,9 +94,14 @@ func (s *linkSpeedSession) close() {
 	}
 	s.closed = true
 	cmd := s.cmd
+	cleanup := s.cleanup
+	s.cleanup = nil
 	s.mu.Unlock()
 	if cmd != nil && cmd.Process != nil {
 		_ = cmd.Process.Kill()
+	}
+	if cleanup != nil {
+		cleanup()
 	}
 }
 
@@ -104,6 +142,9 @@ func validateLinkSpeedTaskAt(task linkSpeedTask, now time.Time) error {
 	}
 	if task.Op != "prepare" && task.Op != "run" && task.Op != "stop" {
 		return errors.New("unsupported speed test operation")
+	}
+	if task.EntryMode != "" && task.EntryMode != "listener" && task.EntryMode != "iptables" {
+		return errors.New("unsupported speed test entry mode")
 	}
 	if task.EntryPort < 1 || task.EntryPort > 65535 || task.BenchmarkPort < 1 || task.BenchmarkPort > 65535 {
 		return errors.New("invalid speed test port")
@@ -182,6 +223,98 @@ install -m 0755 "$bin" %s
 	return nil
 }
 
+type linkSpeedNetworkNamespace struct {
+	name        string
+	hostIf      string
+	hostAddress string
+	peerAddress string
+}
+
+func runLinkSpeedIP(args ...string) error {
+	cmd := exec.Command("ip", args...)
+	var output bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &output, &output
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("ip %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(output.String()))
+	}
+	return nil
+}
+
+func cleanupLinkSpeedNetworkNamespace(namespace linkSpeedNetworkNamespace) {
+	_ = exec.Command("ip", "netns", "del", namespace.name).Run()
+	_ = exec.Command("ip", "link", "del", namespace.hostIf).Run()
+}
+
+func cleanupStaleLinkSpeedNetworkNamespaces() {
+	if runtime.GOOS != "linux" {
+		return
+	}
+	if output, err := exec.Command("ip", "netns", "list").Output(); err == nil {
+		for _, line := range strings.Split(string(output), "\n") {
+			name := strings.Fields(line)
+			if len(name) > 0 && len(name[0]) == 14 && strings.HasPrefix(name[0], "fwxls-") {
+				if _, parseErr := strconv.ParseUint(name[0][6:], 16, 32); parseErr == nil {
+					_ = exec.Command("ip", "netns", "del", name[0]).Run()
+				}
+			}
+		}
+	}
+	if output, err := exec.Command("ip", "-o", "link", "show").Output(); err == nil {
+		for _, line := range strings.Split(string(output), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) < 2 {
+				continue
+			}
+			name := strings.TrimSuffix(strings.SplitN(fields[1], "@", 2)[0], ":")
+			if len(name) == 12 && strings.HasPrefix(name, "fxlh") {
+				if _, parseErr := strconv.ParseUint(name[4:], 16, 32); parseErr == nil {
+					_ = exec.Command("ip", "link", "del", name).Run()
+				}
+			}
+		}
+	}
+}
+
+func setupLinkSpeedNetworkNamespace(task linkSpeedTask) (linkSpeedNetworkNamespace, error) {
+	if _, err := exec.LookPath("ip"); err != nil {
+		return linkSpeedNetworkNamespace{}, errors.New("iptables 入口测速需要 iproute2 的 ip 命令")
+	}
+	suffix := strings.ReplaceAll(task.TaskID, "-", "")
+	if len(suffix) < 8 {
+		return linkSpeedNetworkNamespace{}, errors.New("invalid speed test namespace identifier")
+	}
+	suffix = suffix[:8]
+	value, _ := strconv.ParseUint(suffix[:4], 16, 16)
+	second := 18 + int(value>>15)
+	third := int((value >> 7) & 0xff)
+	base := int(value&0x3f) * 4
+	namespace := linkSpeedNetworkNamespace{
+		name:        "fwxls-" + suffix,
+		hostIf:      "fxlh" + suffix,
+		hostAddress: fmt.Sprintf("198.%d.%d.%d", second, third, base+1),
+		peerAddress: fmt.Sprintf("198.%d.%d.%d", second, third, base+2),
+	}
+	cleanupLinkSpeedNetworkNamespace(namespace)
+	commands := [][]string{
+		{"netns", "add", namespace.name},
+		{"link", "add", namespace.hostIf, "type", "veth", "peer", "name", "fxln" + suffix},
+		{"link", "set", "fxln" + suffix, "netns", namespace.name},
+		{"addr", "add", namespace.hostAddress + "/30", "dev", namespace.hostIf},
+		{"link", "set", namespace.hostIf, "up"},
+		{"netns", "exec", namespace.name, "ip", "link", "set", "lo", "up"},
+		{"netns", "exec", namespace.name, "ip", "addr", "add", namespace.peerAddress + "/30", "dev", "fxln" + suffix},
+		{"netns", "exec", namespace.name, "ip", "link", "set", "fxln" + suffix, "up"},
+		{"netns", "exec", namespace.name, "ip", "route", "replace", "default", "via", namespace.hostAddress},
+	}
+	for _, args := range commands {
+		if err := runLinkSpeedIP(args...); err != nil {
+			cleanupLinkSpeedNetworkNamespace(namespace)
+			return linkSpeedNetworkNamespace{}, fmt.Errorf("准备 iptables 入口测速网络命名空间失败: %w", err)
+		}
+	}
+	return namespace, nil
+}
+
 func startLinkSpeedSSLocal(cfg Config, session *linkSpeedSession, task linkSpeedTask) error {
 	if err := ensureLinkSpeedSSLocal(session.ctx); err != nil {
 		return err
@@ -199,6 +332,22 @@ func startLinkSpeedSSLocal(cfg Config, session *linkSpeedSession, task linkSpeed
 		entryHost = "127.0.0.1"
 	}
 	localAddr := net.JoinHostPort("127.0.0.1", strconv.Itoa(localPort))
+	command := linkSpeedSSLocal
+	commandPrefix := []string{}
+	if task.EntryMode == "iptables" {
+		namespace, setupErr := setupLinkSpeedNetworkNamespace(task)
+		if setupErr != nil {
+			return setupErr
+		}
+		entryHost = namespace.hostAddress
+		localAddr = net.JoinHostPort(namespace.peerAddress, strconv.Itoa(localPort))
+		command = "ip"
+		commandPrefix = []string{"netns", "exec", namespace.name, linkSpeedSSLocal}
+		session.mu.Lock()
+		session.cleanup = func() { cleanupLinkSpeedNetworkNamespace(namespace) }
+		session.mu.Unlock()
+		logf("link speed iptables ingress namespace ready job=%s namespace=%s ingress=%s:%d", task.JobID, namespace.name, namespace.hostAddress, task.EntryPort)
+	}
 	args := []string{
 		"--protocol", "tunnel",
 		"-b", localAddr,
@@ -207,18 +356,20 @@ func startLinkSpeedSSLocal(cfg Config, session *linkSpeedSession, task linkSpeed
 		"-k", task.SSPassword,
 		"-f", net.JoinHostPort(strings.Trim(host, "[]"), strconv.Itoa(task.BenchmarkPort)),
 		"--log-without-time",
+		"-v",
 	}
 	if task.Protocol == "udp" {
 		args = append(args, "-u", "--udp-timeout", "90")
 	}
-	cmd := exec.CommandContext(session.ctx, linkSpeedSSLocal, args...)
-	var output bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &output, &output
+	cmd := exec.CommandContext(session.ctx, command, append(commandPrefix, args...)...)
+	output := &linkSpeedLogBuffer{}
+	cmd.Stdout, cmd.Stderr = output, output
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("启动 Shadowsocks 测速客户端失败: %w", err)
 	}
 	session.mu.Lock()
 	session.cmd = cmd
+	session.output = output
 	session.target = localAddr
 	session.mu.Unlock()
 	exited := make(chan error, 1)
@@ -317,6 +468,10 @@ func handleLinkSpeedTask(cfg Config, task linkSpeedTask) {
 		return
 	}
 	fail := func(err error) {
+		diagnostic := session.diagnosticOutput()
+		if diagnostic != "" {
+			err = fmt.Errorf("%w; sslocal: %s", err, diagnostic)
+		}
 		logf("link speed task failed job=%s task=%s op=%s error=%v", task.JobID, task.TaskID, task.Op, err)
 		session.close()
 		speedReportFinal(cfg, task, map[string]any{"state": "error", "error": err.Error()})

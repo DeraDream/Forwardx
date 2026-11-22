@@ -17,6 +17,7 @@ func validLinkSpeedTask(now time.Time) linkSpeedTask {
 		ExpiresAt:     now.Add(150 * time.Second).UnixMilli(),
 		EntryAddress:  "127.0.0.1",
 		EntryPort:     12345,
+		EntryMode:     "iptables",
 		SSMethod:      "aes-256-gcm",
 		SSPassword:    "test-password",
 		BenchmarkHost: "panel.example.test",
@@ -37,6 +38,15 @@ func TestValidateLinkSpeedTaskUsesCalibratedPanelTime(t *testing.T) {
 	}
 	if err := validateLinkSpeedTaskAt(task, panelNow); err != nil {
 		t.Fatalf("calibrated panel time rejected a valid lease: %v", err)
+	}
+}
+
+func TestValidateLinkSpeedTaskRejectsUnsupportedEntryMode(t *testing.T) {
+	panelNow := time.Unix(1_800_000_000, 0)
+	task := validLinkSpeedTask(panelNow)
+	task.EntryMode = "unknown"
+	if err := validateLinkSpeedTaskAt(task, panelNow); err == nil || !strings.Contains(err.Error(), "entry mode") {
+		t.Fatalf("expected unsupported entry mode rejection, got %v", err)
 	}
 }
 

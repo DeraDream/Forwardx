@@ -21,6 +21,7 @@ export type LinkSpeedAgentTask = {
   expiresAt: number;
   entryAddress: string;
   entryPort: number;
+  entryMode: "listener" | "iptables";
   ssMethod: string;
   ssPassword: string;
   benchmarkHost: string;
@@ -91,6 +92,7 @@ export function createLinkSpeedJob(input: {
   route: LinkSpeedStatus["route"];
   entryAddress: string;
   entryPort: number;
+  entryMode: "listener" | "iptables";
   ssMethod: string;
   ssPassword: string;
   benchmarkHost: string;
@@ -128,7 +130,7 @@ export function createLinkSpeedJob(input: {
       offeredRateMbps: input.rateMbps,
       routeHostIds: input.route.map((node) => node.hostId),
       agentVersions: Object.fromEntries(input.route.map((node) => [String(node.hostId), String(node.agentVersion || "unknown")])),
-      methodology: "入口 Agent 使用当前规则入口和最终落地 SS 参数，经过正式转发路径访问面板测速接收器；测速流量按普通业务流量统计。",
+      methodology: "入口 Agent 使用当前规则入口和最终落地 SS 参数，经过正式转发路径访问面板测速接收器；iptables 入口通过隔离网络命名空间进入现有 PREROUTING/FORWARD 规则，测速流量按普通业务流量统计。",
     },
   };
   const job: Job = {
@@ -144,6 +146,7 @@ export function createLinkSpeedJob(input: {
       rateMbps: input.rateMbps,
       entryAddress: input.entryAddress,
       entryPort: input.entryPort,
+      entryMode: input.entryMode,
       ssMethod: input.ssMethod,
       ssPassword: input.ssPassword,
       benchmarkHost: input.benchmarkHost,
@@ -151,7 +154,7 @@ export function createLinkSpeedJob(input: {
     },
   };
   jobs.set(status.id, job);
-  linkSpeedLog(job, `created protocol=${input.protocol} duration=${input.duration}s rule=${input.ruleId} benchmark=${input.benchmarkHost}:${input.benchmarkPort}`);
+  linkSpeedLog(job, `created protocol=${input.protocol} duration=${input.duration}s rule=${input.ruleId} entryMode=${input.entryMode} benchmark=${input.benchmarkHost}:${input.benchmarkPort}`);
   job.timer = setTimeout(() => {
     linkSpeedLog(job, `timeout state=${job.status.state} pending=${[...job.pending.values()].join(",") || "none"}`, "warn");
     finish(job, "error", "测速超时，请检查入口规则、落地 SS 和测速端口的 TCP/UDP 连通性");

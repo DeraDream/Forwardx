@@ -37,7 +37,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.245"
+var Version = "2.2.246"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -2816,6 +2816,7 @@ func main() {
 	}
 	defer stateLock.Close()
 	restoreCountingChainStates(agentBootID)
+	cleanupStaleLinkSpeedNetworkNamespaces()
 
 	startAgentLogMaintenance()
 	// Register and start the communication/reconciliation loops before restoring

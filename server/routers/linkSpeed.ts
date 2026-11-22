@@ -105,6 +105,7 @@ export const linkSpeedRouter = router({
         route,
         entryAddress: "127.0.0.1",
         entryPort: sourcePort,
+        entryMode: String(rule.forwardType || "").toLowerCase() === "iptables" ? "iptables" : "listener",
         ssMethod: String(landing.method),
         ssPassword: String(landing.password),
         benchmarkHost: String(process.env.FORWARDX_LINK_SPEED_HOST || "").trim(),

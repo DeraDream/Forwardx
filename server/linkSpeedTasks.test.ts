@@ -25,6 +25,7 @@ test("full-link speed tasks advance prepare, run and cleanup while retaining mea
     ],
     entryAddress: "127.0.0.1",
     entryPort: 29539,
+    entryMode: "iptables",
     ssMethod: "aes-256-gcm",
     ssPassword: "secret-password",
     benchmarkHost: "panel.example.com",
@@ -33,6 +34,7 @@ test("full-link speed tasks advance prepare, run and cleanup while retaining mea
 
   const prepare = takeLinkSpeedTasks(hostId)[0];
   assert.equal(prepare.op, "prepare");
+  assert.equal(prepare.entryMode, "iptables");
   assert.equal(claimLinkSpeedTask(hostId, prepare.taskId, prepare.jobId), true);
   assert.ok(getLinkSpeedBenchmarkLease(prepare.token));
   assert.equal(reportLinkSpeedTask(hostId, { taskId: prepare.taskId, jobId: prepare.jobId, state: "ready" }), true);
