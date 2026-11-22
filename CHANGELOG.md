@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.4.124] - 2026-11-22
+
+### Fixed
+
+- 本地安装面板未配置 `FORWARDX_LINK_SPEED_HOST` 时，现在优先使用系统默认 IPv4 路由的公网源地址作为测速接收地址，不再回退到可能经过 Cloudflare/CDN 的面板域名。
+- 自动选择会排除回环、私网、CGNAT、链路本地和测速保留网段；显式配置仍具有最高优先级。
+
+Agent 保持 `2.2.246`；ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.4.123] - 2026-11-22
 
 ### Fixed

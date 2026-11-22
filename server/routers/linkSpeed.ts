@@ -10,6 +10,7 @@ import {
 import { withKeyedTaskLock } from "../keyedTaskLock";
 import { isAgentVersionAtLeast } from "../agentRouteUtils";
 import { AGENT_VERSION } from "../../shared/versions";
+import { resolveLinkSpeedHost } from "../linkSpeedHost";
 
 function enabled(value: unknown) {
   return ![false, 0, "0", "false"].includes(value as any);
@@ -108,7 +109,7 @@ export const linkSpeedRouter = router({
         entryMode: String(rule.forwardType || "").toLowerCase() === "iptables" ? "iptables" : "listener",
         ssMethod: String(landing.method),
         ssPassword: String(landing.password),
-        benchmarkHost: String(process.env.FORWARDX_LINK_SPEED_HOST || "").trim(),
+        benchmarkHost: resolveLinkSpeedHost(),
         benchmarkPort,
       });
     })),
