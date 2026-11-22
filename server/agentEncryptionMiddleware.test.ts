@@ -61,9 +61,11 @@ test("Agent middleware marks pre-auth failures as rejected", async () => {
   });
 });
 
-test("network profile routes are allowed through the encrypted Agent tunnel", () => {
+test("network profile and link-speed routes are allowed through the encrypted Agent tunnel", () => {
   assert.equal(AGENT_TUNNEL_PATHS.has("/api/agent/network-profile-report"), true);
   assert.equal(AGENT_TUNNEL_PATHS.has("/api/agent/network-profile-risk-proxy"), true);
+  assert.equal(AGENT_TUNNEL_PATHS.has("/api/agent/link-speed-claim"), true);
+  assert.equal(AGENT_TUNNEL_PATHS.has("/api/agent/link-speed-result"), true);
 });
 
 test("Agent auth proof keeps the full path inside the mounted Agent API router", async () => {

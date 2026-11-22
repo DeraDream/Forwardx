@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.4.121] - 2026-11-22
+
+### Fixed
+
+- 修复面板与 Agent 系统时钟存在数分钟偏差时，全链路测速租约被 Agent 错误判定为过期或超前的问题；租约现在使用已认证并校准的面板协议时间验证。
+- 修复 `/api/agent/link-speed-claim` 和 `/api/agent/link-speed-result` 未加入 Agent 加密隧道路由白名单、导致领取及结果回报返回 `400 Invalid encrypted request` 的问题。
+- 增加时钟偏差租约测试和测速加密路由白名单测试。
+
+Agent 升级至 `2.2.245`；ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.4.120] - 2026-11-22
 
 ### Fixed

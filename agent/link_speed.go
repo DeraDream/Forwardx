@@ -83,7 +83,7 @@ func speedReportFinal(cfg Config, task linkSpeedTask, result map[string]any) {
 	logf("link speed final report failed job=%s task=%s op=%s state=%v error=%v", task.JobID, task.TaskID, task.Op, result["state"], lastErr)
 }
 
-func validateLinkSpeedTask(task linkSpeedTask) error {
+func validateLinkSpeedTaskAt(task linkSpeedTask, now time.Time) error {
 	if len(task.JobID) != 36 || len(task.TaskID) != 36 || len(task.Token) != 64 {
 		return errors.New("invalid speed test identifiers")
 	}
@@ -96,8 +96,11 @@ func validateLinkSpeedTask(task linkSpeedTask) error {
 	if task.Protocol == "udp" && task.RateMbps < 1 {
 		return errors.New("UDP speed test rate must be 1-1000 Mbps")
 	}
-	if task.ExpiresAt <= time.Now().UnixMilli() || task.ExpiresAt > time.Now().Add(3*time.Minute).UnixMilli() {
+	if task.ExpiresAt <= now.UnixMilli() {
 		return errors.New("speed test lease expired")
+	}
+	if task.ExpiresAt > now.Add(3*time.Minute).UnixMilli() {
+		return errors.New("speed test lease is too far in the future")
 	}
 	if task.Op != "prepare" && task.Op != "run" && task.Op != "stop" {
 		return errors.New("unsupported speed test operation")
@@ -243,8 +246,9 @@ func startLinkSpeedSSLocal(cfg Config, session *linkSpeedSession, task linkSpeed
 
 func handleLinkSpeedTask(cfg Config, task linkSpeedTask) {
 	logf("link speed task received job=%s task=%s op=%s protocol=%s duration=%ds", task.JobID, task.TaskID, task.Op, task.Protocol, task.Duration)
-	if err := validateLinkSpeedTask(task); err != nil {
-		logf("link speed task rejected job=%s task=%s op=%s error=%v", task.JobID, task.TaskID, task.Op, err)
+	panelNow := encryptedResponseNow(currentPanelURL(cfg))
+	if err := validateLinkSpeedTaskAt(task, panelNow); err != nil {
+		logf("link speed task rejected job=%s task=%s op=%s error=%v leaseExpiresAt=%d panelNow=%d localNow=%d clockOffset=%s", task.JobID, task.TaskID, task.Op, err, task.ExpiresAt, panelNow.UnixMilli(), time.Now().UnixMilli(), panelNow.Sub(time.Now()).Round(time.Second))
 		speedReportFinal(cfg, task, map[string]any{"state": "error", "error": err.Error()})
 		return
 	}
@@ -302,7 +306,8 @@ func handleLinkSpeedTask(cfg Config, task linkSpeedTask) {
 			linkSpeedSessionsMu.Unlock()
 			return
 		}
-		ctx, cancel := context.WithDeadline(context.Background(), time.UnixMilli(task.ExpiresAt))
+		leaseRemaining := time.UnixMilli(task.ExpiresAt).Sub(panelNow)
+		ctx, cancel := context.WithTimeout(context.Background(), leaseRemaining)
 		session = &linkSpeedSession{ctx: ctx, cancel: cancel}
 		linkSpeedSessions[task.JobID] = session
 	}
