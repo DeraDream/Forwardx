@@ -21,6 +21,7 @@ import { ENV } from "./env";
 import { resolveTrustProxySetting } from "./trustProxy";
 import { authCapRouter } from "./authCaptcha";
 import { installSublinkProxy, startSublinkService, stopSublinkService } from "./sublinkService";
+import { startLinkSpeedBenchmarkServer } from "./linkSpeedBenchmark";
 
 installPanelLogger();
 
@@ -176,7 +177,12 @@ async function startServer() {
     );
   };
   startSublinkService(serverDir);
-  server.on("close", stopSublinkService);
+  const linkSpeedBenchmark = startLinkSpeedBenchmarkServer();
+  server.on("close", () => {
+    stopSublinkService();
+    linkSpeedBenchmark?.tcp.close();
+    linkSpeedBenchmark?.udp.close();
+  });
   if (listenHost) server.listen(port, listenHost, onListening);
   else server.listen(port, onListening);
 

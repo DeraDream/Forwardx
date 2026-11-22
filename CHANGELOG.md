@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.4.118] - 2026-11-22
+
+### Added
+
+- 网络拓扑列表为端口转发和转发链新增全链路 TCP/UDP 测速。入口 Agent 使用正式规则入口及最终落地 SS/SS2022 参数访问面板测速接收器，覆盖入口、中转、落地 SS 与国际网络路径。
+- 测速弹窗支持 TCP/UDP 切换、上传与下载实时曲线、平均/峰值速度，以及 UDP 丢包率和抖动；测速流量按普通业务流量计入现有统计。
+- Docker 面板新增默认 `5202/TCP+UDP` 测速接收端口，可通过 `FORWARDX_LINK_SPEED_PORT` 和 `FORWARDX_LINK_SPEED_HOST` 调整。
+
+Agent 升级至 `2.2.243`；ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.4.117] - 2026-11-22
 
 ### Fixed

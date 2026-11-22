@@ -29,6 +29,7 @@ import { isIP } from "net";
 import { resolve4, resolve6 } from "dns/promises";
 import { hasQueuedLookingGlassAgentTasks, takeLookingGlassAgentTasks } from "./lookingGlassAgentTasks";
 import { hasQueuedIperf3AgentTasks, takeIperf3AgentTasks } from "./iperf3AgentTasks";
+import { hasQueuedLinkSpeedTasks, takeLinkSpeedTasks } from "./linkSpeedTasks";
 import { hasQueuedPluginAgentTasks, takePluginAgentTasks } from "./pluginAgentTasks";
 import { getAgentPluginInventory, updateAgentPluginInventory } from "./agentPluginInventory";
 import { getAgentHostFromRequest, getAgentPresenceHostFromRequest, getResolvedAgentToken } from "./agentAuth";
@@ -6713,6 +6714,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
 
     const lookingGlassTests = takeLookingGlassAgentTasks(host.id);
     const iperf3Tasks = takeIperf3AgentTasks(host.id);
+    const linkSpeedTasks = takeLinkSpeedTasks(host.id);
     const pluginsAwaitingSync = new Set(pluginSyncTasks.map((task) => task.pluginId));
     const pluginTasks = supportsPluginTasks && reportedPluginInventory && !pluginSyncActionQueued
       ? takePluginAgentTasks(host.id, 4, (task) => (
@@ -6723,6 +6725,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     const hasPendingPluginTasks = supportsPluginTasks && hasQueuedPluginAgentTasks(host.id);
     const hasInteractiveTasks = lookingGlassTests.length > 0
       || iperf3Tasks.length > 0
+      || linkSpeedTasks.length > 0
+      || hasQueuedLinkSpeedTasks(host.id)
       || pluginTasks.length > 0
       || hasPendingPluginTasks
       || pluginSyncActionQueued
@@ -6806,6 +6810,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       && selfTests.length === 0
       && lookingGlassTests.length === 0
       && iperf3Tasks.length === 0
+      && linkSpeedTasks.length === 0
+      && !hasQueuedLinkSpeedTasks(host.id)
       && pluginTasks.length === 0
       && !hasPendingPluginTasks
       && !pluginSyncActionQueued
@@ -6857,6 +6863,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       interactiveTasks: hasInteractiveTasks ? (
         lookingGlassTests.length
         + iperf3Tasks.length
+        + linkSpeedTasks.length
         + pluginTasks.length
         + (hasPendingPluginTasks ? 1 : 0)
         + (forceTcping ? 1 : 0)
@@ -6872,6 +6879,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       stateSignatures: stateSections.signatures,
       lookingGlassTests,
       iperf3Tasks,
+      linkSpeedTasks,
       pluginTasks,
       agentUpgrade,
       panelUrl,

@@ -643,11 +643,15 @@ services:
       - "host.docker.internal:host-gateway"
     ports:
       - "${PORT:-9810}:3000"
+      - "${FORWARDX_LINK_SPEED_PORT:-5202}:${FORWARDX_LINK_SPEED_PORT:-5202}/tcp"
+      - "${FORWARDX_LINK_SPEED_PORT:-5202}:${FORWARDX_LINK_SPEED_PORT:-5202}/udp"
     environment:
       NODE_ENV: production
       PORT: 3000
       FORWARDX_PUBLIC_PORT: ${PORT:-9810}
       FORWARDX_PORT_MANAGEMENT: docker
+      FORWARDX_LINK_SPEED_PORT: ${FORWARDX_LINK_SPEED_PORT:-5202}
+      FORWARDX_LINK_SPEED_HOST: ${FORWARDX_LINK_SPEED_HOST:-}
       DATABASE_CONFIG_PATH: /data/database.json
       SQLITE_PATH: /data/forwardx.db
       MYSQL_CONFIG_PATH: /data/mysql.json
@@ -689,6 +693,7 @@ write_env() {
   cat > "$APP_DIR/.env" <<EOF
 PORT=$PORT
 FORWARDX_PUBLIC_PORT=$PORT
+FORWARDX_LINK_SPEED_PORT=5202
 JWT_SECRET=$jwt_secret
 COMPOSE_PROJECT_NAME=$PROJECT_NAME
 FORWARDX_CONTAINER_NAME=$CONTAINER_NAME

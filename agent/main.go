@@ -37,7 +37,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.242"
+var Version = "2.2.243"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -858,6 +858,7 @@ type heartbeatResp struct {
 	DNSWatch                []dnsWatchItem           `json:"dnsWatch"`
 	LookingGlassTests       []lookingGlassTask       `json:"lookingGlassTests"`
 	Iperf3Tasks             []iperf3Task             `json:"iperf3Tasks"`
+	LinkSpeedTasks          []linkSpeedTask          `json:"linkSpeedTasks"`
 	PluginTasks             []pluginAgentTask        `json:"pluginTasks"`
 	AgentUpgrade            *agentUpgrade            `json:"agentUpgrade"`
 	StateSignatures         map[string]string        `json:"stateSignatures,omitempty"`
@@ -3582,7 +3583,7 @@ func logHeartbeatResponse(mode string, resp *heartbeatResp, duration time.Durati
 	anomalous = anomalous || resp.ReconciliationCoalesced
 	anomalous = anomalous || resp.AgentUpgrade != nil || resp.PanelMigration != nil
 	anomalous = anomalous || len(resp.Actions) > 0 || len(resp.SelfTests) > 0
-	anomalous = anomalous || len(resp.LookingGlassTests) > 0 || len(resp.Iperf3Tasks) > 0 || len(resp.PluginTasks) > 0
+	anomalous = anomalous || len(resp.LookingGlassTests) > 0 || len(resp.Iperf3Tasks) > 0 || len(resp.LinkSpeedTasks) > 0 || len(resp.PluginTasks) > 0
 	interval := agentHeartbeatSummaryLogInterval
 	if anomalous {
 		interval = agentReportLogInterval
@@ -3604,7 +3605,7 @@ func logHeartbeatResponse(mode string, resp *heartbeatResp, duration time.Durati
 		len(resp.TunnelProbes),
 		len(resp.SelfTests),
 		len(resp.LookingGlassTests),
-		len(resp.Iperf3Tasks),
+		len(resp.Iperf3Tasks)+len(resp.LinkSpeedTasks),
 		len(resp.PluginTasks),
 		resp.NextInterval,
 		resp.ReconciliationCoalesced,
@@ -3971,6 +3972,9 @@ func heartbeat(cfg Config, forceReconcile ...bool) (heartbeatResult, error) {
 	}
 	for _, task := range resp.Iperf3Tasks {
 		go handleIperf3Task(cfg, task)
+	}
+	for _, task := range resp.LinkSpeedTasks {
+		go handleLinkSpeedTask(cfg, task)
 	}
 	for _, task := range resp.PluginTasks {
 		enqueuePluginAgentTask(cfg, task)

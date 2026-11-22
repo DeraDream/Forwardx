@@ -60,6 +60,6 @@ COPY --from=builder /app/client/dist ./client/dist
 COPY --from=builder /app/drizzle ./drizzle
 COPY --from=builder /app/package.json ./
 
-EXPOSE 3000
+EXPOSE 3000 5202/tcp 5202/udp
 ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["node", "dist/index.js"]

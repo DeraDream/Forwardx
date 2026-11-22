@@ -24,6 +24,7 @@ import { getTunnelAutoHopAggregate, getTunnelAutoHopDetails, recordTunnelAutoHop
 import { getTunnelMultiEntryHopDetails, getTunnelMultiEntryLatency, recordTunnelMultiEntryLatency } from "./tunnelMultiEntryLatencyState";
 import { completeLookingGlassAgentTask, updateLookingGlassAgentTaskProgress, type LookingGlassMethod } from "./lookingGlassAgentTasks";
 import { completeIperf3AgentTask } from "./iperf3AgentTasks";
+import { claimLinkSpeedTask, reportLinkSpeedTask } from "./linkSpeedTasks";
 import { completePluginAgentTask } from "./pluginAgentTasks";
 import { getAgentHostIdentityFromRequest } from "./agentAuth";
 import { applyTrafficMultiplier, normalizeTrafficMultiplier } from "../shared/trafficMultiplier";
@@ -642,6 +643,36 @@ agentRouter.post("/api/agent/iperf3-result", async (req: Request, res: Response)
     res.json({ success: ok });
   } catch (error) {
     console.error("[Agent Iperf3] Error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+agentRouter.post("/api/agent/link-speed-claim", async (req: Request, res: Response) => {
+  try {
+    const host = await getAgentHostIdentityFromRequest(req);
+    if (!host) {
+      res.status(401).json({ error: "Invalid token" });
+      return;
+    }
+    const allowed = claimLinkSpeedTask(Number(host.id), String(req.body?.taskId || ""), String(req.body?.jobId || ""));
+    res.json({ allowed });
+  } catch (error) {
+    console.error("[Agent LinkSpeedClaim] Error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+agentRouter.post("/api/agent/link-speed-result", async (req: Request, res: Response) => {
+  try {
+    const host = await getAgentHostIdentityFromRequest(req);
+    if (!host) {
+      res.status(401).json({ error: "Invalid token" });
+      return;
+    }
+    const accepted = reportLinkSpeedTask(Number(host.id), req.body?.result);
+    res.json({ success: accepted });
+  } catch (error) {
+    console.error("[Agent LinkSpeedResult] Error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
