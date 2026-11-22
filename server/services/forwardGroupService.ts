@@ -383,6 +383,10 @@ export async function runForwardGroupChainSelfTest(groupId: number) {
       method: probe.method,
       hopLabel: probe.hopLabel,
       routeLabel: probe.routeLabel,
+      fromHostId: probe.fromHostId,
+      toHostId: probe.toHostId,
+      hopIndex: probe.hopIndex,
+      hopCount: probe.hopCount,
       batchId,
       runtimeDependent: probe.runtimeDependent,
     });

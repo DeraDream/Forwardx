@@ -226,10 +226,10 @@ test("forward-group test history matches the exact group id", () => {
     await schema.ensureDatabaseSchema();
 
     const groups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
-    const insertTest = async (id, groupId, status, updatedAt) => {
+    const insertTest = async (id, groupId, status, updatedAt, ruleId = 0) => {
       await runtime.executeRaw(
-        'INSERT INTO "forward_tests" ("id", "ruleId", "hostId", "userId", "status", "message", "createdAt", "updatedAt") VALUES (?, 0, 1, ?, ?, ?, ?, ?)',
-        [id, groupId, status, JSON.stringify({ kind: "forward-chain-hop-summary", groupId, message: "group-" + groupId }), updatedAt, updatedAt],
+        'INSERT INTO "forward_tests" ("id", "ruleId", "hostId", "userId", "status", "message", "createdAt", "updatedAt") VALUES (?, ?, 1, ?, ?, ?, ?, ?)',
+        [id, ruleId, groupId, status, JSON.stringify({ kind: "forward-chain-hop-summary", groupId, message: "group-" + groupId }), updatedAt, updatedAt],
       );
     };
 
@@ -240,6 +240,8 @@ test("forward-group test history matches the exact group id", () => {
       await insertTest(4, 1, "running", 300);
       await insertTest(10, 10, "success", 200);
       await insertTest(11, 10, "pending", 400);
+      await insertTest(20, 1, "success", 500, 6);
+      await insertTest(21, 1, "running", 600, 6);
 
       const historical = await groups.getLatestForwardGroupTest(1, { includeActive: false });
       assert.equal(Number(historical?.id), 2, "completed rows with equal timestamps must prefer the larger id");

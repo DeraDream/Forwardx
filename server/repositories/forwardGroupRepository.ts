@@ -1172,34 +1172,7 @@ export async function cleanOldForwardGroupEvents(retainHours = 72) {
   );
 }
 
-async function withForwardChainTargetLabel(test: any, template: any) {
-  if (!test?.message || !template) return test;
-  const targetIp = String(template?.targetIp || "").trim();
-  const targetPort = Number(template?.targetPort || 0);
-  if (!targetIp || targetPort <= 0) return test;
-  const targetLabel = await forwardChainTargetLabel(template);
-  const oldTarget = `目标 ${targetIp}:${targetPort}`;
-  if (!targetLabel || targetLabel === oldTarget || !String(test.message).includes(oldTarget)) return test;
-  try {
-    const parsed = JSON.parse(String(test.message));
-    if (Array.isArray(parsed?.details)) {
-      parsed.details = parsed.details.map((detail: any) => ({
-        ...detail,
-        routeLabel: typeof detail?.routeLabel === "string" ? detail.routeLabel.replace(oldTarget, targetLabel) : detail?.routeLabel,
-        hopLabel: typeof detail?.hopLabel === "string" ? detail.hopLabel.replace(oldTarget, targetLabel) : detail?.hopLabel,
-      }));
-      if (typeof parsed.message === "string") parsed.message = parsed.message.replaceAll(oldTarget, targetLabel);
-      return { ...test, message: JSON.stringify(parsed) };
-    }
-  } catch {
-    // Older records may be plain text; fall back to a direct replacement.
-  }
-  return { ...test, message: String(test.message).replaceAll(oldTarget, targetLabel) };
-}
-
 export async function getLatestForwardGroupTest(groupId: number, options: { includeActive?: boolean } = {}) {
-  const templates = await getForwardGroupTemplateRules(groupId);
-  const templateIds = (templates as any[]).map((rule: any) => Number(rule.id)).filter((id: number) => id > 0);
   const table = quoteIdentifier("forward_tests");
   const idCol = quoteIdentifier("id");
   const ruleCol = quoteIdentifier("ruleId");
@@ -1209,24 +1182,23 @@ export async function getLatestForwardGroupTest(groupId: number, options: { incl
   const normalizedGroupId = Number(groupId);
   const groupNeedleWithTrailingField = `%"groupId":${normalizedGroupId},%`;
   const groupNeedleAtObjectEnd = `%"groupId":${normalizedGroupId}}%`;
-  const ruleFilter = templateIds.length > 0
-    ? `${ruleCol} IN ${inList(templateIds).sql} OR `
-    : "";
-  const filterSql = `(${ruleFilter}${messageCol} LIKE ? OR ${messageCol} LIKE ?)`;
-  const filterArgs: any[] = [...templateIds, groupNeedleWithTrailingField, groupNeedleAtObjectEnd];
-  const template = (templates as any[])[0] || null;
+  // Group management tests have ruleId=0. Template-rule tests may carry the
+  // same groupId but include one of several unrelated business targets, so
+  // mixing them here makes the generic chain dialog display a random landing.
+  const filterSql = `${ruleCol} = 0 AND (${messageCol} LIKE ? OR ${messageCol} LIKE ?)`;
+  const filterArgs: any[] = [groupNeedleWithTrailingField, groupNeedleAtObjectEnd];
   if (options.includeActive !== false) {
     const pendingRows = await queryRaw<any>(
       `SELECT * FROM ${table} WHERE ${filterSql} AND ${quoteIdentifier("status")} IN ('pending', 'running') ORDER BY ${updatedCol} DESC, ${createdCol} DESC, ${idCol} DESC LIMIT 1`,
       filterArgs,
     );
-    if (pendingRows[0]) return withForwardChainTargetLabel(pendingRows[0], template);
+    if (pendingRows[0]) return pendingRows[0];
   }
   const rows = await queryRaw<any>(
     `SELECT * FROM ${table} WHERE ${filterSql} AND ${quoteIdentifier("status")} IN ('success', 'failed', 'timeout') ORDER BY ${updatedCol} DESC, CASE WHEN ${messageCol} LIKE '%forward-chain-hop-summary%' THEN 0 ELSE 1 END, ${createdCol} DESC, ${idCol} DESC LIMIT 1`,
     filterArgs,
   );
-  return withForwardChainTargetLabel(rows[0], template);
+  return rows[0] || null;
 }
 
 export async function getForwardGroupPrimaryTemplateRule(groupId: number) {
