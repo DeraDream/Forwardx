@@ -88,7 +88,13 @@ import {
 } from "recharts";
 import { MAX_FORWARD_GROUP_MEMBERS } from "@shared/forwardGroup";
 import { LinkTestProbeView, parseLinkTestMessage, type LinkTestPlannedSegment } from "@/components/LinkTestLatencySummary";
-import { addHostNodeMeta, addNodeMetaAliases, hostDisplayName } from "@/lib/linkTestNodeMeta";
+import {
+  addHostNodeMeta,
+  addNodeMetaAliases,
+  hostDisplayName,
+  hostNodeMeta,
+  relabelLinkTestNodeMeta,
+} from "@/lib/linkTestNodeMeta";
 import {
   trafficMultiplierFromInput,
   formatTrafficMultiplier,
@@ -751,7 +757,9 @@ function ForwardGroupSelfTestDialog({
     const lastHost = hostById?.get(Number(members[members.length - 1]?.hostId || 0));
     const targetRemark = String(group?.remark || "").trim();
     const targetLabel = targetRemark || hostDisplayName(lastHost) || groupName;
-    const targetMeta = targetLabel ? { label: targetLabel } : undefined;
+    // The chain endpoint is still a managed host. Relabel its complete host
+    // metadata instead of replacing it with a label-only target alias.
+    const targetMeta = relabelLinkTestNodeMeta(hostNodeMeta(lastHost), targetLabel);
     if (targetMeta) addNodeMetaAliases(meta, [targetLabel, "目标", "目的节点"], targetMeta);
     const plannedSegments: LinkTestPlannedSegment[] = [];
     const hopCount = (entryMembers.length > 0 ? 1 : 0) + Math.max(0, members.length - 1);

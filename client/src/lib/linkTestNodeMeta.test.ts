@@ -4,6 +4,7 @@ import {
   addHostNodeMeta,
   countryCodeToEmoji,
   hostNodeMeta,
+  relabelLinkTestNodeMeta,
   targetGeoNodeMeta,
   type LinkTestNodeMeta,
 } from "./linkTestNodeMeta";
@@ -36,6 +37,21 @@ test("adds host metadata aliases used by link-test nodes", () => {
   assert.equal(metadata["198.51.100.9"]?.countryCode, "SG");
   assert.equal(metadata["Exit"]?.countryCode, "SG");
   assert.equal(metadata["9"]?.countryCode, "SG");
+});
+
+test("relabeling a managed chain endpoint preserves its host metadata", () => {
+  const relabeled = relabelLinkTestNodeMeta(hostNodeMeta({
+    id: 3,
+    name: "DataWave-SG",
+    ipv4: "82.109.97.96",
+    isOnline: true,
+    geoCountryCode: "SG",
+    geoCountryName: "Singapore",
+  }), "DataWave-SG");
+
+  assert.equal(relabeled?.address, "82.109.97.96");
+  assert.equal(relabeled?.countryCode, "SG");
+  assert.equal(relabeled?.online, true);
 });
 
 test("keeps target lookup country metadata available for flag rendering", () => {

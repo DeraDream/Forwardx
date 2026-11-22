@@ -59,6 +59,15 @@ export function hostNodeMeta(host: any | null | undefined, fallbackLabel?: strin
   };
 }
 
+export function relabelLinkTestNodeMeta(
+  meta: LinkTestNodeMeta | null | undefined,
+  label: unknown,
+): LinkTestNodeMeta | undefined {
+  const normalizedLabel = String(label || "").trim();
+  if (!normalizedLabel) return meta || undefined;
+  return { ...(meta || {}), label: normalizedLabel };
+}
+
 export function targetGeoNodeMeta(
   label: string,
   address: string,
