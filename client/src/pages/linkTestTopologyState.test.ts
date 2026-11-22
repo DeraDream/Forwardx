@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   configuredRuleTunnelHopIds,
   mergeLinkTestRouteHost,
+  resolveLinkTestRuleRoute,
   selectLinkTestTopologySnapshot,
 } from "./linkTestTopologyState";
 
@@ -25,6 +26,27 @@ test("a manual link test keeps the complete cached topology during a transient c
 
   assert.equal(selectLinkTestTopologySnapshot(complete, collapsed, true), complete);
   assert.equal(selectLinkTestTopologySnapshot(complete, collapsed, false), collapsed);
+  assert.equal(selectLinkTestTopologySnapshot(collapsed, complete, true), complete);
+});
+
+test("a referenced chain and landing service resolve to the complete host-id path", () => {
+  const entryRule = { id: 4, forwardGroupId: 3, targetRuleId: 1, targetIp: "103.97.175.69", targetPort: 29539 };
+  const chainRule = { id: 1, forwardGroupId: 1, targetLandingServiceId: 20, targetIp: "217.116.173.144", targetPort: 29539 };
+  const hostIdsByGroup = new Map<number, number[]>([
+    [3, [1]],
+    [1, [2, 3]],
+  ]);
+  const resolved = resolveLinkTestRuleRoute(
+    entryRule,
+    new Map<number, any>([[1, chainRule], [4, entryRule]]),
+    new Map([[20, { id: 20, hostId: 8, name: "LegendSG" }]]),
+    (rule) => hostIdsByGroup.get(Number(rule.forwardGroupId)) || [],
+  );
+
+  assert.deepEqual(resolved.hostIds, [1, 2, 3, 8]);
+  assert.equal(resolved.targetIp, "217.116.173.144");
+  assert.equal(resolved.targetPort, 29539);
+  assert.equal(resolved.landing?.hostId, 8);
 });
 
 test("a configured tunnel expands by host id regardless of the legacy forward type", () => {

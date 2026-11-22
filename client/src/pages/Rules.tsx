@@ -14,6 +14,7 @@ import {
 import {
   configuredRuleTunnelHopIds,
   mergeLinkTestRouteHost,
+  resolveLinkTestRuleRoute,
   selectLinkTestTopologySnapshot,
   type LinkTestTopologySnapshot,
 } from "./linkTestTopologyState";
@@ -2085,31 +2086,16 @@ function resolveRuleGlobeRoute(
   ruleById: Map<number, any>,
   landingById: Map<number, any>,
 ) {
-  const hostIds = ruleGlobeRouteHostIds(rule, tunnelById, forwardGroupById);
-  const seen = new Set<number>([Number(rule?.id || 0)]);
-  let terminalRule = rule;
-  let targetLandingServiceId = Number(rule?.targetLandingServiceId || 0);
-  while (Number(terminalRule?.targetRuleId || 0) > 0) {
-    const targetRuleId = Number(terminalRule.targetRuleId);
-    if (seen.has(targetRuleId)) break;
-    const referenced = ruleById.get(targetRuleId);
-    if (!referenced) break;
-    seen.add(targetRuleId);
-    hostIds.push(...ruleGlobeRouteHostIds(referenced, tunnelById, forwardGroupById));
-    terminalRule = referenced;
-    targetLandingServiceId = Number(referenced?.targetLandingServiceId || targetLandingServiceId || 0);
-  }
-  const landing = landingById.get(targetLandingServiceId);
-  if (Number(landing?.hostId || 0) > 0) hostIds.push(Number(landing.hostId));
-  return {
-    hostIds: hostIds.filter(
-      (hostId: number, index: number) =>
-        hostId > 0 && (index === 0 || hostId !== hostIds[index - 1]),
+  return resolveLinkTestRuleRoute(
+    rule,
+    ruleById,
+    landingById,
+    (routeRule) => ruleGlobeRouteHostIds(
+      routeRule,
+      tunnelById,
+      forwardGroupById,
     ),
-    targetIp: String(terminalRule?.targetIp || rule?.targetIp || ""),
-    targetPort: Number(terminalRule?.targetPort || rule?.targetPort || 0),
-    referenced: seen.size > 1 || !!landing,
-  };
+  );
 }
 
 function buildRuleGlobeData(
@@ -3431,6 +3417,15 @@ function RulesContent() {
     id: number;
     name: string;
   } | null>(null);
+  const selfTestReferenceRulesQuery = trpc.rules.list.useQuery(
+    effectiveRulesQuery as any,
+    {
+      enabled: !!selfTestRule,
+      staleTime: 10_000,
+      refetchOnWindowFocus: false,
+      placeholderData: (previousData: any) => previousData,
+    },
+  );
   const [qualityRule, setQualityRule] = useState<LinkQualityTarget | null>(null);
   const [diagnosticRule, setDiagnosticRule] = useState<DiagnosticTarget | null>(null);
   const [networkProfileTarget, setNetworkProfileTarget] = useState<{ hostId: number; hostName: string } | null>(null);
@@ -5872,10 +5867,42 @@ function RulesContent() {
       ) || null
     );
   }, [rules, selectedScopedRules, selfTestRule?.id]);
+  const selfTestResolvedRoute = useMemo(() => {
+    if (!selfTestRuleDetail) return null;
+    const ruleById = new Map<number, any>();
+    [
+      ...(selfTestReferenceRulesQuery.data || []),
+      ...(rules || []),
+      ...(selectedScopedRules || []),
+    ].forEach((rule: any) => {
+      const id = Number(rule?.id || 0);
+      if (id > 0) ruleById.set(id, rule);
+    });
+    const landingById = new Map<number, any>(
+      (landingServicesQuery.data || []).map((service: any) => [Number(service.id), service]),
+    );
+    return resolveRuleGlobeRoute(
+      selfTestRuleDetail,
+      tunnelById,
+      forwardGroupById,
+      ruleById,
+      landingById,
+    );
+  }, [
+    forwardGroupById,
+    landingServicesQuery.data,
+    rules,
+    selectedScopedRules,
+    selfTestReferenceRulesQuery.data,
+    selfTestRuleDetail,
+    tunnelById,
+  ]);
   const selfTestTargetAddress = useMemo(() => {
-    const target = String(selfTestRuleDetail?.targetIp || "").trim();
+    const target = String(
+      selfTestResolvedRoute?.targetIp || selfTestRuleDetail?.targetIp || "",
+    ).trim();
     return target ? normalizeAddressKey(target) : "";
-  }, [selfTestRuleDetail?.targetIp]);
+  }, [selfTestResolvedRoute?.targetIp, selfTestRuleDetail?.targetIp]);
   const ruleGlobeTargetAddresses = useMemo(
     () =>
       Array.from(
@@ -6820,7 +6847,7 @@ function RulesContent() {
         `主机 #${hostId}`
       );
     };
-    const routeHostIds = ruleGlobeRouteHostIds(
+    const routeHostIds = selfTestResolvedRoute?.hostIds || ruleGlobeRouteHostIds(
       rule,
       tunnelById,
       forwardGroupById,
@@ -6867,11 +6894,16 @@ function RulesContent() {
     });
     if (exitHost) addHostNodeMeta(meta, exitHost, ["出口"]);
 
-    const targetIp = String(rule.targetIp || "").trim();
+    const targetIp = String(
+      selfTestResolvedRoute?.targetIp || rule.targetIp || "",
+    ).trim();
+    const targetPort = Number(
+      selfTestResolvedRoute?.targetPort || rule.targetPort || 0,
+    );
     const targetText =
       formatAddressWithPort(
         targetIp || "-",
-        Number(rule.targetPort || 0) || "-",
+        targetPort || "-",
       ) || "目标";
     const ruleLabel = String(
       rule.name || selfTestRule?.name || `规则 #${rule.id || "-"}`,
@@ -6890,7 +6922,7 @@ function RulesContent() {
           targetIp,
           targetText,
           `目标 ${targetText}`,
-          `目标 ${targetIp}:${rule.targetPort || "-"}`,
+          `目标 ${targetIp}:${targetPort || "-"}`,
           "目标",
           "目的节点",
         ],
@@ -6910,7 +6942,7 @@ function RulesContent() {
           targetIp,
           targetText,
           `目标 ${targetText}`,
-          `目标 ${targetIp}:${rule.targetPort || "-"}`,
+          `目标 ${targetIp}:${targetPort || "-"}`,
           "目标",
           "目的节点",
         ],
@@ -7059,7 +7091,9 @@ function RulesContent() {
       }
     }
     const exitHostForTarget = routeHosts[routeHosts.length - 1] || sourceHost;
-    if (exitHostForTarget) {
+    const routeEndsAtTargetHost = Number(targetHost?.id || 0) > 0
+      && Number(targetHost.id) === Number(routeHostIds[routeHostIds.length - 1] || 0);
+    if (exitHostForTarget && !routeEndsAtTargetHost) {
       const exitHostId = Number(
         exitHostForTarget.id || routeHostIds[routeHostIds.length - 1] || 0,
       );
@@ -7100,6 +7134,7 @@ function RulesContent() {
     forwardGroupById,
     getRuleEntryHost,
     hosts,
+    selfTestResolvedRoute,
     selfTestRule?.name,
     selfTestRuleDetail,
     targetGeoByAddress,
