@@ -1877,6 +1877,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         || hasHostTcpingRequest(host.id)
         || hasQueuedLookingGlassAgentTasks(host.id)
         || hasQueuedIperf3AgentTasks(host.id)
+        || hasQueuedLinkSpeedTasks(host.id)
         || hasQueuedPluginAgentTasks(host.id),
       recoveryTriggered,
       addressChanged,
@@ -1920,6 +1921,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         selfTests: [],
         lookingGlassTests: [],
         iperf3Tasks: [],
+        linkSpeedTasks: [],
         pluginTasks: [],
         agentUpgrade: null,
         panelUrl: stablePlan.panelUrl,
