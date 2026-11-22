@@ -37,7 +37,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.243"
+var Version = "2.2.244"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -873,6 +873,7 @@ type heartbeatResp struct {
 	ReconciliationCoalesced bool                     `json:"reconciliationCoalesced,omitempty"`
 	NextPresenceInterval    int                      `json:"nextPresenceInterval,omitempty"`
 	MetricsOnly             bool                     `json:"metricsOnly,omitempty"`
+	FullHeartbeatRequired   bool                     `json:"fullHeartbeatRequired,omitempty"`
 	TrafficReportInterval   int                      `json:"trafficReportInterval,omitempty"`
 	TrafficReportIntervalMs int                      `json:"trafficReportIntervalMs,omitempty"`
 }
@@ -881,6 +882,7 @@ type heartbeatResult struct {
 	NextInterval            int
 	ReconciliationCoalesced bool
 	MetricsOnly             bool
+	FullHeartbeatRequired   bool
 }
 
 type panelMigrationDirective struct {
@@ -2881,10 +2883,14 @@ func main() {
 				nextInterval = int(agentPresenceInterval / time.Second)
 			} else if err != nil {
 				nextInterval = cfg.Interval
+			} else if result.FullHeartbeatRequired {
+				heartbeatForceReconcileWake.Store(true)
+				nextInterval = 1
+				logf("full heartbeat requested by panel after keepalive")
 			} else if nextInterval < 2 {
 				nextInterval = cfg.Interval
 			}
-			if nextInterval < 2 {
+			if nextInterval < 2 && !result.FullHeartbeatRequired {
 				nextInterval = 2
 			}
 			select {
@@ -3581,7 +3587,7 @@ func logHeartbeatResponse(mode string, resp *heartbeatResp, duration time.Durati
 	}
 	anomalous := resp.RequestLocalState
 	anomalous = anomalous || resp.ReconciliationCoalesced
-	anomalous = anomalous || resp.AgentUpgrade != nil || resp.PanelMigration != nil
+	anomalous = anomalous || resp.AgentUpgrade != nil || resp.PanelMigration != nil || resp.FullHeartbeatRequired
 	anomalous = anomalous || len(resp.Actions) > 0 || len(resp.SelfTests) > 0
 	anomalous = anomalous || len(resp.LookingGlassTests) > 0 || len(resp.Iperf3Tasks) > 0 || len(resp.LinkSpeedTasks) > 0 || len(resp.PluginTasks) > 0
 	interval := agentHeartbeatSummaryLogInterval
@@ -3595,7 +3601,7 @@ func logHeartbeatResponse(mode string, resp *heartbeatResp, duration time.Durati
 	logf(
 		"heartbeat response mode=%s duration=%s actions=%d desiredActions=%d runningRules=%d tunnelProbes=%d "+
 			"selfTests=%d interactive=%d/%d/%d next=%ds coalesced=%v requestLocalState=%v "+
-			"metricsOnly=%v forceTcping=%v pendingActions=%d queued=%d ingress=%d workers=%d/%d "+
+			"metricsOnly=%v fullHeartbeatRequired=%v forceTcping=%v pendingActions=%d queued=%d ingress=%d workers=%d/%d "+
 			"revisions=%d/%d eventStream=%v",
 		mode,
 		duration.Round(time.Millisecond),
@@ -3611,6 +3617,7 @@ func logHeartbeatResponse(mode string, resp *heartbeatResp, duration time.Durati
 		resp.ReconciliationCoalesced,
 		resp.RequestLocalState,
 		resp.MetricsOnly,
+		resp.FullHeartbeatRequired,
 		resp.ForceTCPing,
 		atomic.LoadInt64(&actionPendingCount),
 		len(actionQueue),
@@ -4163,7 +4170,11 @@ func heartbeatKeepalive(cfg Config) (heartbeatResult, error) {
 	if resp.RequestLocalState {
 		requestLocalRuntimeStateUpload()
 	}
-	return heartbeatResult{NextInterval: resp.NextInterval, MetricsOnly: resp.MetricsOnly}, nil
+	return heartbeatResult{
+		NextInterval:          resp.NextInterval,
+		MetricsOnly:           resp.MetricsOnly,
+		FullHeartbeatRequired: resp.FullHeartbeatRequired,
+	}, nil
 }
 
 // heartbeatPresence only proves that the authenticated Agent is alive. It is

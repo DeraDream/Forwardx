@@ -1832,6 +1832,10 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     if (busyHeartbeat) {
       const panelUrl = await resolveAgentAdvertisedPanelUrl();
       const topologyTrafficWatching = isHostTopologyTrafficWatching(host.id);
+      const linkSpeedHeartbeatRequired = hasQueuedLinkSpeedTasks(host.id);
+      if (linkSpeedHeartbeatRequired) {
+        appendPanelLog("info", `[LinkSpeed] host=${host.id} busy heartbeat requested full heartbeat for queued task`);
+      }
       const metricsWatching = isHostMetricsWatching(host.id) || topologyTrafficWatching;
       logAgentHeartbeatSummary({
         hostId: logHostId,
@@ -1855,6 +1859,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         metricsWatching,
         trafficReportInterval: metricsWatching ? 1 : undefined,
         trafficReportIntervalMs: metricsWatching ? (topologyTrafficWatching ? 500 : 1_000) : undefined,
+        fullHeartbeatRequired: linkSpeedHeartbeatRequired,
       }));
       return;
     }

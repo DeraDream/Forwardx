@@ -73,12 +73,14 @@ func speedReport(cfg Config, task linkSpeedTask, result map[string]any) error {
 }
 
 func speedReportFinal(cfg Config, task linkSpeedTask, result map[string]any) {
+	var lastErr error
 	for i := 0; i < 3; i++ {
-		if speedReport(cfg, task, result) == nil {
+		if lastErr = speedReport(cfg, task, result); lastErr == nil {
 			return
 		}
 		time.Sleep(150 * time.Millisecond)
 	}
+	logf("link speed final report failed job=%s task=%s op=%s state=%v error=%v", task.JobID, task.TaskID, task.Op, result["state"], lastErr)
 }
 
 func validateLinkSpeedTask(task linkSpeedTask) error {
@@ -240,16 +242,36 @@ func startLinkSpeedSSLocal(cfg Config, session *linkSpeedSession, task linkSpeed
 }
 
 func handleLinkSpeedTask(cfg Config, task linkSpeedTask) {
+	logf("link speed task received job=%s task=%s op=%s protocol=%s duration=%ds", task.JobID, task.TaskID, task.Op, task.Protocol, task.Duration)
 	if err := validateLinkSpeedTask(task); err != nil {
+		logf("link speed task rejected job=%s task=%s op=%s error=%v", task.JobID, task.TaskID, task.Op, err)
 		speedReportFinal(cfg, task, map[string]any{"state": "error", "error": err.Error()})
 		return
 	}
 	var claim struct {
 		Allowed bool `json:"allowed"`
 	}
-	if err := post(cfg, "/api/agent/link-speed-claim", map[string]any{"jobId": task.JobID, "taskId": task.TaskID}, &claim); err != nil || !claim.Allowed {
+	var claimErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		claim.Allowed = false
+		claimErr = post(cfg, "/api/agent/link-speed-claim", map[string]any{"jobId": task.JobID, "taskId": task.TaskID}, &claim)
+		if claimErr == nil {
+			break
+		}
+		logf("link speed claim failed job=%s task=%s op=%s attempt=%d/3 error=%v", task.JobID, task.TaskID, task.Op, attempt, claimErr)
+		if attempt < 3 {
+			time.Sleep(time.Duration(attempt) * 300 * time.Millisecond)
+		}
+	}
+	if claimErr != nil {
+		logf("link speed task abandoned after claim errors job=%s task=%s op=%s error=%v", task.JobID, task.TaskID, task.Op, claimErr)
 		return
 	}
+	if !claim.Allowed {
+		logf("link speed claim rejected job=%s task=%s op=%s", task.JobID, task.TaskID, task.Op)
+		return
+	}
+	logf("link speed claim accepted job=%s task=%s op=%s", task.JobID, task.TaskID, task.Op)
 	linkSpeedSessionsMu.Lock()
 	for id, at := range linkSpeedSeen {
 		if time.Since(at) > 4*time.Minute {
@@ -258,6 +280,7 @@ func handleLinkSpeedTask(cfg Config, task linkSpeedTask) {
 	}
 	if _, seen := linkSpeedSeen[task.TaskID]; seen {
 		linkSpeedSessionsMu.Unlock()
+		logf("link speed duplicate task ignored job=%s task=%s op=%s", task.JobID, task.TaskID, task.Op)
 		return
 	}
 	linkSpeedSeen[task.TaskID] = time.Now()
@@ -270,6 +293,7 @@ func handleLinkSpeedTask(cfg Config, task linkSpeedTask) {
 		if session != nil {
 			session.close()
 		}
+		logf("link speed stop completed job=%s task=%s sessionFound=%v", task.JobID, task.TaskID, session != nil)
 		speedReportFinal(cfg, task, map[string]any{"state": "stopped"})
 		return
 	}
@@ -288,14 +312,17 @@ func handleLinkSpeedTask(cfg Config, task linkSpeedTask) {
 		return
 	}
 	fail := func(err error) {
+		logf("link speed task failed job=%s task=%s op=%s error=%v", task.JobID, task.TaskID, task.Op, err)
 		session.close()
 		speedReportFinal(cfg, task, map[string]any{"state": "error", "error": err.Error()})
 	}
 	if task.Op == "prepare" {
+		logf("link speed prepare started job=%s task=%s entry=%s:%d benchmark=%s:%d", task.JobID, task.TaskID, task.EntryAddress, task.EntryPort, task.BenchmarkHost, task.BenchmarkPort)
 		if err := startLinkSpeedSSLocal(cfg, session, task); err != nil {
 			fail(err)
 			return
 		}
+		logf("link speed prepare ready job=%s task=%s", task.JobID, task.TaskID)
 		speedReportFinal(cfg, task, map[string]any{"state": "ready"})
 		return
 	}
@@ -307,6 +334,7 @@ func handleLinkSpeedTask(cfg Config, task linkSpeedTask) {
 	session.running = true
 	task.Target = session.target
 	session.mu.Unlock()
+	logf("link speed run started job=%s task=%s protocol=%s duration=%ds", task.JobID, task.TaskID, task.Protocol, task.Duration)
 	updates := make(chan speedSample, 640)
 	var updatesMu sync.Mutex
 	updatesClosed := false
@@ -343,6 +371,7 @@ func handleLinkSpeedTask(cfg Config, task linkSpeedTask) {
 		fail(err)
 		return
 	}
+	logf("link speed run completed job=%s task=%s uploadMbps=%.2f downloadMbps=%.2f", task.JobID, task.TaskID, upload.Mbps, download.Mbps)
 	speedReportFinal(cfg, task, map[string]any{"state": "completed", "upload": upload, "download": download})
 }
 

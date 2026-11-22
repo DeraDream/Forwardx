@@ -93,8 +93,10 @@ export function buildBusyAgentHeartbeatResponse(input: {
   metricsWatching?: boolean;
   trafficReportInterval?: number;
   trafficReportIntervalMs?: number;
+  fullHeartbeatRequired?: boolean;
 }) {
-  const metricsOnly = input.metricsWatching === true && !input.requestLocalState;
+  const fullHeartbeatRequired = input.fullHeartbeatRequired === true;
+  const metricsOnly = input.metricsWatching === true && !input.requestLocalState && !fullHeartbeatRequired;
   return {
     success: true,
     actions: [],
@@ -106,8 +108,9 @@ export function buildBusyAgentHeartbeatResponse(input: {
     agentUpgrade: null,
     panelUrl: input.panelUrl,
     forceTcping: false,
-    nextInterval: metricsOnly ? 3 : 5,
+    nextInterval: fullHeartbeatRequired ? 1 : metricsOnly ? 3 : 5,
     requestLocalState: input.requestLocalState,
+    fullHeartbeatRequired,
     compactReports: true,
     presenceSupported: true,
     metricsOnly,

@@ -694,6 +694,19 @@ test("metrics watcher busy heartbeats explicitly select the metrics-only mode", 
   assert.equal(response.nextInterval, 3);
 });
 
+test("queued interactive work forces a full heartbeat out of metrics-only mode", () => {
+  const response = buildBusyAgentHeartbeatResponse({
+    panelUrl: "https://panel.example.test",
+    requestLocalState: false,
+    metricsWatching: true,
+    fullHeartbeatRequired: true,
+  });
+  assert.equal(response.metricsOnly, false);
+  assert.equal(response.fullHeartbeatRequired, true);
+  assert.equal(response.nextInterval, 1);
+  assert.deepEqual(response.linkSpeedTasks, []);
+});
+
 test("metrics-only heartbeats do not erase the last reported mimic runtime state", () => {
   assert.deepEqual(buildReportedRuntimeHeartbeatPatch({
     hasLocalRuntimeState: false,

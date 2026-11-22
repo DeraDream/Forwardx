@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import { pushAgentRefresh } from "./agentEvents";
 import { APP_VERSION } from "../shared/versions";
+import { appendPanelLog } from "./_core/panelLogger";
 import {
   linkSpeedActive,
   type LinkSpeedMeasurement,
@@ -40,6 +41,14 @@ type Job = {
 const jobs = new Map<string, Job>();
 const queues = new Map<number, LinkSpeedAgentTask[]>();
 
+function shortId(value: string) {
+  return String(value || "-").slice(0, 8);
+}
+
+function linkSpeedLog(job: Job, message: string, level: "info" | "warn" = "info") {
+  appendPanelLog(level, `[LinkSpeed] job=${shortId(job.status.id)} host=${job.hostId} ${message}`);
+}
+
 function enqueue(job: Job, op: LinkSpeedAgentTask["op"]) {
   const task: LinkSpeedAgentTask = {
     taskId: crypto.randomUUID(),
@@ -53,7 +62,9 @@ function enqueue(job: Job, op: LinkSpeedAgentTask["op"]) {
     ...(queues.get(job.hostId) || []).filter((item) => item.jobId !== job.status.id || item.op === op),
     task,
   ]);
-  pushAgentRefresh(job.hostId, `full-link-speed-${op}`, { urgent: true });
+  const refreshDelivered = pushAgentRefresh(job.hostId, `full-link-speed-${op}`, { urgent: true });
+  linkSpeedLog(job, `queued op=${op} task=${shortId(task.taskId)} refreshDelivered=${refreshDelivered}`,
+    refreshDelivered ? "info" : "warn");
 }
 
 function finish(job: Job, state: "completed" | "cancelled" | "error", error?: string) {
@@ -64,6 +75,7 @@ function finish(job: Job, state: "completed" | "cancelled" | "error", error?: st
   job.cleanupUntil = Date.now() + 155_000;
   if (job.timer) clearTimeout(job.timer);
   queues.set(job.hostId, (queues.get(job.hostId) || []).filter((item) => item.jobId !== job.status.id));
+  linkSpeedLog(job, `finished state=${state}${error ? ` error=${error.slice(0, 300)}` : ""}`, state === "error" ? "warn" : "info");
   enqueue(job, "stop");
 }
 
@@ -139,7 +151,11 @@ export function createLinkSpeedJob(input: {
     },
   };
   jobs.set(status.id, job);
-  job.timer = setTimeout(() => finish(job, "error", "测速超时，请检查入口规则、落地 SS 和测速端口的 TCP/UDP 连通性"), 140_000);
+  linkSpeedLog(job, `created protocol=${input.protocol} duration=${input.duration}s rule=${input.ruleId} benchmark=${input.benchmarkHost}:${input.benchmarkPort}`);
+  job.timer = setTimeout(() => {
+    linkSpeedLog(job, `timeout state=${job.status.state} pending=${[...job.pending.values()].join(",") || "none"}`, "warn");
+    finish(job, "error", "测速超时，请检查入口规则、落地 SS 和测速端口的 TCP/UDP 连通性");
+  }, 140_000);
   job.timer.unref?.();
   enqueue(job, "prepare");
   return status;
@@ -152,16 +168,28 @@ export function hasQueuedLinkSpeedTasks(hostId: number) {
 export function takeLinkSpeedTasks(hostId: number) {
   const tasks = queues.get(Number(hostId)) || [];
   queues.delete(Number(hostId));
-  return tasks.filter((task) => {
+  const accepted = tasks.filter((task) => {
     const job = jobs.get(task.jobId);
     return task.expiresAt > Date.now() && !!job && (task.op === "stop" || linkSpeedActive(job.status.state));
   });
+  for (const task of accepted) {
+    const job = jobs.get(task.jobId);
+    if (job) linkSpeedLog(job, `dispatched op=${task.op} task=${shortId(task.taskId)}`);
+  }
+  return accepted;
 }
 
 export function claimLinkSpeedTask(hostId: number, taskId: string, jobId: string) {
   const job = jobs.get(jobId);
-  return !!job && job.hostId === Number(hostId) && job.pending.has(taskId)
+  const allowed = !!job && job.hostId === Number(hostId) && job.pending.has(taskId)
     && (job.pending.get(taskId) === "stop" || linkSpeedActive(job.status.state));
+  if (job) {
+    linkSpeedLog(job, `claim task=${shortId(taskId)} op=${job.pending.get(taskId) || "unknown"} allowed=${allowed}`,
+      allowed ? "info" : "warn");
+  } else {
+    appendPanelLog("warn", `[LinkSpeed] job=${shortId(jobId)} host=${Number(hostId)} claim task=${shortId(taskId)} allowed=false reason=job-not-found`);
+  }
+  return allowed;
 }
 
 function measurement(value: any): LinkSpeedMeasurement | undefined {
@@ -187,18 +215,22 @@ export function reportLinkSpeedTask(hostId: number, report: any) {
     if (report.state === "stopped") {
       job.pending.delete(report.taskId);
       job.cleanupUntil = 0;
+      linkSpeedLog(job, `report task=${shortId(report.taskId)} op=stop state=stopped`);
     }
     return true;
   }
   if (!linkSpeedActive(job.status.state)) return false;
   if (report.state === "error") {
-    finish(job, "error", String(report.error || "Agent 全链路测速失败").slice(0, 1000));
+    const message = String(report.error || "Agent 全链路测速失败").slice(0, 1000);
+    linkSpeedLog(job, `report task=${shortId(report.taskId)} op=${op} state=error error=${message.slice(0, 300)}`, "warn");
+    finish(job, "error", message);
     return true;
   }
   if (op === "prepare") {
     if (report.state !== "ready") return false;
     job.pending.delete(report.taskId);
     job.status.state = "upload";
+    linkSpeedLog(job, `report task=${shortId(report.taskId)} op=prepare state=ready`);
     enqueue(job, "run");
     return true;
   }
@@ -223,6 +255,7 @@ export function reportLinkSpeedTask(hostId: number, report: any) {
   if (report.upload) job.status.upload = measurement(report.upload);
   if (report.download) job.status.download = measurement(report.download);
   if (report.state === "completed") {
+    linkSpeedLog(job, `report task=${shortId(report.taskId)} op=run state=completed samples=${job.status.samples.length}`);
     if (!job.status.upload || !job.status.download) {
       finish(job, "error", "Agent 未返回完整的上传和下载测速结果");
     } else {
