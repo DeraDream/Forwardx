@@ -719,10 +719,34 @@ install_runtime_dependencies() {
 
 write_env() {
   local jwt_secret="${JWT_SECRET:-}"
+  local preserved_env=""
   if [ -z "$jwt_secret" ]; then
     jwt_secret="$(openssl rand -hex 32 2>/dev/null || date +%s%N | sha256sum | awk '{print $1}')"
   fi
   mkdir -p "$APP_DIR/data"
+  if [ -f "$APP_DIR/.env" ]; then
+    preserved_env="$(mktemp)"
+    awk '
+      BEGIN {
+        managed["NODE_ENV"] = 1
+        managed["PORT"] = 1
+        managed["DATABASE_CONFIG_PATH"] = 1
+        managed["SQLITE_PATH"] = 1
+        managed["MYSQL_CONFIG_PATH"] = 1
+        managed["JWT_SECRET"] = 1
+        managed["FORWARDX_PORT_CONFIG_PATH"] = 1
+        managed["FORWARDX_PORT_MANAGEMENT"] = 1
+        managed["FORWARDX_GITHUB_ACCELERATOR_URL"] = 1
+        managed["FORWARDX_UPGRADE_COMMAND"] = 1
+      }
+      {
+        key = $0
+        sub(/=.*/, "", key)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", key)
+        if (!(key in managed)) print
+      }
+    ' "$APP_DIR/.env" > "$preserved_env"
+  fi
   cat > "$APP_DIR/.env" <<EOF
 NODE_ENV=production
 PORT=$PORT
@@ -735,6 +759,13 @@ FORWARDX_PORT_MANAGEMENT=local
 FORWARDX_GITHUB_ACCELERATOR_URL="$GITHUB_ACCELERATOR_URL"
 FORWARDX_UPGRADE_COMMAND="/bin/bash $APP_DIR/scripts/install-panel-local.sh upgrade"
 EOF
+  if [ -n "$preserved_env" ]; then
+    if [ -s "$preserved_env" ]; then
+      printf '\n' >> "$APP_DIR/.env"
+      cat "$preserved_env" >> "$APP_DIR/.env"
+    fi
+    rm -f "$preserved_env"
+  fi
 }
 
 install_panel() {

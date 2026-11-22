@@ -295,6 +295,39 @@ printf 'UPGRADE=%s\\n' "$FORWARDX_UPGRADE_COMMAND"
   assert.doesNotMatch(result.stdout, /SCRIPT|DIRECT_URL|mktemp/);
 });
 
+test("local panel upgrades preserve custom environment settings", { skip: !bash }, () => {
+  const result = runHarness({
+    installer: installers[0],
+    endMarker: "install_panel() {",
+    prepare: (directory) => {
+      fs.writeFileSync(path.join(directory, ".env"), [
+        "NODE_ENV=production",
+        "PORT=1234",
+        "JWT_SECRET=old-secret",
+        "FORWARDX_LINK_SPEED_HOST=160.236.111.114",
+        "FORWARDX_LINK_SPEED_PORT=5202",
+        "CUSTOM_PANEL_SETTING=kept",
+        "",
+      ].join("\n"));
+    },
+    body: `
+PORT=9810
+JWT_SECRET=new-secret
+GITHUB_ACCELERATOR_URL=""
+write_env
+cat "$APP_DIR/.env"
+`,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^PORT=9810$/m);
+  assert.match(result.stdout, /^JWT_SECRET=new-secret$/m);
+  assert.match(result.stdout, /^FORWARDX_LINK_SPEED_HOST=160\.236\.111\.114$/m);
+  assert.match(result.stdout, /^FORWARDX_LINK_SPEED_PORT=5202$/m);
+  assert.match(result.stdout, /^CUSTOM_PANEL_SETTING=kept$/m);
+  assert.equal((result.stdout.match(/^PORT=/gm) || []).length, 1);
+  assert.equal((result.stdout.match(/^JWT_SECRET=/gm) || []).length, 1);
+});
+
 test("the local installer validates the complete archive before removing the current panel", () => {
   const downloader = section(localSource, "download_github_archive() {", "read_install_port() {");
   const installBundle = section(localSource, "download_panel_bundle() {", "install_runtime_dependencies() {");
