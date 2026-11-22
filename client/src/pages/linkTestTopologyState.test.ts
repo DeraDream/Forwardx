@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mergeLinkTestRouteHost, selectLinkTestTopologySnapshot } from "./linkTestTopologyState";
+import {
+  configuredRuleTunnelHopIds,
+  mergeLinkTestRouteHost,
+  selectLinkTestTopologySnapshot,
+} from "./linkTestTopologyState";
 
 test("a manual link test keeps the complete cached topology during a transient collapse", () => {
   const complete = {
@@ -21,6 +25,21 @@ test("a manual link test keeps the complete cached topology during a transient c
 
   assert.equal(selectLinkTestTopologySnapshot(complete, collapsed, true), complete);
   assert.equal(selectLinkTestTopologySnapshot(complete, collapsed, false), collapsed);
+});
+
+test("a configured tunnel expands by host id regardless of the legacy forward type", () => {
+  const tunnelById = new Map([
+    [8, { id: 8, hopHostIds: [11, 12, 13] }],
+  ]);
+
+  assert.deepEqual(
+    configuredRuleTunnelHopIds({ tunnelId: 8, forwardType: "forwardx" }, tunnelById),
+    [11, 12, 13],
+  );
+  assert.deepEqual(
+    configuredRuleTunnelHopIds({ tunnelId: 8, forwardType: "iptables" }, tunnelById),
+    [11, 12, 13],
+  );
 });
 
 test("route host metadata merges tunnel geo fallback with the visible host state", () => {

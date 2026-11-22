@@ -1,4 +1,5 @@
 import type { LinkTestPlannedSegment } from "@/components/LinkTestLatencySummary";
+import { getTunnelHopIds } from "@/lib/tunnelDisplay";
 
 export type LinkTestTopologySnapshot = {
   sourceLabel?: string;
@@ -15,6 +16,15 @@ export function selectLinkTestTopologySnapshot(
   if (freezeCurrent && current) return current;
   if (incoming?.plannedSegments.length) return incoming;
   return current;
+}
+
+export function configuredRuleTunnelHopIds(
+  rule: any,
+  tunnelById: Map<number, any>,
+) {
+  const tunnelId = Number(rule?.tunnelId || 0);
+  if (tunnelId <= 0) return [];
+  return getTunnelHopIds(tunnelById.get(tunnelId));
 }
 
 export function mergeLinkTestRouteHost(listHost: any, tunnelHost: any) {

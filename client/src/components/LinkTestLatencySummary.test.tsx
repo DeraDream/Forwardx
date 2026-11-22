@@ -50,6 +50,54 @@ test("a user-started link test is the only state rendered as probing", () => {
   assert.doesNotMatch(html, /等待探测/);
 });
 
+test("a tunnel rule keeps every host-id node and its metadata while probing", () => {
+  const hostMeta = (label: string, address: string, countryCode: string) => ({
+    label,
+    address,
+    countryCode,
+    online: true,
+  });
+  const html = renderToStaticMarkup(
+    <LinkTestProbeView
+      parsed={parseLinkTestMessage(null)}
+      isSuccess={false}
+      isTesting
+      plannedSegments={[
+        {
+          from: "Heptasky-QHIX",
+          to: "DataWave-HK",
+          fromHostId: 11,
+          toHostId: 12,
+          fromMeta: hostMeta("Heptasky-QHIX", "209.248.1.71", "HK"),
+          toMeta: hostMeta("DataWave-HK", "103.97.175.69", "HK"),
+        },
+        {
+          from: "DataWave-HK",
+          to: "DataWave-SG",
+          fromHostId: 12,
+          toHostId: 13,
+          fromMeta: hostMeta("DataWave-HK", "103.97.175.69", "HK"),
+          toMeta: hostMeta("DataWave-SG", "82.109.97.96", "SG"),
+        },
+        {
+          from: "DataWave-SG",
+          to: "LegendSG",
+          fromHostId: 13,
+          fromMeta: hostMeta("DataWave-SG", "82.109.97.96", "SG"),
+          toMeta: hostMeta("Legend-SG", "155.103.50.67", "SG"),
+        },
+      ]}
+    />,
+  );
+
+  assert.match(html, /Heptasky-QHIX/);
+  assert.match(html, /DataWave-HK/);
+  assert.match(html, /DataWave-SG/);
+  assert.match(html, /82\.109\.97\.96/);
+  assert.match(html, /Legend-SG/);
+  assert.match(html, /155\.103\.50\.67/);
+});
+
 test("a completed manual test replaces the inactive cache before the query key switches", () => {
   type Result = { id: number; latencyMs: number };
   const cache = new Map<boolean, Result>([

@@ -12,6 +12,7 @@ import {
   type LinkTestPlannedSegment,
 } from "@/components/LinkTestLatencySummary";
 import {
+  configuredRuleTunnelHopIds,
   mergeLinkTestRouteHost,
   selectLinkTestTopologySnapshot,
   type LinkTestTopologySnapshot,
@@ -2052,9 +2053,8 @@ function ruleGlobeRouteHostIds(
       .map((member: any) => Number(member.hostId || 0))
       .filter((id: number) => Number.isFinite(id) && id > 0);
   }
-  if (rule.forwardType === "gost" && rule.tunnelId) {
-    return getTunnelHopIds(tunnelById.get(Number(rule.tunnelId)));
-  }
+  const configuredTunnelHopIds = configuredRuleTunnelHopIds(rule, tunnelById);
+  if (configuredTunnelHopIds.length > 0) return configuredTunnelHopIds;
   if (group && group.groupType === "tunnel") {
     const member = [...(group.members || [])]
       .filter((item: any) => item.isEnabled !== false)
