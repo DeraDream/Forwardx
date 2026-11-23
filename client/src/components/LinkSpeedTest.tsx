@@ -196,6 +196,8 @@ export function LinkSpeedTestButton({
   name,
   route,
   disabled = false,
+  buttonLabel,
+  buttonClassName,
 }: {
   ruleId: number;
   entryHostId: number;
@@ -203,6 +205,8 @@ export function LinkSpeedTestButton({
   name: string;
   route: { hostId: number; name: string; transport: string }[];
   disabled?: boolean;
+  buttonLabel?: string;
+  buttonClassName?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [protocol, setProtocol] = useState<"tcp" | "udp">("tcp");
@@ -381,9 +385,9 @@ export function LinkSpeedTestButton({
   return (
     <>
       <Button
-        variant="ghost"
-        size="icon"
-        className="h-8 w-8"
+        variant={buttonLabel ? "outline" : "ghost"}
+        size={buttonLabel ? "sm" : "icon"}
+        className={cn(buttonLabel ? "h-9 text-xs" : "h-8 w-8", buttonClassName)}
         title={t("全链路测速")}
         aria-label={t("全链路测速")}
         disabled={disabled}
@@ -392,7 +396,8 @@ export function LinkSpeedTestButton({
           setOpen(true);
         }}
       >
-        <Gauge className="h-3.5 w-3.5" />
+        <Gauge className={cn("h-3.5 w-3.5", buttonLabel && "mr-1.5")} />
+        {buttonLabel}
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="grid-rows-[auto_minmax(0,1fr)] !overflow-hidden sm:max-w-2xl">

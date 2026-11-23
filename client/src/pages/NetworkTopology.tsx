@@ -11,10 +11,7 @@ import { combineTopologyHostVariants, joinTopologyHostPaths, MAX_TOPOLOGY_VARIAN
 import {
   Activity,
   ArrowRight,
-  BarChart2,
   Check,
-  ChevronLeft,
-  ChevronRight,
   Copy,
   Cpu,
   Earth,
@@ -35,7 +32,6 @@ import {
   Server,
   Stethoscope,
   Waypoints,
-  X,
 } from "lucide-react";
 import DashboardLayout from "@/components/DashboardLayout";
 import DataSectionLoading from "@/components/DataSectionLoading";
@@ -935,39 +931,26 @@ function MetricCard({ label, value, tone }: { label: string; value: string; tone
 }
 
 function MobileTopologyPathCard({
-  paths,
   path,
-  pathIndex,
   metrics,
   rule,
   probing,
-  onChangePath,
-  onPrevious,
-  onNext,
-  onSelectPath,
   onProbePath,
-  onOpenFullGraph,
+  onHistory,
+  onNetworkProfile,
   edgeLabel,
   onProbeEdge,
 }: {
-  paths: PhysicalPath[];
-  path: PhysicalPath | null;
-  pathIndex: number;
+  path: PhysicalPath;
   metrics?: TopologyPathMetrics;
   rule?: any;
   probing: boolean;
-  onChangePath: (pathId: string) => void;
-  onPrevious: () => void;
-  onNext: () => void;
-  onSelectPath: () => void;
   onProbePath: () => void;
-  onOpenFullGraph: () => void;
+  onHistory: () => void;
+  onNetworkProfile: () => void;
   edgeLabel: (from: PhysicalNode, to: PhysicalNode) => string;
   onProbeEdge: (edge: TopologyEdge) => void;
 }) {
-  if (!path) {
-    return <section className="rounded-xl border border-slate-200/80 bg-white px-4 py-12 text-center text-sm text-slate-400 shadow-sm md:hidden">当前筛选条件下没有可显示的链路</section>;
-  }
   const nodes = [path.entry, ...path.relays, path.landing];
   const speedRoute = nodes
     .map((node, index) => ({
@@ -985,46 +968,32 @@ function MobileTopologyPathCard({
       : metrics?.latestLatencyMs != null ? `${Math.round(metrics.latestLatencyMs)} ms` : "待探测";
   return (
     <section className="overflow-hidden rounded-xl border border-slate-200/80 bg-white shadow-sm md:hidden">
-      <div className="border-b border-slate-100 px-4 py-3">
-        <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h2 className="text-sm font-bold text-slate-900">链路拓扑</h2>
-              <span className="rounded-full bg-slate-100 px-2 py-0.5 font-mono text-[10px] text-slate-500">{pathIndex + 1} / {paths.length}</span>
-            </div>
-            <p className="mt-0.5 truncate text-[11px] text-slate-500">手机端单链路聚焦视图</p>
-          </div>
-          <RouteTypeLabel category={path.category} />
-        </div>
-        <div className="mt-3 flex items-center gap-2">
-          <button type="button" onClick={onPrevious} disabled={paths.length < 2} aria-label="上一条链路" className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-slate-200 text-slate-500 disabled:opacity-40">
-            <ChevronLeft className="h-4 w-4" />
-          </button>
-          <select value={path.id} onChange={(event) => onChangePath(event.target.value)} aria-label="选择链路" className="h-9 min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-800 outline-none focus:border-primary">
-            {paths.map((candidate, index) => <option key={candidate.id} value={candidate.id}>{index + 1}. {candidate.name}</option>)}
-          </select>
-          <button type="button" onClick={onNext} disabled={paths.length < 2} aria-label="下一条链路" className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-slate-200 text-slate-500 disabled:opacity-40">
-            <ChevronRight className="h-4 w-4" />
-          </button>
-        </div>
-      </div>
-
       <div className="p-4">
         <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="truncate text-base font-bold text-slate-900">{path.name}</div>
-            <div className="mt-1 font-mono text-[10px] text-slate-400">{topologyPathReference(path, rule?.sourcePort)}</div>
+          <div className="flex min-w-0 items-center gap-2.5">
+            <RouteTypeBadge category={path.category} />
+            <div className="min-w-0">
+              <div className="truncate text-base font-bold text-slate-900">{path.name}</div>
+              <div className="mt-1 flex items-center gap-1.5"><span className="font-mono text-[10px] text-slate-400">{topologyPathReference(path, rule?.sourcePort)}</span><RouteTypeLabel category={path.category} /></div>
+            </div>
           </div>
-          <span className={cn("inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold", !working || metrics?.latestLatencyIsTimeout ? "border-red-200 bg-red-50 text-red-600" : "border-emerald-200 bg-emerald-50 text-emerald-600")}>
-            <i className={cn("h-1.5 w-1.5 rounded-full", !working || metrics?.latestLatencyIsTimeout ? "bg-red-500" : "bg-emerald-500")} />
-            {!working ? "已停用" : metrics?.latestLatencyIsTimeout ? latency : "运行中"}
-          </span>
+          <button type="button" onClick={onProbePath} disabled={!path.ruleId || probing} className={cn("inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold disabled:opacity-60", !working || metrics?.latestLatencyIsTimeout ? "border-red-200 bg-red-50 text-red-600" : "border-emerald-200 bg-emerald-50 text-emerald-600")}>
+            {probing ? <Loader2 className="h-3 w-3 animate-spin" /> : <i className={cn("h-1.5 w-1.5 rounded-full", !working || metrics?.latestLatencyIsTimeout ? "bg-red-500" : "bg-emerald-500")} />}
+            {!working ? "已停用" : probing ? "探测中" : metrics?.latestLatencyIsTimeout ? latency : "运行中"}
+          </button>
         </div>
 
-        <div className="mt-3 grid grid-cols-3 gap-2 rounded-xl bg-slate-50 p-3 text-center">
-          <div><div className="text-[10px] text-slate-400">端到端</div><div className={cn("mt-1 font-mono text-xs font-bold", metrics?.latestLatencyIsTimeout ? "text-red-600" : "text-violet-700")}>{latency}</div></div>
-          <div><div className="text-[10px] text-slate-400">下载</div><div className="mt-1 whitespace-nowrap font-mono text-xs font-bold text-emerald-600">↓ {metrics ? `${formatTopologyBytes(metrics.bytesOutPerSecond)}/s` : "—"}</div></div>
-          <div><div className="text-[10px] text-slate-400">上传</div><div className="mt-1 whitespace-nowrap font-mono text-xs font-bold text-amber-500">↑ {metrics ? `${formatTopologyBytes(metrics.bytesInPerSecond)}/s` : "—"}</div></div>
+        <div className="mt-3 overflow-hidden rounded-xl bg-slate-50 text-center">
+          <div className="grid grid-cols-3 gap-2 p-3">
+            <div><div className="text-[10px] text-slate-400">端到端</div><div className={cn("mt-1 font-mono text-xs font-bold", metrics?.latestLatencyIsTimeout ? "text-red-600" : "text-violet-700")}>{latency}</div></div>
+            <div><div className="text-[10px] text-slate-400">实时下载</div><div className="mt-1 whitespace-nowrap font-mono text-xs font-bold text-emerald-600">↓ {metrics ? `${formatTopologyBytes(metrics.bytesOutPerSecond)}/s` : "—"}</div></div>
+            <div><div className="text-[10px] text-slate-400">实时上传</div><div className="mt-1 whitespace-nowrap font-mono text-xs font-bold text-amber-500">↑ {metrics ? `${formatTopologyBytes(metrics.bytesInPerSecond)}/s` : "—"}</div></div>
+          </div>
+          <div className="grid grid-cols-3 gap-2 border-t border-slate-200/70 px-3 py-2.5">
+            <div><div className="text-[10px] text-slate-400">24H 总流量</div><div className="mt-1 whitespace-nowrap font-mono text-[11px] font-bold text-slate-700">{metrics ? formatTopologyBytes(metrics.bytesIn + metrics.bytesOut) : "—"}</div></div>
+            <div><div className="text-[10px] text-slate-400">24H 下载</div><div className="mt-1 whitespace-nowrap font-mono text-[11px] font-semibold text-emerald-600">↓ {metrics ? formatTopologyBytes(metrics.bytesOut) : "—"}</div></div>
+            <div><div className="text-[10px] text-slate-400">24H 上传</div><div className="mt-1 whitespace-nowrap font-mono text-[11px] font-semibold text-amber-500">↑ {metrics ? formatTopologyBytes(metrics.bytesIn) : "—"}</div></div>
+          </div>
         </div>
 
         <div className="mx-auto mt-4 max-w-sm">
@@ -1033,13 +1002,14 @@ function MobileTopologyPathCard({
             const segmentLabel = previous ? edgeLabel(previous, node) : "";
             const edge = previous ? { id: `${previous.id}=>${node.id}`, from: previous.id, to: node.id } : null;
             const waiting = segmentLabel === "待探测" || segmentLabel === "探测中";
+            const segmentProbing = segmentLabel === "探测中";
             const failed = segmentLabel === "超时" || segmentLabel === "阻断" || segmentLabel === "离线";
             const role = index === 0 ? "入口" : index === nodes.length - 1 ? "落地 SS" : "中转";
             return <div key={`${path.id}:${node.id}:${index}`}>
               {previous && edge && (
                 <div className="relative flex h-12 items-center justify-center">
                   <span className={cn("absolute inset-y-0 left-1/2 w-px -translate-x-1/2", failed ? "bg-red-200" : waiting ? "border-l border-dashed border-amber-300" : "bg-slate-200")} />
-                  <button type="button" disabled={!path.ruleId || waiting || probing || previous.online === false} onClick={() => onProbeEdge(edge)} className={cn("relative rounded-md border bg-white px-2 py-0.5 font-mono text-[10px] font-semibold shadow-sm disabled:cursor-not-allowed disabled:opacity-70", failed ? "border-red-200 text-red-600" : waiting ? "border-amber-200 text-amber-700" : "border-slate-200 text-slate-500")}>
+                  <button type="button" disabled={!path.ruleId || segmentProbing || probing || previous.online === false} onClick={() => onProbeEdge(edge)} className={cn("relative rounded-md border bg-white px-2 py-0.5 font-mono text-[10px] font-semibold shadow-sm disabled:cursor-not-allowed disabled:opacity-70", failed ? "border-red-200 text-red-600" : waiting ? "border-amber-200 text-amber-700" : "border-slate-200 text-slate-500")}>
                     {segmentLabel}
                   </button>
                 </div>
@@ -1057,11 +1027,12 @@ function MobileTopologyPathCard({
           })}
         </div>
 
-        <div className="mt-4 flex flex-wrap items-center justify-end gap-2 border-t border-slate-100 pt-3">
-          <Button type="button" size="sm" variant="outline" onClick={onOpenFullGraph} className="h-8 text-xs"><Network className="mr-1.5 h-3.5 w-3.5" />完整图</Button>
-          <Button type="button" size="sm" variant="outline" onClick={onSelectPath} className="h-8 text-xs"><BarChart2 className="mr-1.5 h-3.5 w-3.5" />链路详情</Button>
-          <Button type="button" size="sm" onClick={onProbePath} disabled={!path.ruleId || probing} className="h-8 text-xs">{probing ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Stethoscope className="mr-1.5 h-3.5 w-3.5" />}立即探测</Button>
-          {path.ruleId && (path.category === "local" || path.category === "chain") && <LinkSpeedTestButton ruleId={path.ruleId} entryHostId={speedEntryHostId} pathId={path.id} name={path.name} route={speedRoute} disabled={speedEntryHostId <= 0 || speedRoute.length < 2} />}
+        <div className="mt-4 grid grid-cols-3 gap-2 border-t border-slate-100 pt-3">
+          <Button type="button" size="sm" variant="outline" onClick={onHistory} disabled={!path.ruleId} className="h-9 px-2 text-xs"><Activity className="mr-1.5 h-3.5 w-3.5" />链路质量</Button>
+          <Button type="button" size="sm" variant="outline" onClick={onNetworkProfile} disabled={!/^host:\d+$/.test(path.landing.id)} className="h-9 px-2 text-xs"><Earth className="mr-1.5 h-3.5 w-3.5" />网络画像</Button>
+          {path.ruleId && (path.category === "local" || path.category === "chain")
+            ? <LinkSpeedTestButton ruleId={path.ruleId} entryHostId={speedEntryHostId} pathId={path.id} name={path.name} route={speedRoute} disabled={speedEntryHostId <= 0 || speedRoute.length < 2} buttonLabel="链路测速" buttonClassName="w-full px-2" />
+            : <Button type="button" size="sm" variant="outline" disabled className="h-9 px-2 text-xs"><Gauge className="mr-1.5 h-3.5 w-3.5" />链路测速</Button>}
         </div>
       </div>
     </section>
@@ -1102,10 +1073,7 @@ function NetworkTopologyContent() {
   const [entryFilter, setEntryFilter] = useState<string | null>("all");
   const [zoom, setZoom] = useState(1);
   const canvasRef = useRef<HTMLDivElement>(null);
-  const dragRef = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
   const [layoutMode, setLayoutMode] = useState<"split" | "list" | "topo">("split");
-  const [mobileTopologyPathId, setMobileTopologyPathId] = useState<string | null>(null);
-  const [mobileFullGraphOpen, setMobileFullGraphOpen] = useState(false);
   const [qualityTarget, setQualityTarget] = useState<LinkQualityTarget | null>(null);
   const [networkProfileTarget, setNetworkProfileTarget] = useState<{ hostId: number; hostName: string } | null>(null);
   const [detailTab, setDetailTab] = useState<"basic" | "performance" | "history">("basic");
@@ -1114,19 +1082,6 @@ function NetworkTopologyContent() {
   const [copied, setCopied] = useState<string | null>(null);
   const [blockTooltip, setBlockTooltip] = useState<{ incident: TopologyBlockLog; left: number; top: number; above: boolean } | null>(null);
   const blockTooltipTimerRef = useRef<number | null>(null);
-  useEffect(() => {
-    if (!mobileFullGraphOpen) return;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMobileFullGraphOpen(false);
-    };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      window.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [mobileFullGraphOpen]);
   useEffect(() => {
     if (!sharedEdgeSelection) return;
     const closeOutside = (event: PointerEvent) => {
@@ -1593,14 +1548,14 @@ function NetworkTopologyContent() {
     const canvas = canvasRef.current;
     if (isLoading || !canvas || graph.nodes.length === 0 || canvas.clientWidth < 2 || canvas.clientHeight < 2) return;
     const width = Math.max(1, canvas.clientWidth);
-    const mobileExpanded = mobileFullGraphOpen && window.matchMedia("(max-width: 767px)").matches;
-    const nextZoom = mobileExpanded
-      ? Math.min(1, Math.max(0.45, width / canvasWidth))
+    const mobileGraph = window.matchMedia("(max-width: 767px)").matches;
+    const nextZoom = mobileGraph
+      ? Math.min(1, Math.max(0.65, width / canvasWidth))
       : Math.min(1, width / canvasWidth, canvas.clientHeight / canvasHeight);
     setZoom(nextZoom);
     const frame = requestAnimationFrame(() => canvas.scrollTo({ left: 0, top: 0 }));
     return () => cancelAnimationFrame(frame);
-  }, [activeEntry, canvasHeight, canvasWidth, category, graph.centerY, graph.nodes.length, isLoading, layoutMode, mobileFullGraphOpen]);
+  }, [activeEntry, canvasHeight, canvasWidth, category, graph.centerY, graph.nodes.length, isLoading, layoutMode]);
 
   const focusNode = (nodeId: string) => {
     const position = graph.positions.get(nodeId);
@@ -1706,18 +1661,6 @@ function NetworkTopologyContent() {
   const sharedEdgeCandidates = sharedEdgeSelection
     ? visiblePaths.filter((path) => sharedEdgeSelection.pathIds.includes(path.id))
     : [];
-  const requestedMobilePathIndex = visiblePaths.findIndex((path) => path.id === mobileTopologyPathId);
-  const mobileTopologyPathIndex = requestedMobilePathIndex >= 0 ? requestedMobilePathIndex : 0;
-  const mobileTopologyPath = visiblePaths[mobileTopologyPathIndex] || null;
-  const mobileTopologyMetrics = mobileTopologyPath ? pathMetrics(mobileTopologyPath) : undefined;
-  const mobileTopologyRule = mobileTopologyPath?.ruleId
-    ? (rulesQuery.data || []).find((item: any) => Number(item.id) === mobileTopologyPath.ruleId)
-    : null;
-  const moveMobileTopologyPath = (offset: number) => {
-    if (visiblePaths.length < 2) return;
-    const nextIndex = (mobileTopologyPathIndex + offset + visiblePaths.length) % visiblePaths.length;
-    setMobileTopologyPathId(visiblePaths[nextIndex].id);
-  };
 
   return (
     <div className="network-topology-root relative space-y-5 text-slate-800">
@@ -1741,25 +1684,27 @@ function NetworkTopologyContent() {
 
       {[rulesQuery, hostsQuery, tunnelsQuery, groupsQuery, landingQuery, fullChainsQuery].some((q) => q.isError) && <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-600">部分拓扑数据加载失败，请刷新后重试。</div>}
       {isLoading ? <DataSectionLoading label="正在加载网络拓扑" /> : <>
-        {layoutMode !== "topo" && <section className={cn("overflow-hidden rounded-xl border border-slate-200/80 bg-white shadow-sm", layoutMode === "split" && "hidden md:block")}><div className="overflow-x-auto"><div className="min-w-[1000px]"><div className="grid grid-cols-[2.5rem_17rem_minmax(0,1fr)_7.5rem_8rem_9rem_7rem] items-center border-b border-slate-200/80 bg-slate-50/80 text-[12px] font-semibold text-slate-500"><div className="py-3 pl-4"><input type="checkbox" checked={visiblePaths.length > 0 && visiblePaths.every(p => checkedPathIds.has(p.id))} onChange={(e) => setCheckedPathIds(e.target.checked ? new Set(visiblePaths.map(p => p.id)) : new Set())} /></div><div className="px-3 py-3">链路名称 / 类型</div><div className="px-3 py-3 text-center">链路路径（入口 → 中转 → 落地）</div><div className="px-3 py-3">状态 / 总延迟</div><div className="px-3 py-3">实时速率</div><div className="px-3 py-3">流量 (24H)</div><div className="py-3 pr-4 text-right">操作</div></div><div className="divide-y divide-slate-100">{visiblePaths.map(path => { const nodes = [path.entry, ...path.relays, path.landing]; const speedRoute = nodes.map((node, index) => ({ hostId: physicalNodeHostId(node), name: node.label, transport: index === 0 ? "规则入口" : index === nodes.length - 1 ? "落地 SS" : "中转" })).filter(node => node.hostId > 0); const speedEntryHostId = physicalNodeHostId(path.entry); const metric = pathMetrics(path); const rule = path.ruleId ? (rulesQuery.data || []).find((item: any) => Number(item.id) === path.ruleId) as any : null; return <div key={path.id} onClick={() => { if (layoutMode === "split") selectPath(path); }} className={cn("grid grid-cols-[2.5rem_17rem_minmax(0,1fr)_7.5rem_8rem_9rem_7rem] items-center transition-colors hover:bg-slate-50/90", layoutMode === "split" && "cursor-pointer", selectedPathId === path.id && "bg-primary/5")}><div className="py-2.5 pl-4"><input type="checkbox" checked={checkedPathIds.has(path.id)} onClick={event => event.stopPropagation()} onChange={e => setCheckedPathIds(old => { const next = new Set(old); e.target.checked ? next.add(path.id) : next.delete(path.id); return next; })} /></div><div className="min-w-0 px-3 py-2.5"><div className="flex items-center gap-2"><RouteTypeBadge category={path.category} /><div className="min-w-0"><div className="truncate font-semibold text-slate-900">{path.name}</div><div className="mt-0.5 flex items-center gap-1.5"><span className="font-mono text-[10px] text-slate-400">{topologyPathReference(path, rule?.sourcePort)}</span><RouteTypeLabel category={path.category} /></div></div></div></div><div className="min-w-0 overflow-hidden px-3 py-2.5"><div className="flex w-fit max-w-full items-center gap-1.5 whitespace-nowrap">{nodes.map((node, index) => <div key={`${node.id}:${index}`} className="flex min-w-0 items-center gap-1.5">{index > 0 && (() => { const edge = { id: `${nodes[index - 1].id}=>${node.id}`, from: nodes[index - 1].id, to: node.id }; const latency = pathEdgeMeasurementLabel(path, edge); const waiting = latency === "待探测" || latency === "探测中"; const probeLocked = edgeLockedByPathProbe(edge); const blockedIncident = latency === "阻断" ? blockIncidentForSegment(automaticEdgeMeasurement(edge, path)) : null; return <span className="flex min-w-[44px] shrink-0 flex-col items-center gap-0.5"><button type="button" disabled={!path.ruleId || latency === "探测中" || probeLocked || edgeSourceOffline(edge)} onMouseEnter={(event) => showBlockTooltip(event.currentTarget, blockedIncident)} onMouseLeave={hideBlockTooltip} onFocus={(event) => showBlockTooltip(event.currentTarget, blockedIncident)} onBlur={hideBlockTooltip} onClick={(event) => { event.stopPropagation(); void requestSegmentProbe(path, edge); }} title={blockedIncident ? undefined : "点击仅探测此相邻节点间的 RTT"} className={cn("rounded-md border px-1 py-0 font-mono text-[10px] leading-4 transition-colors hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-60", waiting ? "border-amber-300 bg-amber-50 text-amber-700" : (latency === "超时" || latency === "阻断") ? "border-red-200 bg-red-50 text-red-600" : "border-slate-200 bg-white text-slate-500")}>{latency}</button><span className={cn("h-px w-full", waiting ? "border-t border-dashed border-amber-400" : "bg-slate-300")} /></span>; })()}<button type="button" onClick={(event) => { event.stopPropagation(); copy(node.subtitle || node.label); }} title={`${node.label} · ${node.subtitle || node.detail || "—"}`} className={cn("relative flex w-fit max-w-[180px] shrink-0 items-center gap-1.5 overflow-hidden rounded-lg border px-2 py-1.5 text-left", index === 0 ? "border-blue-100 bg-blue-50/70" : index === nodes.length - 1 ? "border-amber-200 bg-amber-50/70" : "border-emerald-100 bg-emerald-50/70")}><span className="flex h-[18px] w-6 shrink-0 items-center justify-center">{nodeIcon(node)}</span><span className="min-w-0"><span className="block truncate text-[12px] font-semibold text-slate-800">{node.label}</span><span className="block truncate font-mono text-[10px] text-slate-500">{node.subtitle || node.detail || "—"}</span></span>{node.online === false && <span className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-slate-900/55 text-[11px] font-bold tracking-wide text-white backdrop-blur-[1px]"><span className="rounded-md border border-white/30 bg-red-600/90 px-2 py-0.5 shadow-sm">节点离线</span></span>}</button></div>)}</div></div><div className="px-3 py-2.5">{(() => { const probing = !!path.ruleId && probingRuleIds.has(path.ruleId); const working = path.category === "fullchain" || (topologyEnabledFlag(rule?.isEnabled, true) && !rule?.pendingDelete); const trigger = (event: MouseEvent) => { event.stopPropagation(); if (path.ruleId) void requestPathProbe(path.ruleId); }; return <div className="flex flex-col items-start gap-1.5"><span className={cn("inline-flex items-center gap-1.5 text-xs font-semibold", working ? "text-emerald-600" : "text-red-600")}><i className={cn("h-1.5 w-1.5 rounded-full", working ? "bg-emerald-500" : "bg-red-500")} />{working ? "运行中" : "已停用"}</span>{probing ? <span className="inline-flex items-center gap-1 rounded-md border border-blue-200 bg-blue-50 px-2 py-0.5 font-mono text-[11px] font-semibold text-blue-600 animate-pulse"><Loader2 className="h-3 w-3 animate-spin" />探测中…</span> : metric?.segmentPending ? <span className="inline-flex items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 font-mono text-[11px] font-semibold text-amber-700"><Loader2 className="h-3 w-3 animate-spin" />逐跳更新中</span> : metric?.latestLatencyIsTimeout ? <button type="button" onClick={trigger} disabled={!path.ruleId} title={metric.latestLatencyIsBlocked ? "逐跳 Ping 已确认阻断；点击执行端到端 TCP 探测并同步刷新逐跳 Ping" : "当前端到端 TCP 探测超时；点击重新探测并同步刷新逐跳 Ping"} className="rounded-md border border-red-200 bg-red-50 px-2 py-0.5 font-mono text-[11px] font-semibold text-red-600 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60">{!metric.latestLatencyIsBlocked && <span className="mr-1 text-[9px] opacity-75">TCP</span>}{metric.latestLatencyIsBlocked ? "阻断" : "超时"}</button> : metric?.latestLatencyMs != null ? <button type="button" onClick={trigger} disabled={!path.ruleId} title="当前为端到端 TCP 延迟；点击重新探测并同步刷新逐跳 Ping" className="rounded-md border border-violet-200 bg-violet-50 px-2 py-0.5 font-mono text-[11px] font-bold text-violet-700 hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-60"><span className="mr-1 text-[9px] font-normal opacity-75">TCP</span>{Math.round(metric.latestLatencyMs)} ms</button> : <button type="button" onClick={trigger} disabled={!path.ruleId} title="点击执行端到端 TCP 探测并同步刷新逐跳 Ping" className="rounded-md border border-dashed border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60">点击探测</button>}</div>; })()}</div><div className="px-3 py-2.5 font-mono text-[11px] leading-5 whitespace-nowrap"><div className="flex items-center gap-1.5"><span className="font-bold text-emerald-600">↓</span><span className="font-medium text-slate-800">{metric ? `${formatTopologyBytes(metric.bytesOutPerSecond)}/s` : "—"}</span></div><div className="mt-1 flex items-center gap-1.5"><span className="font-bold text-amber-500">↑</span><span className="font-medium text-slate-600">{metric ? `${formatTopologyBytes(metric.bytesInPerSecond)}/s` : "—"}</span></div></div><div className="px-3 py-2.5 font-mono text-[11px] leading-5 whitespace-nowrap"><div className="inline-flex flex-col items-center"><div className="flex items-center justify-center gap-1.5 text-[12px] font-bold text-slate-900"><HardDrive className="h-3.5 w-3.5 text-slate-400" /><span>{metric ? formatTopologyBytes(metric.bytesIn + metric.bytesOut) : "—"}</span></div>{metric ? <div className="mt-1 flex items-center justify-center gap-1.5 text-[11px] font-normal"><span className="font-bold text-emerald-600">↓</span><span className="text-slate-500">{formatTopologyBytes(metric.bytesOut)}</span><span className="text-slate-300">/</span><span className="font-bold text-amber-500">↑</span><span className="text-slate-500">{formatTopologyBytes(metric.bytesIn)}</span></div> : <div className="mt-1 text-slate-400">—</div>}</div></div><div className="py-2.5 pr-4 text-right whitespace-nowrap"><button type="button" onClick={(event) => { event.stopPropagation(); if (path.ruleId) setQualityTarget({ scope: "rule", id: path.ruleId, name: path.name, subtitle: "规则链路质量历史" }); }} className="inline-flex h-8 w-8 items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50" title="查看链路质量" disabled={!path.ruleId}><Gauge className="h-3.5 w-3.5" /></button><button type="button" onClick={(event) => { event.stopPropagation(); openLandingNetworkProfile(path); }} className="inline-flex h-8 w-8 items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50" title={/^host:\d+$/.test(path.landing.id) ? "最终落地机网络画像" : "最终目标不是面板托管 VPS，无法查看网络画像"} disabled={!/^host:\d+$/.test(path.landing.id)}><Earth className="h-3.5 w-3.5" /></button>{path.ruleId && (path.category === "local" || path.category === "chain") && <LinkSpeedTestButton ruleId={path.ruleId} entryHostId={speedEntryHostId} pathId={path.id} name={path.name} route={speedRoute} disabled={speedEntryHostId <= 0 || speedRoute.length < 2} />}</div></div>; })}</div></div></div></section>}
+        {layoutMode !== "topo" && <section className="hidden overflow-hidden rounded-xl border border-slate-200/80 bg-white shadow-sm md:block"><div className="overflow-x-auto"><div className="min-w-[1000px]"><div className="grid grid-cols-[2.5rem_17rem_minmax(0,1fr)_7.5rem_8rem_9rem_7rem] items-center border-b border-slate-200/80 bg-slate-50/80 text-[12px] font-semibold text-slate-500"><div className="py-3 pl-4"><input type="checkbox" checked={visiblePaths.length > 0 && visiblePaths.every(p => checkedPathIds.has(p.id))} onChange={(e) => setCheckedPathIds(e.target.checked ? new Set(visiblePaths.map(p => p.id)) : new Set())} /></div><div className="px-3 py-3">链路名称 / 类型</div><div className="px-3 py-3 text-center">链路路径（入口 → 中转 → 落地）</div><div className="px-3 py-3">状态 / 总延迟</div><div className="px-3 py-3">实时速率</div><div className="px-3 py-3">流量 (24H)</div><div className="py-3 pr-4 text-right">操作</div></div><div className="divide-y divide-slate-100">{visiblePaths.map(path => { const nodes = [path.entry, ...path.relays, path.landing]; const speedRoute = nodes.map((node, index) => ({ hostId: physicalNodeHostId(node), name: node.label, transport: index === 0 ? "规则入口" : index === nodes.length - 1 ? "落地 SS" : "中转" })).filter(node => node.hostId > 0); const speedEntryHostId = physicalNodeHostId(path.entry); const metric = pathMetrics(path); const rule = path.ruleId ? (rulesQuery.data || []).find((item: any) => Number(item.id) === path.ruleId) as any : null; return <div key={path.id} onClick={() => { if (layoutMode === "split") selectPath(path); }} className={cn("grid grid-cols-[2.5rem_17rem_minmax(0,1fr)_7.5rem_8rem_9rem_7rem] items-center transition-colors hover:bg-slate-50/90", layoutMode === "split" && "cursor-pointer", selectedPathId === path.id && "bg-primary/5")}><div className="py-2.5 pl-4"><input type="checkbox" checked={checkedPathIds.has(path.id)} onClick={event => event.stopPropagation()} onChange={e => setCheckedPathIds(old => { const next = new Set(old); e.target.checked ? next.add(path.id) : next.delete(path.id); return next; })} /></div><div className="min-w-0 px-3 py-2.5"><div className="flex items-center gap-2"><RouteTypeBadge category={path.category} /><div className="min-w-0"><div className="truncate font-semibold text-slate-900">{path.name}</div><div className="mt-0.5 flex items-center gap-1.5"><span className="font-mono text-[10px] text-slate-400">{topologyPathReference(path, rule?.sourcePort)}</span><RouteTypeLabel category={path.category} /></div></div></div></div><div className="min-w-0 overflow-hidden px-3 py-2.5"><div className="flex w-fit max-w-full items-center gap-1.5 whitespace-nowrap">{nodes.map((node, index) => <div key={`${node.id}:${index}`} className="flex min-w-0 items-center gap-1.5">{index > 0 && (() => { const edge = { id: `${nodes[index - 1].id}=>${node.id}`, from: nodes[index - 1].id, to: node.id }; const latency = pathEdgeMeasurementLabel(path, edge); const waiting = latency === "待探测" || latency === "探测中"; const probeLocked = edgeLockedByPathProbe(edge); const blockedIncident = latency === "阻断" ? blockIncidentForSegment(automaticEdgeMeasurement(edge, path)) : null; return <span className="flex min-w-[44px] shrink-0 flex-col items-center gap-0.5"><button type="button" disabled={!path.ruleId || latency === "探测中" || probeLocked || edgeSourceOffline(edge)} onMouseEnter={(event) => showBlockTooltip(event.currentTarget, blockedIncident)} onMouseLeave={hideBlockTooltip} onFocus={(event) => showBlockTooltip(event.currentTarget, blockedIncident)} onBlur={hideBlockTooltip} onClick={(event) => { event.stopPropagation(); void requestSegmentProbe(path, edge); }} title={blockedIncident ? undefined : "点击仅探测此相邻节点间的 RTT"} className={cn("rounded-md border px-1 py-0 font-mono text-[10px] leading-4 transition-colors hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-60", waiting ? "border-amber-300 bg-amber-50 text-amber-700" : (latency === "超时" || latency === "阻断") ? "border-red-200 bg-red-50 text-red-600" : "border-slate-200 bg-white text-slate-500")}>{latency}</button><span className={cn("h-px w-full", waiting ? "border-t border-dashed border-amber-400" : "bg-slate-300")} /></span>; })()}<button type="button" onClick={(event) => { event.stopPropagation(); copy(node.subtitle || node.label); }} title={`${node.label} · ${node.subtitle || node.detail || "—"}`} className={cn("relative flex w-fit max-w-[180px] shrink-0 items-center gap-1.5 overflow-hidden rounded-lg border px-2 py-1.5 text-left", index === 0 ? "border-blue-100 bg-blue-50/70" : index === nodes.length - 1 ? "border-amber-200 bg-amber-50/70" : "border-emerald-100 bg-emerald-50/70")}><span className="flex h-[18px] w-6 shrink-0 items-center justify-center">{nodeIcon(node)}</span><span className="min-w-0"><span className="block truncate text-[12px] font-semibold text-slate-800">{node.label}</span><span className="block truncate font-mono text-[10px] text-slate-500">{node.subtitle || node.detail || "—"}</span></span>{node.online === false && <span className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-slate-900/55 text-[11px] font-bold tracking-wide text-white backdrop-blur-[1px]"><span className="rounded-md border border-white/30 bg-red-600/90 px-2 py-0.5 shadow-sm">节点离线</span></span>}</button></div>)}</div></div><div className="px-3 py-2.5">{(() => { const probing = !!path.ruleId && probingRuleIds.has(path.ruleId); const working = path.category === "fullchain" || (topologyEnabledFlag(rule?.isEnabled, true) && !rule?.pendingDelete); const trigger = (event: MouseEvent) => { event.stopPropagation(); if (path.ruleId) void requestPathProbe(path.ruleId); }; return <div className="flex flex-col items-start gap-1.5"><span className={cn("inline-flex items-center gap-1.5 text-xs font-semibold", working ? "text-emerald-600" : "text-red-600")}><i className={cn("h-1.5 w-1.5 rounded-full", working ? "bg-emerald-500" : "bg-red-500")} />{working ? "运行中" : "已停用"}</span>{probing ? <span className="inline-flex items-center gap-1 rounded-md border border-blue-200 bg-blue-50 px-2 py-0.5 font-mono text-[11px] font-semibold text-blue-600 animate-pulse"><Loader2 className="h-3 w-3 animate-spin" />探测中…</span> : metric?.segmentPending ? <span className="inline-flex items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 font-mono text-[11px] font-semibold text-amber-700"><Loader2 className="h-3 w-3 animate-spin" />逐跳更新中</span> : metric?.latestLatencyIsTimeout ? <button type="button" onClick={trigger} disabled={!path.ruleId} title={metric.latestLatencyIsBlocked ? "逐跳 Ping 已确认阻断；点击执行端到端 TCP 探测并同步刷新逐跳 Ping" : "当前端到端 TCP 探测超时；点击重新探测并同步刷新逐跳 Ping"} className="rounded-md border border-red-200 bg-red-50 px-2 py-0.5 font-mono text-[11px] font-semibold text-red-600 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60">{!metric.latestLatencyIsBlocked && <span className="mr-1 text-[9px] opacity-75">TCP</span>}{metric.latestLatencyIsBlocked ? "阻断" : "超时"}</button> : metric?.latestLatencyMs != null ? <button type="button" onClick={trigger} disabled={!path.ruleId} title="当前为端到端 TCP 延迟；点击重新探测并同步刷新逐跳 Ping" className="rounded-md border border-violet-200 bg-violet-50 px-2 py-0.5 font-mono text-[11px] font-bold text-violet-700 hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-60"><span className="mr-1 text-[9px] font-normal opacity-75">TCP</span>{Math.round(metric.latestLatencyMs)} ms</button> : <button type="button" onClick={trigger} disabled={!path.ruleId} title="点击执行端到端 TCP 探测并同步刷新逐跳 Ping" className="rounded-md border border-dashed border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60">点击探测</button>}</div>; })()}</div><div className="px-3 py-2.5 font-mono text-[11px] leading-5 whitespace-nowrap"><div className="flex items-center gap-1.5"><span className="font-bold text-emerald-600">↓</span><span className="font-medium text-slate-800">{metric ? `${formatTopologyBytes(metric.bytesOutPerSecond)}/s` : "—"}</span></div><div className="mt-1 flex items-center gap-1.5"><span className="font-bold text-amber-500">↑</span><span className="font-medium text-slate-600">{metric ? `${formatTopologyBytes(metric.bytesInPerSecond)}/s` : "—"}</span></div></div><div className="px-3 py-2.5 font-mono text-[11px] leading-5 whitespace-nowrap"><div className="inline-flex flex-col items-center"><div className="flex items-center justify-center gap-1.5 text-[12px] font-bold text-slate-900"><HardDrive className="h-3.5 w-3.5 text-slate-400" /><span>{metric ? formatTopologyBytes(metric.bytesIn + metric.bytesOut) : "—"}</span></div>{metric ? <div className="mt-1 flex items-center justify-center gap-1.5 text-[11px] font-normal"><span className="font-bold text-emerald-600">↓</span><span className="text-slate-500">{formatTopologyBytes(metric.bytesOut)}</span><span className="text-slate-300">/</span><span className="font-bold text-amber-500">↑</span><span className="text-slate-500">{formatTopologyBytes(metric.bytesIn)}</span></div> : <div className="mt-1 text-slate-400">—</div>}</div></div><div className="py-2.5 pr-4 text-right whitespace-nowrap"><button type="button" onClick={(event) => { event.stopPropagation(); if (path.ruleId) setQualityTarget({ scope: "rule", id: path.ruleId, name: path.name, subtitle: "规则链路质量历史" }); }} className="inline-flex h-8 w-8 items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50" title="查看链路质量" disabled={!path.ruleId}><Gauge className="h-3.5 w-3.5" /></button><button type="button" onClick={(event) => { event.stopPropagation(); openLandingNetworkProfile(path); }} className="inline-flex h-8 w-8 items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50" title={/^host:\d+$/.test(path.landing.id) ? "最终落地机网络画像" : "最终目标不是面板托管 VPS，无法查看网络画像"} disabled={!/^host:\d+$/.test(path.landing.id)}><Earth className="h-3.5 w-3.5" /></button>{path.ruleId && (path.category === "local" || path.category === "chain") && <LinkSpeedTestButton ruleId={path.ruleId} entryHostId={speedEntryHostId} pathId={path.id} name={path.name} route={speedRoute} disabled={speedEntryHostId <= 0 || speedRoute.length < 2} />}</div></div>; })}</div></div></div></section>}
 
-        {layoutMode !== "list" && <MobileTopologyPathCard
-          paths={visiblePaths}
-          path={mobileTopologyPath}
-          pathIndex={mobileTopologyPathIndex}
-          metrics={mobileTopologyMetrics}
-          rule={mobileTopologyRule}
-          probing={!!mobileTopologyPath?.ruleId && probingRuleIds.has(mobileTopologyPath.ruleId)}
-          onChangePath={setMobileTopologyPathId}
-          onPrevious={() => moveMobileTopologyPath(-1)}
-          onNext={() => moveMobileTopologyPath(1)}
-          onSelectPath={() => mobileTopologyPath && selectPath(mobileTopologyPath)}
-          onProbePath={() => mobileTopologyPath?.ruleId && void requestPathProbe(mobileTopologyPath.ruleId)}
-          onOpenFullGraph={() => setMobileFullGraphOpen(true)}
-          edgeLabel={(from, to) => mobileTopologyPath ? pathEdgeMeasurementLabel(mobileTopologyPath, { id: `${from.id}=>${to.id}`, from: from.id, to: to.id }) : "待探测"}
-          onProbeEdge={(edge) => mobileTopologyPath && void requestSegmentProbe(mobileTopologyPath, edge)}
-        />}
-        {layoutMode !== "list" && <section className={cn("overflow-hidden border-slate-200/80 bg-white shadow-sm", mobileFullGraphOpen ? "fixed inset-0 z-[80] flex flex-col rounded-none border-0 md:static md:block md:rounded-xl md:border" : "hidden rounded-xl border md:block")}> <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3"><div className="flex flex-wrap items-center gap-4"><h2 className="text-sm font-bold text-slate-900">链路拓扑</h2><div className="flex gap-3.5 text-xs text-slate-600"><span><i className="mr-1.5 inline-block h-2 w-2 rounded-full bg-blue-500" />入口节点</span><span><i className="mr-1.5 inline-block h-2 w-2 rounded-full bg-emerald-500" />中转节点</span><span><i className="mr-1.5 inline-block h-2 w-2 rounded-full bg-amber-500" />落地节点</span></div></div><div className="flex items-center gap-1.5"><button onClick={() => setZoom(1)} className="rounded-lg border border-slate-200 p-1.5 text-slate-500"><Scan className="h-3.5 w-3.5" /></button><button onClick={() => setZoom(z => Math.max(.2, z - .1))} className="rounded-l-lg border border-slate-200 px-2 py-1">−</button><span className="border-y border-slate-200 px-2 py-1 font-mono text-[11px]">{Math.round(zoom * 100)}%</span><button onClick={() => setZoom(z => Math.min(1.5, z + .1))} className="rounded-r-lg border border-slate-200 px-2 py-1">+</button>{mobileFullGraphOpen && <button type="button" onClick={() => setMobileFullGraphOpen(false)} aria-label="关闭完整拓扑" className="ml-1 rounded-lg border border-slate-200 p-1.5 text-slate-500 md:hidden"><X className="h-3.5 w-3.5" /></button>}</div></div><div ref={canvasRef} className={cn("topo-grid-bg relative overflow-auto p-2", mobileFullGraphOpen ? "min-h-0 flex-1 md:min-h-[430px]" : "min-h-[430px]")}><div style={{ width: graph.width * zoom, height: graph.height * zoom, margin: "auto" }}><div className="relative origin-top-left" style={{ width: graph.width, height: graph.height, transform: `scale(${zoom})` }}><svg className="absolute inset-0 h-full w-full" width={graph.width} height={graph.height}><defs><marker id="topology-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 8 4 L 0 8 z" fill="var(--primary)" fillOpacity=".48" /></marker><marker id="topology-arrow-active" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 8 4 L 0 8 z" fill="var(--primary)" /></marker><marker id="topology-arrow-blocked" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 8 4 L 0 8 z" fill="#EF4444" /></marker><marker id="topology-arrow-offline" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 8 4 L 0 8 z" fill="#94A3B8" /></marker></defs>{graph.edges.map(edge => { const points = graph.edgeRoutes.get(edge.id); if (!points) return null; const active = highlightedEdges.has(edge.id) || selectedEdgeId === edge.id; const edgePaths = visiblePaths.filter((path) => topologyPathEdgeIds([path.entry, ...path.relays, path.landing].map((node) => node.id)).includes(edge.id)); const latencyLabel = physicalEdgeMeasurementLabel(edge, edgePaths); const blocked = latencyLabel === "阻断"; const offline = latencyLabel === "离线"; const blockedIncident = blocked ? edgePaths.map((path) => blockIncidentForSegment(automaticEdgeMeasurement(edge, path))).find(Boolean) || null : null; const labelPoint = points.length === 4 ? { x: (points[0].x + 3 * points[1].x + 3 * points[2].x + points[3].x) / 8, y: (points[0].y + 3 * points[1].y + 3 * points[2].y + points[3].y) / 8 } : { x: (points[0].x + points.at(-1)!.x) / 2, y: (points[0].y + points.at(-1)!.y) / 2 }; const labelX = labelPoint.x; const labelY = labelPoint.y - 8; const labelWidth = Math.max(38, latencyLabel.length * 6 + 14); return <g key={edge.id}><path d={topologyRoutePath(points)} fill="none" stroke="transparent" strokeWidth="12" style={{ cursor: "pointer", pointerEvents: "stroke" }} onMouseEnter={(event) => showBlockTooltip(event.currentTarget, blockedIncident)} onMouseLeave={hideBlockTooltip} onClick={(event) => selectGraphEdge(edge, false, graphPopupAnchor(event, { x: labelX, y: labelY }))} /><path d={topologyRoutePath(points)} fill="none" stroke={offline ? "#94A3B8" : blocked ? "#EF4444" : "var(--primary)"} strokeOpacity={offline || blocked || active ? 1 : .48} strokeWidth={blocked || active ? 2.4 : 1.5} strokeDasharray={offline ? "4 5" : undefined} style={{ pointerEvents: "none" }} markerEnd={`url(#${offline ? "topology-arrow-offline" : blocked ? "topology-arrow-blocked" : active ? "topology-arrow-active" : "topology-arrow"})`} className={active && !offline ? "edge-flow-active" : ""} /><rect x={labelX - labelWidth / 2} y={labelY - 11} width={labelWidth} height="20" rx="6" fill="var(--card)" fillOpacity=".96" stroke={offline ? "#94A3B8" : blocked ? "#EF4444" : active ? "var(--primary)" : "var(--border)"} strokeOpacity={active ? .45 : 1} style={{ cursor: "pointer" }} onMouseEnter={(event) => showBlockTooltip(event.currentTarget, blockedIncident)} onMouseLeave={hideBlockTooltip} onClick={(event) => { event.stopPropagation(); selectGraphEdge(edge, true, graphPopupAnchor(event, { x: labelX, y: labelY })); }}>{!blockedIncident && <title>点击立即重测此逻辑链路</title>}</rect><text pointerEvents="none" x={labelX} y={labelY + 3} textAnchor="middle" fontSize="10" fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace" fontWeight={offline || blocked || active ? "600" : "500"} fill={offline ? "#64748B" : blocked ? "#DC2626" : active ? "var(--primary)" : "var(--muted-foreground)"}>{latencyLabel}</text></g>; })}</svg>{graph.nodes.map(node => { const pos = graph.positions.get(node.id); if (!pos) return null; const role = node.kind; const active = highlightedNodes.has(node.id) || selectedNodeId === node.id; return <button key={node.id} onClick={() => { setSelectedNodeId(node.id); setSelectedPathId(null); setSelectedEdgeId(null); }} style={{ left: pos.x, top: pos.y, width: pos.width, height: pos.height }} className={cn("absolute flex items-center gap-2.5 overflow-hidden rounded-[10px] border px-3 py-2 text-left shadow-sm", role === "entry" ? "border-blue-200 bg-blue-50/70" : role === "relay" ? "border-emerald-200 bg-emerald-50/70" : "border-amber-200 bg-amber-50/70", active && "ring-2 ring-blue-500/30")}><span className="flex h-[18px] w-6 shrink-0 items-center justify-center">{nodeIcon(node)}</span><span className="min-w-0"><span className="flex items-center gap-1 text-xs font-bold text-slate-900"><span className="truncate">{node.label}</span><i className={cn("ml-auto h-2 w-2 rounded-full", node.online === false ? "bg-red-500" : node.online === true ? "bg-emerald-500" : "bg-slate-300")} /></span><span className="mt-0.5 block truncate font-mono text-[11px] text-slate-500">{node.subtitle || node.detail || "—"}</span></span>{node.online === false && <span className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-slate-900/55 text-xs font-bold tracking-wide text-white backdrop-blur-[1px]"><span className="rounded-md border border-white/30 bg-red-600/90 px-2.5 py-1 shadow-sm">节点离线</span></span>}</button>; })}</div></div></div></section>}
+        {layoutMode !== "topo" && <div className="space-y-3 md:hidden">
+          {visiblePaths.length === 0 ? <section className="rounded-xl border border-slate-200/80 bg-white px-4 py-12 text-center text-sm text-slate-400 shadow-sm">当前筛选条件下没有可显示的链路</section> : visiblePaths.map((path) => {
+            const metric = pathMetrics(path);
+            const rule = path.ruleId ? (rulesQuery.data || []).find((item: any) => Number(item.id) === path.ruleId) : null;
+            return <MobileTopologyPathCard
+              key={path.id}
+              path={path}
+              metrics={metric}
+              rule={rule}
+              probing={!!path.ruleId && probingRuleIds.has(path.ruleId)}
+              onProbePath={() => path.ruleId && void requestPathProbe(path.ruleId)}
+              onHistory={() => path.ruleId && setQualityTarget({ scope: "rule", id: path.ruleId, name: path.name, subtitle: "规则链路质量历史" })}
+              onNetworkProfile={() => openLandingNetworkProfile(path)}
+              edgeLabel={(from, to) => pathEdgeMeasurementLabel(path, { id: `${from.id}=>${to.id}`, from: from.id, to: to.id })}
+              onProbeEdge={(edge) => void requestSegmentProbe(path, edge)}
+            />;
+          })}
+        </div>}
+        {layoutMode !== "list" && <section className="overflow-hidden rounded-xl border border-slate-200/80 bg-white shadow-sm"> <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3"><div className="flex flex-wrap items-center gap-4"><h2 className="text-sm font-bold text-slate-900">链路拓扑</h2><div className="flex gap-3.5 text-xs text-slate-600"><span><i className="mr-1.5 inline-block h-2 w-2 rounded-full bg-blue-500" />入口节点</span><span><i className="mr-1.5 inline-block h-2 w-2 rounded-full bg-emerald-500" />中转节点</span><span><i className="mr-1.5 inline-block h-2 w-2 rounded-full bg-amber-500" />落地节点</span></div></div><div className="flex items-center gap-1.5"><button onClick={() => setZoom(1)} className="rounded-lg border border-slate-200 p-1.5 text-slate-500"><Scan className="h-3.5 w-3.5" /></button><button onClick={() => setZoom(z => Math.max(.2, z - .1))} className="rounded-l-lg border border-slate-200 px-2 py-1">−</button><span className="border-y border-slate-200 px-2 py-1 font-mono text-[11px]">{Math.round(zoom * 100)}%</span><button onClick={() => setZoom(z => Math.min(1.5, z + .1))} className="rounded-r-lg border border-slate-200 px-2 py-1">+</button></div></div><div ref={canvasRef} className="topo-grid-bg relative h-[340px] min-h-[280px] max-h-[48vh] touch-auto overflow-auto overscroll-contain p-2 md:h-auto md:max-h-none md:min-h-[430px]"><div style={{ width: graph.width * zoom, height: graph.height * zoom, margin: "auto" }}><div className="relative origin-top-left" style={{ width: graph.width, height: graph.height, transform: `scale(${zoom})` }}><svg className="absolute inset-0 h-full w-full" width={graph.width} height={graph.height}><defs><marker id="topology-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 8 4 L 0 8 z" fill="var(--primary)" fillOpacity=".48" /></marker><marker id="topology-arrow-active" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 8 4 L 0 8 z" fill="var(--primary)" /></marker><marker id="topology-arrow-blocked" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 8 4 L 0 8 z" fill="#EF4444" /></marker><marker id="topology-arrow-offline" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 8 4 L 0 8 z" fill="#94A3B8" /></marker></defs>{graph.edges.map(edge => { const points = graph.edgeRoutes.get(edge.id); if (!points) return null; const active = highlightedEdges.has(edge.id) || selectedEdgeId === edge.id; const edgePaths = visiblePaths.filter((path) => topologyPathEdgeIds([path.entry, ...path.relays, path.landing].map((node) => node.id)).includes(edge.id)); const latencyLabel = physicalEdgeMeasurementLabel(edge, edgePaths); const blocked = latencyLabel === "阻断"; const offline = latencyLabel === "离线"; const blockedIncident = blocked ? edgePaths.map((path) => blockIncidentForSegment(automaticEdgeMeasurement(edge, path))).find(Boolean) || null : null; const labelPoint = points.length === 4 ? { x: (points[0].x + 3 * points[1].x + 3 * points[2].x + points[3].x) / 8, y: (points[0].y + 3 * points[1].y + 3 * points[2].y + points[3].y) / 8 } : { x: (points[0].x + points.at(-1)!.x) / 2, y: (points[0].y + points.at(-1)!.y) / 2 }; const labelX = labelPoint.x; const labelY = labelPoint.y - 8; const labelWidth = Math.max(38, latencyLabel.length * 6 + 14); return <g key={edge.id}><path d={topologyRoutePath(points)} fill="none" stroke="transparent" strokeWidth="12" style={{ cursor: "pointer", pointerEvents: "stroke" }} onMouseEnter={(event) => showBlockTooltip(event.currentTarget, blockedIncident)} onMouseLeave={hideBlockTooltip} onClick={(event) => selectGraphEdge(edge, false, graphPopupAnchor(event, { x: labelX, y: labelY }))} /><path d={topologyRoutePath(points)} fill="none" stroke={offline ? "#94A3B8" : blocked ? "#EF4444" : "var(--primary)"} strokeOpacity={offline || blocked || active ? 1 : .48} strokeWidth={blocked || active ? 2.4 : 1.5} strokeDasharray={offline ? "4 5" : undefined} style={{ pointerEvents: "none" }} markerEnd={`url(#${offline ? "topology-arrow-offline" : blocked ? "topology-arrow-blocked" : active ? "topology-arrow-active" : "topology-arrow"})`} className={active && !offline ? "edge-flow-active" : ""} /><rect x={labelX - labelWidth / 2} y={labelY - 11} width={labelWidth} height="20" rx="6" fill="var(--card)" fillOpacity=".96" stroke={offline ? "#94A3B8" : blocked ? "#EF4444" : active ? "var(--primary)" : "var(--border)"} strokeOpacity={active ? .45 : 1} style={{ cursor: "pointer" }} onMouseEnter={(event) => showBlockTooltip(event.currentTarget, blockedIncident)} onMouseLeave={hideBlockTooltip} onClick={(event) => { event.stopPropagation(); selectGraphEdge(edge, true, graphPopupAnchor(event, { x: labelX, y: labelY })); }}>{!blockedIncident && <title>点击立即重测此逻辑链路</title>}</rect><text pointerEvents="none" x={labelX} y={labelY + 3} textAnchor="middle" fontSize="10" fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace" fontWeight={offline || blocked || active ? "600" : "500"} fill={offline ? "#64748B" : blocked ? "#DC2626" : active ? "var(--primary)" : "var(--muted-foreground)"}>{latencyLabel}</text></g>; })}</svg>{graph.nodes.map(node => { const pos = graph.positions.get(node.id); if (!pos) return null; const role = node.kind; const active = highlightedNodes.has(node.id) || selectedNodeId === node.id; return <button key={node.id} onClick={() => { setSelectedNodeId(node.id); setSelectedPathId(null); setSelectedEdgeId(null); }} style={{ left: pos.x, top: pos.y, width: pos.width, height: pos.height }} className={cn("absolute flex items-center gap-2.5 overflow-hidden rounded-[10px] border px-3 py-2 text-left shadow-sm", role === "entry" ? "border-blue-200 bg-blue-50/70" : role === "relay" ? "border-emerald-200 bg-emerald-50/70" : "border-amber-200 bg-amber-50/70", active && "ring-2 ring-blue-500/30")}><span className="flex h-[18px] w-6 shrink-0 items-center justify-center">{nodeIcon(node)}</span><span className="min-w-0"><span className="flex items-center gap-1 text-xs font-bold text-slate-900"><span className="truncate">{node.label}</span><i className={cn("ml-auto h-2 w-2 rounded-full", node.online === false ? "bg-red-500" : node.online === true ? "bg-emerald-500" : "bg-slate-300")} /></span><span className="mt-0.5 block truncate font-mono text-[11px] text-slate-500">{node.subtitle || node.detail || "—"}</span></span>{node.online === false && <span className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-slate-900/55 text-xs font-bold tracking-wide text-white backdrop-blur-[1px]"><span className="rounded-md border border-white/30 bg-red-600/90 px-2.5 py-1 shadow-sm">节点离线</span></span>}</button>; })}</div></div></div></section>}
       </>}
       {layoutMode !== "list" && selectedPath && <section className="overflow-hidden rounded-xl border border-slate-200/80 bg-white shadow-sm">
         <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3.5"><h3 className="text-sm font-bold text-slate-900">链路详情: <span>{selectedPath.name}</span></h3><span className={cn("inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium", selectedPathMetrics?.latestLatencyIsTimeout ? "border-red-200 bg-red-50 text-red-600" : "border-emerald-200 bg-emerald-50 text-emerald-600")}><i className={cn("h-1.5 w-1.5 rounded-full", selectedPathMetrics?.latestLatencyIsTimeout ? "bg-red-500" : "bg-emerald-500")} />{selectedPathMetrics?.latestLatencyIsTimeout ? "超时" : "运行中"}</span></div>
