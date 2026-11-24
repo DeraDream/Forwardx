@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.4.134] - 2026-11-24
+
+### Improved
+
+- 网络拓扑的逐跳标签点击改为即时 Agent Link TCP 探测；总延迟点击改为对完整相邻 Agent Link TCP 边发起同一轮探测，并仅在同一 `probeRoundId` 的必经边全部成功时求和，缺边或零成功显示超时。
+
+Agent 保持 `2.2.248`；ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.4.133] - 2026-11-24
 
 ### Added
