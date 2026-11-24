@@ -4,7 +4,7 @@ import { topologyPathEdgeIds } from "./networkTopologyPaths";
 import { parseLinkTestMessage } from "@/components/LinkTestLatencySummary";
 import { topologyRuleHref } from "./topologyRuleLink";
 import { activeTopologySegmentProbeIds, latestAutomaticTopologySegment, mergeTopologySegmentProbeResults, summarizePhysicalTopologySegmentLabels, summarizeTopologySegmentLabels, topologySegmentProbeKey, type AutomaticTopologySegment, type TopologySegmentProbe } from "./topologySegmentProbeState";
-import { improveTopologyOrder } from "./topologyLayout";
+import { acyclicTopologyLayerEdges, improveTopologyOrder } from "./topologyLayout";
 import { routeSmoothLayeredTopologyGraph, topologyRoutePath } from "./topologyRouting";
 import { topologyEnabledFlag, visibleTopologyTunnelVariants } from "./topologyTunnelVariants";
 import { combineTopologyHostVariants, joinTopologyHostPaths, MAX_TOPOLOGY_VARIANTS, type TopologyExpansionState } from "./topologyExpansion";
@@ -621,11 +621,14 @@ function buildGraph(paths: PhysicalPath[]) {
     depth.set(node.id, rootIds.has(node.id) ? 0 : Math.max(1, desiredDepth.get(node.id) || 1));
   }
 
-  // 最长依赖路径决定中间层级，确保边始终从左向右。
+  // 最长依赖路径决定中间层级，确保普通边始终从左向右。服务引用可能
+  // 把物理图闭合成环；环的回边仍会绘制，但绝不能参与最长路径松弛，
+  // 否则每一轮都会把整段环推到深度上限，形成超宽画布。
+  const layerEdges = acyclicTopologyLayerEdges(classifiedNodes.map((node) => node.id), edges);
   for (let pass = 0; pass < Math.max(1, classifiedNodes.length); pass += 1) {
     let changed = false;
-    for (const edge of edges) {
-      const nextDepth = Math.min(10, (depth.get(edge.from) || 0) + 1);
+    for (const edge of layerEdges) {
+      const nextDepth = (depth.get(edge.from) || 0) + 1;
       if (nextDepth > (depth.get(edge.to) || 0)) {
         depth.set(edge.to, nextDepth);
         changed = true;

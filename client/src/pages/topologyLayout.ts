@@ -1,5 +1,36 @@
 type LayoutNode = { id: string; label: string; column: number; row: number };
-type LayoutEdge = { from: string; to: string };
+type LayoutEdge = { from: string; to: string; id?: string };
+
+/**
+ * Select the forward edges used to assign layered columns. A service reference
+ * can make the physical graph cyclic; feeding its back edge into longest-path
+ * relaxation pushes every member of that cycle to the artificial depth cap.
+ * The omitted edge is still rendered, it just does not advance a column.
+ */
+export function acyclicTopologyLayerEdges<T extends LayoutEdge>(nodeIds: Iterable<string>, edges: T[]) {
+  const outgoing = new Map<string, T[]>();
+  for (const edge of edges) {
+    const list = outgoing.get(edge.from) || [];
+    list.push(edge);
+    outgoing.set(edge.from, list);
+  }
+  for (const list of outgoing.values()) list.sort((a, b) => String(a.id || `${a.from}=>${a.to}`).localeCompare(String(b.id || `${b.from}=>${b.to}`)));
+  const state = new Map<string, 0 | 1 | 2>();
+  const forward = new Set<T>();
+  const visit = (id: string) => {
+    state.set(id, 1);
+    for (const edge of outgoing.get(id) || []) {
+      // A DFS back edge closes a real dependency cycle. Keep it visible, but
+      // never use it for depth calculation.
+      if (state.get(edge.to) === 1) continue;
+      forward.add(edge);
+      if (!state.get(edge.to)) visit(edge.to);
+    }
+    state.set(id, 2);
+  };
+  for (const id of [...nodeIds].sort((a, b) => a.localeCompare(b))) if (!state.get(id)) visit(id);
+  return forward;
+}
 
 /** Reduce crossings without changing physical identity or inventing graph edges. */
 export function improveTopologyOrder<T extends LayoutNode>(columns: Map<number, T[]>, edges: LayoutEdge[], bottomIds: Set<string>) {

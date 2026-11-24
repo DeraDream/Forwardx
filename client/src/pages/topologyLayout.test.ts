@@ -1,6 +1,18 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { improveTopologyOrder } from "./topologyLayout";
+import { acyclicTopologyLayerEdges, improveTopologyOrder } from "./topologyLayout";
+
+test("cyclic service references retain a visible back edge without extending layered depth", () => {
+  const edges = [
+    { id: "entry-a", from: "entry", to: "a" },
+    { id: "a-b", from: "a", to: "b" },
+    { id: "b-a", from: "b", to: "a" },
+    { id: "b-exit", from: "b", to: "exit" },
+  ];
+  const layerEdges = acyclicTopologyLayerEdges(["entry", "a", "b", "exit"], edges);
+  assert.equal(layerEdges.size, 3);
+  assert.equal([...layerEdges].some((edge) => edge.id === "a-b") && [...layerEdges].some((edge) => edge.id === "b-a"), false);
+});
 
 test("crossing reduction swaps positions without changing path identities", () => {
   const a = { id: "a", label: "a", column: 0, row: 0 }, b = { id: "b", label: "b", column: 0, row: 1 };
