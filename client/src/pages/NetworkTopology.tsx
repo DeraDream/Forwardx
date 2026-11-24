@@ -1512,6 +1512,16 @@ function NetworkTopologyContent() {
     const edgePaths = paths.filter((candidate) => topologyPathEdgeIds([candidate.entry, ...candidate.relays, candidate.landing].map((node) => node.id)).includes(edge.id));
     return physicalEdgeMeasurementLabel(edge, edgePaths, false);
   };
+  const startAgentLinkRound = async (candidates: Array<{ sourceHostId: number; targetHostId: number; targetAddress: string }>, expectedEdges: number) => {
+    const deadline = Date.now() + 40_000;
+    while (Date.now() < deadline) {
+      const round = await probeAgentLinksNow.mutateAsync({ watcherId: agentLinkWatcherIdRef.current, candidates, transport: "tcp" });
+      if (round.requested === expectedEdges && round.queued === expectedEdges) return round;
+      setProbeMessage("已有后台 Agent Link 任务正在收尾，等待后重新开始同轮探测…");
+      await new Promise((resolve) => window.setTimeout(resolve, 1_000));
+    }
+    throw new Error("等待现有 Agent Link 任务结束超时");
+  };
   const waitForAgentLinkRound = async (edges: AgentLinkEdgeIdentity[], probeRoundId: string) => {
     const deadline = Date.now() + 45_000;
     while (Date.now() < deadline) {
@@ -1534,10 +1544,7 @@ function NetworkTopologyContent() {
     setAgentLinkPendingEdges((current) => new Set(current).add(pendingKey));
     setProbeMessage(`正在探测 ${identity.targetAddress}:${identity.targetPort} Agent Link TCP…`);
     try {
-      const round = await probeAgentLinksNow.mutateAsync({
-        watcherId: agentLinkWatcherIdRef.current,
-        candidates: [{ sourceHostId, targetHostId, targetAddress: identity.targetAddress }],
-      });
+      const round = await startAgentLinkRound([{ sourceHostId, targetHostId, targetAddress: identity.targetAddress }], 1);
       const aggregate = await waitForAgentLinkRound([identity], round.probeRoundId);
       await topologyAgentLatestQuery.refetch();
       setProbeMessage(aggregate.status === "success" ? `Agent Link 单跳延迟 ${aggregate.latencyMs} ms` : "Agent Link 单跳探测超时");
@@ -1561,7 +1568,7 @@ function NetworkTopologyContent() {
     setAgentLinkPendingEdges((current) => new Set([...current, ...pathEdgeIds.map((edgeId) => topologySegmentProbeKey(path.id, edgeId))]));
     setProbeMessage("正在执行同轮 Agent Link TCP 逐跳探测…");
     try {
-      const round = await probeAgentLinksNow.mutateAsync({ watcherId: agentLinkWatcherIdRef.current, candidates });
+      const round = await startAgentLinkRound(candidates, edges.length);
       setAgentLinkPathProbes((current) => ({ ...current, [path.id]: { status: "pending", probeRoundId: round.probeRoundId, latencyMs: null } }));
       const aggregate = await waitForAgentLinkRound(edges, round.probeRoundId);
       setAgentLinkPathProbes((current) => ({ ...current, [path.id]: {

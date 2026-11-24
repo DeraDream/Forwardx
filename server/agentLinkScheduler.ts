@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { mapWithConcurrency } from "./asyncPool";
 import * as db from "./db";
-import { enqueueAgentLinkProbeTask, sweepExpiredAgentLinkProbeTasks } from "./agentLinkTasks";
+import { enqueueAgentLinkProbeTask, hasActiveAgentLinkProbeEdge, sweepExpiredAgentLinkProbeTasks } from "./agentLinkTasks";
 import {
   buildAgentLinkEdgeKey,
   normalizeAgentLinkIdentity,
@@ -169,27 +169,60 @@ async function refreshDemandTargetPorts() {
   }
 }
 
-export async function runAgentLinkProbeRound(mode: AgentLinkDemandMode = "background") {
-  pruneDemands();
-  await refreshDemandTargetPorts();
+async function enqueueAgentLinkRoundIdentities(identities: AgentLinkIdentity[], mode: AgentLinkDemandMode) {
   const now = Date.now();
-  const edges = Array.from(demands.values()).filter((edge) => demandMatchesMode(edge, mode, now));
   const probeRoundId = crypto.randomUUID();
+  const unique = new Map(identities.map((identity) => [buildAgentLinkEdgeKey(identity), identity]));
+  const edges = Array.from(unique.values());
+  // Interactive path probes require every edge to share one round. Avoid a
+  // partial batch when a background task is still using one of those edges.
+  if (mode === "interactive" && edges.some((identity) => hasActiveAgentLinkProbeEdge(buildAgentLinkEdgeKey(identity)))) {
+    latestRound = { probeRoundId, mode, requested: edges.length, queued: 0, errors: edges.length, startedAt: now };
+    return latestRound;
+  }
   let queued = 0;
   let errors = 0;
-  await mapWithConcurrency(edges, 16, async (edge) => {
+  await mapWithConcurrency(edges, 16, async (identity) => {
     try {
-      await enqueueAgentLinkProbeTask({ ...edge.identity, probeRoundId });
+      await enqueueAgentLinkProbeTask({ ...identity, probeRoundId });
       queued += 1;
     } catch (error) {
       errors += 1;
       const message = error instanceof Error ? error.message : String(error);
       if (!/active probe task|capability is stale|listener is not ready/i.test(message)) {
-        console.warn(`[AgentLink] queue failed edge=${buildAgentLinkEdgeKey(edge.identity)} round=${probeRoundId}: ${message}`);
+        console.warn(`[AgentLink] queue failed edge=${buildAgentLinkEdgeKey(identity)} round=${probeRoundId}: ${message}`);
       }
     }
   });
   latestRound = { probeRoundId, mode, requested: edges.length, queued, errors, startedAt: now };
+  return latestRound;
+}
+
+export async function runAgentLinkProbeIdentities(identities: AgentLinkIdentity[], mode: AgentLinkDemandMode = "interactive") {
+  return enqueueAgentLinkRoundIdentities(identities.map(normalizeAgentLinkIdentity).filter((identity): identity is AgentLinkIdentity => !!identity), mode);
+}
+
+export async function runAgentLinkProbeRound(mode: AgentLinkDemandMode = "background") {
+  pruneDemands();
+  await refreshDemandTargetPorts();
+  const now = Date.now();
+  const identities = Array.from(demands.values()).filter((edge) => demandMatchesMode(edge, mode, now)).map((edge) => edge.identity);
+  const probeRoundId = crypto.randomUUID();
+  let queued = 0;
+  let errors = 0;
+  await mapWithConcurrency(identities, 16, async (identity) => {
+    try {
+      await enqueueAgentLinkProbeTask({ ...identity, probeRoundId });
+      queued += 1;
+    } catch (error) {
+      errors += 1;
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/active probe task|capability is stale|listener is not ready/i.test(message)) {
+        console.warn(`[AgentLink] queue failed edge=${buildAgentLinkEdgeKey(identity)} round=${probeRoundId}: ${message}`);
+      }
+    }
+  });
+  latestRound = { probeRoundId, mode, requested: identities.length, queued, errors, startedAt: now };
   return latestRound;
 }
 
