@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.4.133] - 2026-11-24
+
+### Added
+
+- Agent Link 新增经过鉴权的 TCP/UDP Agent 探测端口、持久化任务状态机、重启恢复、超时补偿与独立历史存储；网络拓扑逐跳边可并行读取真实 `connectHost` 的 Agent Link TCP 数据，并在无数据时保持旧 Ping 降级。
+- Agent Probe 端口作为主机永久系统保留端口，规则、隧道、Mimic、落地服务及结构化导入均拒绝冲突。
+
+Agent 更新至 `2.2.248`；ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.4.132] - 2026-11-24
 
 ### Improved

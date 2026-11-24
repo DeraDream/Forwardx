@@ -34,6 +34,7 @@ import {
 import { resolveRuleProxyProtocolOptions } from "../gostProxyProtocol";
 import { HOST_ONLINE_TTL_MS } from "../hostHeartbeatPolicy";
 import { LINK_PROBE_FRESH_MS, LINK_PROBE_MAX_FUTURE_SKEW_MS } from "../../shared/linkProbePolicy";
+import { getSystemReservedPortsForHost, isSystemReservedPort } from "../systemReservedPorts";
 
 function databaseBool(value: unknown, fallback = false) {
   if (value === undefined || value === null || value === "") return fallback;
@@ -1681,7 +1682,10 @@ export async function getUsedPortsOnHost(
 ): Promise<Set<number>> {
   const db = await getDb();
   if (!db) return new Set();
-  const landingRows = await db.select({ port: landingServices.port, previousPort: landingServices.previousPort }).from(landingServices).where(eq(landingServices.hostId, hostId));
+  const [landingRows, systemReservedPorts] = await Promise.all([
+    db.select({ port: landingServices.port, previousPort: landingServices.previousPort }).from(landingServices).where(eq(landingServices.hostId, hostId)),
+    getSystemReservedPortsForHost(hostId),
+  ]);
   const excludedIds = Array.from(new Set(
     (Array.isArray(excludeRuleId) ? excludeRuleId : [excludeRuleId])
       .map((id) => Number(id || 0))
@@ -1749,6 +1753,7 @@ export async function getUsedPortsOnHost(
     const port = Number(value);
     if (Number.isInteger(port) && port >= 1 && port <= 65535) used.add(port);
   };
+  systemReservedPorts.forEach((reservation) => addPort(reservation.port));
   landingRows.forEach((row: any) => { addPort(row.port); addPort(row.previousPort); });
   usedRules.forEach((row: any) => addPort(row.port));
   usedPrimaryExits.forEach((row: any) => addPort(row.port));
@@ -1783,6 +1788,7 @@ export async function isPortUsedOnHost(
 ): Promise<boolean> {
   const db = await getDb();
   if (!db) return false;
+  if (await isSystemReservedPort(hostId, sourcePort)) return true;
   const landingRows = await db.select({ id: landingServices.id }).from(landingServices).where(and(eq(landingServices.hostId, hostId), or(eq(landingServices.port, sourcePort), eq(landingServices.previousPort, sourcePort)))).limit(1);
   if (landingRows.length) return true;
   const excludedIds = Array.from(new Set(

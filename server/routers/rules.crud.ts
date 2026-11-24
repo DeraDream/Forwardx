@@ -25,6 +25,7 @@ import { ensureTunnelListenerPortPolicy, reserveTunnelExitPort, usesSharedTunnel
 import { trafficBillingUserLockKey, withKeyedTaskLock } from "../keyedTaskLock";
 import { mapWithConcurrency } from "../asyncPool";
 import { reserveRuleCreateQuota, type RuleQuotaReservation } from "../ruleQuotaReservations";
+import { assertPortNotSystemReserved } from "../systemReservedPorts";
 
 const targetHostSchema = z.string().min(1).max(253).refine(
   (v) => /^[a-zA-Z0-9]([a-zA-Z0-9\-_.]*[a-zA-Z0-9])?$|^[a-fA-F0-9:.]+$/.test(v.trim()),
@@ -625,9 +626,11 @@ async function assertRulePortWithinEntryPolicy(options: {
   const port = Number(options.sourcePort || 0);
   if (!port) return;
   let policy = portPolicyFrom(null);
+  let entryHostId = Number(options.hostId);
   if (Number(options.tunnelId || 0) > 0) {
     const tunnel = options.tunnel || await db.getTunnelById(Number(options.tunnelId));
-    const entryHost = await db.getHostById(Number((tunnel as any)?.entryHostId || options.hostId));
+    entryHostId = Number((tunnel as any)?.entryHostId || options.hostId);
+    const entryHost = await db.getHostById(entryHostId);
     policy = combineHostPortPolicyWithRange(
       entryHost as any,
       (tunnel as any)?.portRangeStart,
@@ -637,6 +640,7 @@ async function assertRulePortWithinEntryPolicy(options: {
     const host = await db.getHostById(Number(options.hostId));
     policy = portPolicyFrom(host as any);
   }
+  await assertPortNotSystemReserved(entryHostId, port);
   if (!isPortAllowedByPolicy(port, policy)) {
     throw new Error(portPolicyErrorMessage(policy, "入口端口"));
   }
@@ -986,6 +990,7 @@ export async function createDirectForwardRuleForActor(
       if (!sourcePortReservation) throw new Error("该主机端口区间内已无可用端口");
       sourcePort = sourcePortReservation.port;
     } else {
+      await assertPortNotSystemReserved(hostId, sourcePort);
       if (!isPortAllowedByPolicy(sourcePort, effectivePolicy)) throw new Error(portPolicyErrorMessage(effectivePolicy, "源端口"));
       sourcePortReservation = tryReserveHostPort(hostId, sourcePort, input.protocol);
       if (!sourcePortReservation) throw new Error(`端口 ${sourcePort} 正在被其他请求分配，请稍后重试`);

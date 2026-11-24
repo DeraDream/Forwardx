@@ -2709,6 +2709,11 @@ function HostsContent() {
                       const latestMetric = hostLatestMetricById.get(host.id);
                       const agentUpgradeTimedOut = isAgentUpgradeTimedOut(host);
                       const agentNeedsUpdate = isAgentVersionBehind(host.agentVersion, latestAgentVersion);
+                      const agentProbeReady = Number(host.agentProbeVersion || 0) > 0 && !!host.agentProbeTcpReady && !!host.agentProbeUdpReady;
+                      const agentProbePartial = Number(host.agentProbeVersion || 0) > 0 && !agentProbeReady;
+                      const agentProbeTitle = Number(host.agentProbeVersion || 0) > 0
+                        ? `Agent 探测端口: ${Number(host.agentProbePort || 9811)}\nTCP: ${host.agentProbeTcpReady ? "就绪" : "不可用"}\nUDP: ${host.agentProbeUdpReady ? "就绪" : "不可用"}${host.agentProbeMessage ? `\n${host.agentProbeMessage}` : ""}`
+                        : "当前 Agent 尚未上报专用探测能力";
                       const remainingDays = formatHostRemainingDays(host.purchasedAt, host.stoppedAt);
                       const primaryAddressText = hostPrimaryAddressText(host);
                       const uptimeText = latestMetric?.uptime == null ? "--" : formatUptime(latestMetric.uptime);
@@ -2761,6 +2766,18 @@ function HostsContent() {
                                 {agentNeedsUpdate && (
                                   <Badge variant="outline" className="h-4 shrink-0 border-amber-500/30 px-1 py-0 text-[9px] leading-none text-amber-500">
                                     新版本
+                                  </Badge>
+                                )}
+                                {(agentProbeReady || agentProbePartial) && (
+                                  <Badge
+                                    variant="outline"
+                                    title={agentProbeTitle}
+                                    className={cn(
+                                      "h-4 shrink-0 px-1 py-0 text-[9px] leading-none",
+                                      agentProbeReady ? "border-emerald-500/30 text-emerald-500" : "border-amber-500/30 text-amber-500",
+                                    )}
+                                  >
+                                    探测 {agentProbeReady ? "TCP/UDP" : "异常"}
                                   </Badge>
                                 )}
                                 {host.agentUpgradeRequested && (
@@ -3066,7 +3083,7 @@ function HostsContent() {
             </div>
             <div className="space-y-2">
               <p className="text-sm font-medium">快速安装命令：</p>
-              <pre className="max-h-40 overflow-auto rounded-lg border bg-background/50 p-3 text-xs whitespace-pre-wrap">{reinstallToken ? `curl -fsSL "${typeof window !== "undefined" ? window.location.origin : "http://你的面板地址:9810"}/api/agent/install.sh" | FORWARDX_INSTALL_MIMIC=${reinstallMimic ? "yes" : "no"} PANEL_URL="${typeof window !== "undefined" ? window.location.origin : "http://你的面板地址:9810"}" bash -s -- install ${reinstallToken}` : "正在提取当前 Agent Token..."}</pre>
+              <pre className="max-h-40 overflow-auto rounded-lg border bg-background/50 p-3 text-xs whitespace-pre-wrap">{reinstallToken ? `curl -fsSL "${typeof window !== "undefined" ? window.location.origin : "http://你的面板地址:9810"}/api/agent/install.sh" | FORWARDX_INSTALL_MIMIC=${reinstallMimic ? "yes" : "no"} FORWARDX_AGENT_PROBE_PORT=${Number(reinstallHost?.agentProbePort || 9811)} PANEL_URL="${typeof window !== "undefined" ? window.location.origin : "http://你的面板地址:9810"}" bash -s -- install ${reinstallToken}` : "正在提取当前 Agent Token..."}</pre>
               <Button
                 variant="outline"
                 className="w-full gap-2"

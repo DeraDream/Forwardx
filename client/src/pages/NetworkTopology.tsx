@@ -1351,6 +1351,34 @@ function NetworkTopologyContent() {
   }, [paths, activeEntry, category]);
   const overviewPaths = useMemo(() => relationshipOverviewPaths(visiblePaths), [visiblePaths]);
   const graph = useMemo(() => buildGraph(overviewPaths), [overviewPaths]);
+  const topologyAgentPairs = useMemo(() => graph.edges.flatMap((edge) => {
+    const sourceHostId = Number(edge.from.replace(/^host:/, ""));
+    const targetHostId = Number(edge.to.replace(/^host:/, ""));
+    return sourceHostId > 0 && targetHostId > 0 ? [{ sourceHostId, targetHostId }] : [];
+  }), [graph.edges]);
+  const topologyAgentEdgesQuery = trpc.agentLinks.topologyEdges.useQuery(
+    { pairs: topologyAgentPairs.length ? topologyAgentPairs : [{ sourceHostId: 1, targetHostId: 2 }] },
+    { enabled: topologyAgentPairs.length > 0, refetchInterval: pollingInterval("normal"), refetchOnWindowFocus: false },
+  );
+  const topologyAgentEdges = (topologyAgentEdgesQuery.data || []) as Array<any>;
+  const topologyAgentLatestQuery = trpc.agentLinks.latest.useQuery(
+    { edges: topologyAgentEdges.length ? topologyAgentEdges : [{ sourceHostId: 1, targetHostId: 2, targetAddress: "placeholder.invalid", targetPort: 1, transport: "tcp" }] },
+    { enabled: topologyAgentEdges.length > 0, refetchInterval: pollingInterval("fast"), refetchOnWindowFocus: false },
+  );
+  const topologyAgentLatestByPair = useMemo(() => {
+    const result = new Map<string, any>();
+    for (const sample of topologyAgentLatestQuery.data || []) {
+      const key = `${Number((sample as any).sourceHostId)}:${Number((sample as any).targetHostId)}`;
+      const previous = result.get(key);
+      // TCP preserves the established topology latency meaning; use UDP only
+      // when no TCP Agent Link sample exists for this exact physical pair.
+      if (!previous
+        || ((sample as any).transport === "tcp" && previous.transport !== "tcp")
+        || ((sample as any).transport === previous.transport
+          && new Date((sample as any).recordedAt || 0).getTime() > new Date(previous.recordedAt || 0).getTime())) result.set(key, sample);
+    }
+    return result;
+  }, [topologyAgentLatestQuery.data]);
   const canvasWidth = graph.width;
   const canvasHeight = graph.height;
   const selectedPath = visiblePaths.find((path) => path.id === selectedPathId) || null;
@@ -1382,6 +1410,19 @@ function NetworkTopologyContent() {
   const edgeSourceNode = (edge: TopologyEdge) => graph.nodes.find((node) => node.id === edge.from) || null;
   const edgeSourceOffline = (edge: TopologyEdge) => edgeSourceNode(edge)?.online === false;
   const automaticSegmentFresh = (segment: AutomaticTopologySegment) => Date.now() - new Date(segment.recordedAt || 0).getTime() <= 30_000;
+  const agentLinkEdgeMeasurement = (edge: TopologyEdge) => {
+    const sourceHostId = Number(edge.from.replace(/^host:/, ""));
+    const targetHostId = Number(edge.to.replace(/^host:/, ""));
+    const sample = topologyAgentLatestByPair.get(`${sourceHostId}:${targetHostId}`);
+    if (!sample || Date.now() - new Date(sample.recordedAt || 0).getTime() > 90_000) return null;
+    const successes = Number(sample.probeSuccesses || 0);
+    return {
+      at: new Date(sample.recordedAt || 0).getTime(),
+      pending: false,
+      success: successes > 0 && sample.latencyMs !== null && sample.latencyMs !== undefined,
+      label: successes > 0 && sample.latencyMs !== null && sample.latencyMs !== undefined ? `${Math.round(Number(sample.latencyMs))} ms` : "超时",
+    };
+  };
   const edgeLockedByPathProbe = (edge: TopologyEdge) => paths.some((candidate) => (
     !!candidate.ruleId && probingRuleIds.has(candidate.ruleId)
     && topologyPathEdgeIds([candidate.entry, ...candidate.relays, candidate.landing].map((node) => node.id)).includes(edge.id)
@@ -1391,6 +1432,7 @@ function NetworkTopologyContent() {
   const physicalEdgeMeasurementLabel = (edge: TopologyEdge, edgePaths: PhysicalPath[], includePending = true) => {
     if (edgeSourceOffline(edge)) return "离线";
     const candidates = [
+      ...(agentLinkEdgeMeasurement(edge) ? [agentLinkEdgeMeasurement(edge)!] : []),
       ...(includePending ? edgePaths.filter((path) => !!path.ruleId && probingRuleIds.has(path.ruleId)).map((path) => ({
         at: probingStartedAtRef.current.get(Number(path.ruleId)) || Date.now(),
         pending: true,

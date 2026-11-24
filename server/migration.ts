@@ -49,6 +49,9 @@ import {
   panelMigrationScopeLabel,
   type PanelMigrationScope,
 } from "../shared/panelMigration";
+import { buildAgentLinkEdgeKey } from "../shared/agentLink";
+import { buildRuleEndpointKey, buildServiceHealthKey } from "../shared/probeStorage";
+import { assertPortNotSystemReserved } from "./systemReservedPorts";
 
 export type MigrationJobStatus = "pending" | "running" | "success" | "failed";
 
@@ -186,7 +189,14 @@ const MIGRATION_RUNTIME_TIMEOUT_MS = Math.max(
     : 15 * 60 * 1000,
 );
 const MIGRATION_RUNTIME_POLL_MS = 2_000;
-const DIRECT_SQLITE_OPTIONAL_SOURCE_TABLES = new Set(["agent_traffic_reports"]);
+const DIRECT_SQLITE_OPTIONAL_SOURCE_TABLES = new Set([
+  "agent_traffic_reports",
+  "agent_link_latest",
+  "agent_link_latency_stats",
+  "agent_link_probe_tasks",
+  "rule_endpoint_latency_stats",
+  "service_health_stats",
+]);
 
 function normalizePanelUrl(url: string) {
   const value = url.trim().replace(/\/+$/, "");
@@ -212,6 +222,11 @@ export const ESSENTIAL_MIGRATION_OMITTED_TABLES = new Set<(typeof MIGRATION_TABL
   "host_probe_service_stats",
   "tunnel_latency_stats",
   "forward_group_latency_stats",
+  "agent_link_latest",
+  "agent_link_latency_stats",
+  "agent_link_probe_tasks",
+  "rule_endpoint_latency_stats",
+  "service_health_stats",
   "traffic_stats",
   "traffic_stat_buckets",
   "tcping_stats",
@@ -726,6 +741,11 @@ const IMPORT_TABLE_ORDER = [
   "tunnel_latency_stats",
   "full_chain_latency_stats",
   "forward_group_latency_stats",
+  "agent_link_latest",
+  "agent_link_latency_stats",
+  "agent_link_probe_tasks",
+  "rule_endpoint_latency_stats",
+  "service_health_stats",
   "traffic_stats",
   "traffic_stat_buckets",
   "agent_traffic_reports",
@@ -763,6 +783,11 @@ const IMPORT_TABLE_ORDER = [
 const BEST_EFFORT_MIGRATION_TABLES = new Set<MigrationTableName>([
   "host_metrics",
   "host_probe_service_stats",
+  "agent_link_latest",
+  "agent_link_latency_stats",
+  "agent_link_probe_tasks",
+  "rule_endpoint_latency_stats",
+  "service_health_stats",
   "host_traffic_counters",
   "user_traffic_counters",
   "forward_rule_traffic_counters",
@@ -1105,6 +1130,11 @@ function mapStoredHostIds(maps: ImportMaps, value: unknown) {
   return mapped.length > 0 ? mapped.sort((a, b) => a - b).join(",") : null;
 }
 
+async function assertImportedListenPort(hostId: number, port: unknown) {
+  const normalized = Math.floor(Number(port || 0));
+  if (normalized > 0 && normalized <= 65535) await assertPortNotSystemReserved(hostId, normalized);
+}
+
 async function prepareImportRow(table: string, source: Record<string, any>, maps: ImportMaps): Promise<PreparedImportRow | null> {
   const row = { ...source };
   delete row.id;
@@ -1137,6 +1167,7 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
     case "landing_services":
       row.hostId = mapRequiredId(maps, "hosts", source.hostId);
       row.userId = mapRequiredId(maps, "users", source.userId);
+      await assertImportedListenPort(row.hostId, source.port);
       return { row };
 
     case "landing_service_traffic_counters":
@@ -1188,17 +1219,23 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
       row.entryHostId = mapRequiredId(maps, "hosts", source.entryHostId);
       row.exitHostId = mapRequiredId(maps, "hosts", source.exitHostId);
       row.userId = mapRequiredId(maps, "users", source.userId);
+      await assertImportedListenPort(row.exitHostId, source.listenPort);
+      await assertImportedListenPort(row.exitHostId, source.mimicPort);
       row.isRunning = false;
       return { row };
 
     case "tunnel_hops":
       row.tunnelId = mapRequiredId(maps, "tunnels", source.tunnelId);
       row.hostId = mapRequiredId(maps, "hosts", source.hostId);
+      await assertImportedListenPort(row.hostId, source.listenPort);
+      await assertImportedListenPort(row.hostId, source.mimicPort);
       return { row, existingWhere: { tunnelId: row.tunnelId, seq: row.seq } };
 
     case "tunnel_exit_nodes":
       row.tunnelId = mapRequiredId(maps, "tunnels", source.tunnelId);
       row.hostId = mapRequiredId(maps, "hosts", source.hostId);
+      await assertImportedListenPort(row.hostId, source.listenPort);
+      await assertImportedListenPort(row.hostId, source.mimicPort);
       return { row, existingWhere: { tunnelId: row.tunnelId, seq: row.seq } };
 
     case "forward_groups":
@@ -1216,6 +1253,7 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
     case "forward_rules":
       row.hostId = mapRequiredId(maps, "hosts", source.hostId);
       row.userId = mapRequiredId(maps, "users", source.userId);
+      await assertImportedListenPort(row.hostId, source.sourcePort);
       row.tunnelId = mapOptionalId(maps, "tunnels", source.tunnelId);
       row.targetLandingServiceId = mapOptionalId(maps, "landing_services", source.targetLandingServiceId);
       row.forwardGroupId = mapOptionalId(maps, "forward_groups", source.forwardGroupId);
@@ -1298,6 +1336,72 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
     case "forward_group_latency_stats":
       row.groupId = mapRequiredId(maps, "forward_groups", source.groupId);
       return { row };
+
+    // Queued probes are local, short-lived dispatch work. Never resurrect
+    // signed tickets on another Panel during a structured migration.
+    case "agent_link_probe_tasks":
+      return null;
+
+    case "agent_link_latest":
+    case "agent_link_latency_stats": {
+      row.sourceHostId = mapRequiredId(maps, "hosts", source.sourceHostId);
+      row.targetHostId = mapRequiredId(maps, "hosts", source.targetHostId);
+      row.edgeKey = buildAgentLinkEdgeKey({
+        sourceHostId: row.sourceHostId,
+        targetHostId: row.targetHostId,
+        targetAddress: String(source.targetAddress || ""),
+        targetPort: Number(source.targetPort || 0),
+        transport: source.transport === "udp" ? "udp" : "tcp",
+      });
+      if (!row.edgeKey) return null;
+      return {
+        row,
+        existingWhere: table === "agent_link_latest"
+          ? { edgeKey: row.edgeKey }
+          : { edgeKey: row.edgeKey, probeRoundId: row.probeRoundId },
+      };
+    }
+
+    case "rule_endpoint_latency_stats":
+      row.ruleId = mapRequiredId(maps, "forward_rules", source.ruleId);
+      row.sourceHostId = mapRequiredId(maps, "hosts", source.sourceHostId);
+      row.targetHostId = mapOptionalId(maps, "hosts", source.targetHostId);
+      row.endpointKey = buildRuleEndpointKey({
+        ruleId: row.ruleId,
+        sourceHostId: row.sourceHostId,
+        targetHostId: row.targetHostId,
+        targetAddress: String(source.targetAddress || ""),
+        targetPort: Number(source.targetPort || 0),
+        transport: source.transport,
+        probeMethod: source.probeMethod,
+      });
+      return row.endpointKey ? { row, existingWhere: { endpointKey: row.endpointKey, probeRoundId: row.probeRoundId } } : null;
+
+    case "service_health_stats": {
+      const serviceType = String(source.serviceType || "").trim().toLowerCase();
+      row.hostId = mapOptionalId(maps, "hosts", source.hostId);
+      if (["landing", "landing-service", "landing-latency-target", "ss"].includes(serviceType)) {
+        row.serviceId = mapOptionalId(maps, "landing_services", source.serviceId);
+      } else if (serviceType === "host-probe-service") {
+        row.serviceId = mapOptionalId(maps, "host_probe_services", source.serviceId);
+      } else if (serviceType === "rule") {
+        row.serviceId = mapOptionalId(maps, "forward_rules", source.serviceId);
+      } else if (serviceType === "tunnel") {
+        row.serviceId = mapOptionalId(maps, "tunnels", source.serviceId);
+      } else {
+        row.serviceId = null;
+      }
+      row.serviceKey = buildServiceHealthKey({
+        serviceType,
+        serviceId: row.serviceId,
+        hostId: row.hostId,
+        targetAddress: String(source.targetAddress || ""),
+        targetPort: Number(source.targetPort || 0),
+        transport: source.transport,
+        probeMethod: source.probeMethod,
+      });
+      return row.serviceKey ? { row, existingWhere: { serviceKey: row.serviceKey, probeRoundId: row.probeRoundId } } : null;
+    }
 
     case "tcping_stats":
       row.ruleId = mapRequiredId(maps, "forward_rules", source.ruleId);

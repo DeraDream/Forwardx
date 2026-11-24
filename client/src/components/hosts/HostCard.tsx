@@ -663,6 +663,20 @@ export default function HostCard({
     latestAgentVersion,
   );
   const agentUpgradeTimedOut = isAgentUpgradeTimedOut(host);
+  const agentProbeVersion = Number(host.agentProbeVersion || 0);
+  const agentProbeReady = agentProbeVersion > 0 && !!host.agentProbeTcpReady && !!host.agentProbeUdpReady;
+  const agentProbeTitle = agentProbeVersion > 0
+    ? `Agent 探测端口: ${Number(host.agentProbePort || 9811)}\nTCP: ${host.agentProbeTcpReady ? "就绪" : "不可用"}\nUDP: ${host.agentProbeUdpReady ? "就绪" : "不可用"}${host.agentProbeMessage ? `\n${host.agentProbeMessage}` : ""}`
+    : "";
+  const agentProbeBadge = agentProbeVersion > 0 ? (
+    <Badge
+      variant="outline"
+      title={agentProbeTitle}
+      className={`shrink-0 px-1.5 py-0 text-[10px] ${agentProbeReady ? "border-emerald-500/30 text-emerald-500" : "border-amber-500/30 text-amber-500"}`}
+    >
+      探测{agentProbeReady ? "正常" : "异常"}
+    </Badge>
+  ) : null;
   const isOnline = !!host.isOnline;
   const trafficUsageProgressClass =
     trafficLimit > 0
@@ -832,6 +846,7 @@ export default function HostCard({
                     新版
                   </Badge>
                 )}
+                {agentProbeBadge}
               </div>
               {host.agentUpgradeRequested && (
                 <div className="mt-1 flex flex-wrap gap-1.5">
@@ -879,6 +894,7 @@ export default function HostCard({
                     新版
                   </Badge>
                 )}
+                {agentProbeBadge}
               </div>
               {host.agentUpgradeRequested && (
                 <div className="mt-1 flex flex-wrap gap-1.5">

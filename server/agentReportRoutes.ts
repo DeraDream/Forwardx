@@ -1,4 +1,5 @@
 import { Router, Request, Response } from "express";
+import crypto from "node:crypto";
 import * as db from "./db";
 import { isHostMetricsWatching, isHostTopologyTrafficWatching, pushAgentRefresh } from "./agentEvents";
 import {
@@ -44,6 +45,7 @@ import { clearRuleLatencyQueryCaches } from "./ruleLatencyQueryCache";
 import { agentTcpingReportGate } from "./agentTcpingReportGate";
 import { pruneMapEntries, setBoundedMapValue } from "./boundedCache";
 import { branchedTunnelExitEndpoints, relayBranchedTunnelExitEndpoints } from "./tunnelBranchPlan";
+import { completeAgentLinkProbeTask } from "./agentLinkTasks";
 
 const VERBOSE_AGENT_REPORTS = /^(1|true|yes|on)$/i.test(String(process.env.FORWARDX_VERBOSE_AGENT_REPORTS || ""));
 
@@ -550,6 +552,26 @@ agentRouter.post("/api/agent/support-bundle-result", async (req: Request, res: R
     res.json({ success: accepted });
   } catch (error) {
     console.error("[SupportBundle] Agent report failed:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+agentRouter.post("/api/agent/agent-link-probe-result", async (req: Request, res: Response) => {
+  try {
+    const host = await getAgentHostIdentityFromRequest(req);
+    if (!host) {
+      res.status(401).json({ error: "Invalid token" });
+      return;
+    }
+    const result = req.body?.result;
+    if (!result?.taskId) {
+      res.status(400).json({ error: "result.taskId is required" });
+      return;
+    }
+    const accepted = await completeAgentLinkProbeTask(Number(host.id), result);
+    res.json({ success: accepted });
+  } catch (error) {
+    console.error("[AgentLink] Agent report failed:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -1651,25 +1673,53 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
       }
     });
 
+    const serviceProbeRoundId = `legacy-service:${crypto.randomUUID()}`;
     const landingServiceReports = serviceResults.filter((report: any) => Number(report.landingServiceId || 0) > 0);
     if (landingServiceReports.length > 0) {
       const marker = await db.getLandingHostByHostId(Number(host.id)) as any;
       if (marker?.isEnabled !== false) {
         const acceptedLandingStats: Array<{ serviceId: number; hostId: number; latencyMs: number | null; isTimeout: boolean }> = [];
+        const acceptedLandingHealth: any[] = [];
         await Promise.all(landingServiceReports.map(async (report: any) => {
           const service = await db.getLandingServiceById(Number(report.landingServiceId), false) as any;
           if (!service || Number(service.hostId) !== Number(host.id) || service.isEnabled === false) return;
           if (report.targetIp && !sameProbeTarget(report.targetIp, service.latencyTargetHost)) return;
           if (report.targetPort && Number(report.targetPort) !== Number(service.latencyTargetPort || 443)) return;
-          const latencyMs = typeof report.latencyMs === "number" && report.latencyMs > 0 ? Math.round(report.latencyMs) : null;
-          acceptedLandingStats.push({ serviceId: Number(service.id), hostId: Number(host.id), latencyMs, isTimeout: !!report.isTimeout || latencyMs === null });
+          const healthLatencyMs = typeof report.latencyMs === "number" && report.latencyMs >= 0 ? Math.round(report.latencyMs) : null;
+          const legacyLatencyMs = typeof report.latencyMs === "number" && report.latencyMs > 0 ? Math.round(report.latencyMs) : null;
+          const { probeCount, probeSuccesses } = normalizeAgentProbeCounts(report, { legacyZeroAsSuccess: false });
+          const isTimeout = !!report.isTimeout || probeSuccesses <= 0 || healthLatencyMs === null;
+          const legacyIsTimeout = !!report.isTimeout || legacyLatencyMs === null;
+          acceptedLandingStats.push({ serviceId: Number(service.id), hostId: Number(host.id), latencyMs: legacyLatencyMs, isTimeout: legacyIsTimeout });
+          if (String(report.method || "tcping").toLowerCase() !== "ping") {
+            acceptedLandingHealth.push({
+              serviceType: "landing-latency-target",
+              serviceId: Number(service.id),
+              hostId: Number(host.id),
+              targetAddress: String(service.latencyTargetHost || report.targetIp || ""),
+              targetPort: Number(service.latencyTargetPort || report.targetPort || 443),
+              transport: "tcp",
+              probeMethod: "tcp-connect",
+              probeRoundId: serviceProbeRoundId,
+              status: isTimeout ? ("unhealthy" as const) : probeSuccesses < probeCount ? ("degraded" as const) : ("healthy" as const),
+              latencyMs: isTimeout ? null : healthLatencyMs,
+              probeCount,
+              probeSuccesses,
+              errorCode: isTimeout ? "timeout" : null,
+            });
+          }
           await db.updateLandingService(Number(service.id), {
-            latestLatencyMs: latencyMs,
-            latestLatencyIsTimeout: !!report.isTimeout || latencyMs === null,
+            latestLatencyMs: legacyLatencyMs,
+            latestLatencyIsTimeout: legacyIsTimeout,
             latestLatencyAt: new Date(),
           });
         }));
         if (acceptedLandingStats.length > 0) await db.recordLandingServiceLatency(acceptedLandingStats);
+        if (acceptedLandingHealth.length > 0) {
+          await db.recordServiceHealthStats(acceptedLandingHealth).catch((error: unknown) => {
+            console.warn("[ServiceHealth] landing mirror write failed:", error instanceof Error ? error.message : String(error));
+          });
+        }
       }
     }
     const ordinaryServiceResults = serviceResults.filter((report: any) => Number(report.landingServiceId || 0) <= 0);
@@ -1681,17 +1731,49 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
       if (!expected) return [];
       if (report.targetIp && !sameProbeTarget(report.targetIp, expected.targetIp)) return [];
       if (report.targetPort && Number(report.targetPort) !== Number(expected.targetPort || 0)) return [];
+      const counts = normalizeAgentProbeCounts(report, { legacyZeroAsSuccess: false });
       return [{
         serviceId,
         hostId: host.id,
         latencyMs: typeof report.latencyMs === "number" && report.latencyMs > 0 ? report.latencyMs : null,
         isTimeout: !!report.isTimeout,
-        probeCount: Number(report.probeCount) || 1,
-        probeSuccesses: Number(report.probeSuccesses) || 0,
+        probeCount: counts.probeCount,
+        probeSuccesses: counts.probeSuccesses,
       }];
     });
     if (serviceStats.length > 0) {
       await db.insertHostProbeServiceStats(serviceStats);
+    }
+    const ordinaryServiceHealth = ordinaryServiceResults.flatMap((report) => {
+      const serviceId = Number(report.serviceId || 0);
+      const expected = expectedServiceById.get(serviceId) as any;
+      if (!expected) return [];
+      if (report.targetIp && !sameProbeTarget(report.targetIp, expected.targetIp)) return [];
+      if (report.targetPort && Number(report.targetPort) !== Number(expected.targetPort || 0)) return [];
+      if (String(report.method || expected.method || "tcping").toLowerCase() === "ping") return [];
+      const { probeCount, probeSuccesses } = normalizeAgentProbeCounts(report, { legacyZeroAsSuccess: false });
+      const latencyMs = typeof report.latencyMs === "number" && report.latencyMs >= 0 ? Math.round(report.latencyMs) : null;
+      const isTimeout = !!report.isTimeout || probeSuccesses <= 0 || latencyMs === null;
+      return [{
+        serviceType: "host-probe-service",
+        serviceId,
+        hostId: Number(host.id),
+        targetAddress: String(expected.targetIp || report.targetIp || ""),
+        targetPort: Number(expected.targetPort || report.targetPort || 0),
+        transport: "tcp" as const,
+        probeMethod: "tcp-connect",
+        probeRoundId: serviceProbeRoundId,
+        status: isTimeout ? ("unhealthy" as const) : probeSuccesses < probeCount ? ("degraded" as const) : ("healthy" as const),
+        latencyMs: isTimeout ? null : latencyMs,
+        probeCount,
+        probeSuccesses,
+        errorCode: isTimeout ? "timeout" : null,
+      }];
+    });
+    if (ordinaryServiceHealth.length > 0) {
+      await db.recordServiceHealthStats(ordinaryServiceHealth).catch((error: unknown) => {
+        console.warn("[ServiceHealth] host probe mirror write failed:", error instanceof Error ? error.message : String(error));
+      });
     }
 
     const reportedRuleRows = await db.getForwardRulesByIds(results.map((report) => Number(report.ruleId || 0))) as any[];
@@ -1727,6 +1809,8 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
       const baseLatency = typeof report.latencyMs === "number" && Number.isFinite(report.latencyMs) && report.latencyMs >= 0
         ? Number(report.latencyMs)
         : null;
+      const targetProbeCounts = normalizeAgentProbeCounts(report, { legacyZeroAsSuccess: false });
+      const targetIsTimeout = !!report.isTimeout || baseLatency === null || targetProbeCounts.probeSuccesses <= 0;
       if (tunnelId <= 0) {
         if (Number(rule.hostId || 0) !== Number(host.id)) return null;
         if (report.sourcePort && Number(report.sourcePort) !== Number(rule.sourcePort || 0)) return null;
@@ -1734,7 +1818,7 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
         if (!sameProbeTarget(report.targetIp, rule.targetIp)) return null;
         if (!isRuleLatencyReportMethodCompatible(rule.protocol, report.method)) return null;
         if (report.topologyKey && report.topologyKey !== directRuleLatencyTopologyKey(rule, host.id)) return null;
-        const isTimeout = !!report.isTimeout || baseLatency === null;
+        const isTimeout = targetIsTimeout;
         const latencyMs = isTimeout ? null : baseLatency;
         return {
           stat: {
@@ -1742,8 +1826,8 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
             hostId: host.id,
             latencyMs,
             isTimeout,
-            probeCount: Number(report.probeCount) || 1,
-            probeSuccesses: Number(report.probeSuccesses) || 0,
+            probeCount: targetProbeCounts.probeCount,
+            probeSuccesses: isTimeout ? 0 : targetProbeCounts.probeSuccesses,
             healthStatus: report.healthStatus || null,
             healthPending: !!report.healthPending,
           },
@@ -1758,16 +1842,16 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
         tunnel: tunnelContext.tunnel,
         report,
       })) return null;
-      const latestTunnelLatency = report.isTimeout ? null : await getLatestTunnelLatency(tunnelId);
+      const latestTunnelLatency = targetIsTimeout ? null : await getLatestTunnelLatency(tunnelId);
       const combined = combineTunnelRuleLatencySample({
         targetLatencyMs: baseLatency,
-        targetIsTimeout: !!report.isTimeout,
+        targetIsTimeout,
         tunnelLatencyMs: latestTunnelLatency?.latencyMs,
         tunnelIsTimeout: !!latestTunnelLatency?.isTimeout,
         tunnelRecordedAt: latestTunnelLatency?.recordedAt,
       });
       if (!combined) return null;
-      const tunnelIntroducedTimeout = combined.isTimeout && !report.isTimeout;
+      const tunnelIntroducedTimeout = combined.isTimeout && !targetIsTimeout;
       // Compose target and tunnel counters. If the tunnel path timed out,
       // no end-to-end packet can be considered successful; otherwise retain
       // the lower success ratio from either segment.
@@ -1815,6 +1899,54 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
         .filter((stat) => ruleGatePlan.transitionRuleIds.has(Number(stat.ruleId)))
         .map((stat) => Number(reportedRuleById.get(stat.ruleId)?.forwardGroupId || 0))
         .filter((groupId) => Number.isInteger(groupId) && groupId > 0))));
+
+      const endpointProbeRoundId = `legacy-rule-endpoint:${crypto.randomUUID()}`;
+      let endpointHostByAddress: Map<string, number> | null = null;
+      const endpointTargetHostId = async (rule: any, targetAddress: string) => {
+        const targetRuleId = Number(rule?.targetRuleId || 0);
+        if (targetRuleId > 0) return Number((await db.getForwardRuleById(targetRuleId) as any)?.hostId || 0) || null;
+        const landingServiceId = Number(rule?.targetLandingServiceId || 0);
+        if (landingServiceId > 0) return Number((await db.getLandingServiceById(landingServiceId, false) as any)?.hostId || 0) || null;
+        if (!endpointHostByAddress) {
+          endpointHostByAddress = new Map<string, number>();
+          for (const candidate of await db.getHosts() as any[]) {
+            for (const address of [candidate.ip, candidate.ipv4, candidate.ipv6, candidate.entryIp, candidate.tunnelEntryIp, candidate.ddnsDomain]) {
+              const key = String(address || "").trim().replace(/^\[|\]$/g, "").toLowerCase();
+              if (key && !endpointHostByAddress.has(key)) endpointHostByAddress.set(key, Number(candidate.id));
+            }
+          }
+        }
+        return endpointHostByAddress.get(String(targetAddress || "").trim().replace(/^\[|\]$/g, "").toLowerCase()) || null;
+      };
+      const endpointSamples = (await mapWithConcurrency(acceptedRuleStats, 12, async (entry) => {
+        const report = entry.gateReport as AgentTcpingResult;
+        if (String(report.method || "tcping").trim().toLowerCase() === "ping") return null;
+        const rule = reportedRuleById.get(Number(entry.stat.ruleId)) as any;
+        if (!rule) return null;
+        const targetAddress = String(report.targetIp || rule.targetIp || "").trim();
+        const targetPort = Number(report.targetPort || rule.targetPort || 0);
+        if (!targetAddress || targetPort < 1 || targetPort > 65535) return null;
+        return {
+          ruleId: Number(entry.stat.ruleId),
+          sourceHostId: Number(host.id),
+          targetHostId: await endpointTargetHostId(rule, targetAddress),
+          targetAddress,
+          targetPort,
+          transport: "tcp" as const,
+          probeMethod: "tcp-connect",
+          probeRoundId: endpointProbeRoundId,
+          latencyMs: entry.stat.isTimeout ? null : entry.stat.latencyMs,
+          isTimeout: !!entry.stat.isTimeout,
+          probeCount: Number(entry.stat.probeCount) || 1,
+          probeSuccesses: Number(entry.stat.probeSuccesses) || 0,
+          errorCode: entry.stat.isTimeout ? "timeout" : null,
+        };
+      })).filter((sample): sample is NonNullable<typeof sample> => !!sample);
+      if (endpointSamples.length > 0) {
+        await db.recordRuleEndpointLatencyStats(endpointSamples).catch((error: unknown) => {
+          console.warn("[RuleEndpoint] mirror write failed:", error instanceof Error ? error.message : String(error));
+        });
+      }
     }
 
     topologyGatePlan.commit();

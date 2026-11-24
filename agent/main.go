@@ -37,7 +37,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.247"
+var Version = "2.2.248"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -812,6 +812,7 @@ type Config struct {
 	PanelURL                  string `json:"panelUrl"`
 	Token                     string `json:"token"`
 	Interval                  int    `json:"interval"`
+	ProbePort                 int    `json:"probePort,omitempty"`
 	MigrationFallbackPanelURL string `json:"migrationFallbackPanelUrl,omitempty"`
 	PanelMigrationID          string `json:"panelMigrationId,omitempty"`
 	PanelMigrationStartedAt   int64  `json:"panelMigrationStartedAt,omitempty"`
@@ -859,6 +860,7 @@ type heartbeatResp struct {
 	LookingGlassTests       []lookingGlassTask       `json:"lookingGlassTests"`
 	Iperf3Tasks             []iperf3Task             `json:"iperf3Tasks"`
 	LinkSpeedTasks          []linkSpeedTask          `json:"linkSpeedTasks"`
+	AgentLinkProbeTasks     []agentLinkProbeTask     `json:"agentLinkProbeTasks"`
 	PluginTasks             []pluginAgentTask        `json:"pluginTasks"`
 	AgentUpgrade            *agentUpgrade            `json:"agentUpgrade"`
 	StateSignatures         map[string]string        `json:"stateSignatures,omitempty"`
@@ -2798,6 +2800,11 @@ func main() {
 	if cfg.Interval <= 0 {
 		cfg.Interval = 30
 	}
+	probePort, err := resolveAgentProbePort(cfg)
+	if err != nil {
+		fatal("load probe port: %v", err)
+	}
+	cfg.ProbePort = probePort
 	cfg.PanelURL = strings.TrimRight(cfg.PanelURL, "/")
 	activeConfigPath = resolvedConfigPath
 	setRuntimePanelURL(cfg.PanelURL)
@@ -2815,6 +2822,8 @@ func main() {
 		fatal("acquire Agent state lock: %v", err)
 	}
 	defer stateLock.Close()
+	probeServer := startAgentProbeServer(cfg.ProbePort, cfg.Token)
+	defer probeServer.Close()
 	restoreCountingChainStates(agentBootID)
 	cleanupStaleLinkSpeedNetworkNamespaces()
 
@@ -3565,6 +3574,7 @@ func register(cfg Config) error {
 		"cpuInfo":      cpuInfo(),
 		"memoryTotal":  memTotal(),
 		"agentVersion": Version,
+		"agentProbe":   currentAgentProbeStatus(),
 	}
 	var out map[string]any
 	return post(cfg, "/api/agent/register", payload, &out)
@@ -3590,7 +3600,7 @@ func logHeartbeatResponse(mode string, resp *heartbeatResp, duration time.Durati
 	anomalous = anomalous || resp.ReconciliationCoalesced
 	anomalous = anomalous || resp.AgentUpgrade != nil || resp.PanelMigration != nil || resp.FullHeartbeatRequired
 	anomalous = anomalous || len(resp.Actions) > 0 || len(resp.SelfTests) > 0
-	anomalous = anomalous || len(resp.LookingGlassTests) > 0 || len(resp.Iperf3Tasks) > 0 || len(resp.LinkSpeedTasks) > 0 || len(resp.PluginTasks) > 0
+	anomalous = anomalous || len(resp.LookingGlassTests) > 0 || len(resp.Iperf3Tasks) > 0 || len(resp.LinkSpeedTasks) > 0 || len(resp.AgentLinkProbeTasks) > 0 || len(resp.PluginTasks) > 0
 	interval := agentHeartbeatSummaryLogInterval
 	if anomalous {
 		interval = agentReportLogInterval
@@ -3612,7 +3622,7 @@ func logHeartbeatResponse(mode string, resp *heartbeatResp, duration time.Durati
 		len(resp.TunnelProbes),
 		len(resp.SelfTests),
 		len(resp.LookingGlassTests),
-		len(resp.Iperf3Tasks)+len(resp.LinkSpeedTasks),
+		len(resp.Iperf3Tasks)+len(resp.LinkSpeedTasks)+len(resp.AgentLinkProbeTasks),
 		len(resp.PluginTasks),
 		resp.NextInterval,
 		resp.ReconciliationCoalesced,
@@ -3909,6 +3919,7 @@ func heartbeat(cfg Config, forceReconcile ...bool) (heartbeatResult, error) {
 	payload["pluginVersions"] = pluginVersions
 	payload["pluginSyncSignatures"] = pluginSyncSignatures
 	payload["mimicEnvironment"] = mimicEnvironment(false)
+	payload["agentProbe"] = currentAgentProbeStatus()
 	if (!compactEnabled || shouldReportStatic) && primaryIP != "" {
 		payload["ip"] = primaryIP
 	}
@@ -3983,6 +3994,9 @@ func heartbeat(cfg Config, forceReconcile ...bool) (heartbeatResult, error) {
 	}
 	for _, task := range resp.LinkSpeedTasks {
 		go handleLinkSpeedTask(cfg, task)
+	}
+	for _, task := range resp.AgentLinkProbeTasks {
+		go handleAgentLinkProbeTask(cfg, task)
 	}
 	for _, task := range resp.PluginTasks {
 		enqueuePluginAgentTask(cfg, task)
@@ -4094,6 +4108,7 @@ func heartbeatKeepalive(cfg Config) (heartbeatResult, error) {
 		"fxpEndpointEvents":         fxpEndpointEventsSnapshot(),
 	}
 	payload["mimicEnvironment"] = mimicEnvironment(false)
+	payload["agentProbe"] = currentAgentProbeStatus()
 	if compactAgentReports.Load() {
 		payload["m"] = []any{
 			cpuUsage(),
@@ -5028,6 +5043,9 @@ func handleActionWithRuntimeSnapshot(cfg Config, a action, releaseRuntimeGate fu
 }
 
 func handleActionJobWithRuntimeSnapshot(cfg Config, a action, releaseRuntimeGate func(), previousRuntime *localActionRuntimeSnapshot, jobResult *actionJobResult) bool {
+	if rejectAgentProbePortAction(cfg, a) {
+		return false
+	}
 	if strings.TrimSpace(a.StatusType) == "runtime" && pluginAgentTaskIDPattern.MatchString(strings.TrimSpace(a.PluginID)) {
 		releasePluginLock := acquirePluginAgentTaskLock(pluginAgentTask{PluginID: strings.TrimSpace(a.PluginID), Intent: "write"})
 		defer releasePluginLock()

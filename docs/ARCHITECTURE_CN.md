@@ -94,6 +94,20 @@ Agent 使用 Token 鉴权。敏感 POST 请求使用 `server/agentCrypto.ts` 定
 
 SSE 不是唯一正确性来源。连接中断时，周期心跳仍会收敛期望状态；面板重启、Agent 重启或动作失败后，期望状态对账会补发缺失配置。
 
+### Agent Link 专用探测
+
+新版 Agent 额外监听同一数字端口上的 TCP 和 UDP 探测协议，默认端口为 `9811`，可通过配置字段 `probePort` 或环境变量 `FORWARDX_AGENT_PROBE_PORT` 覆盖。心跳会上报协议版本、实际端口、TCP/UDP 就绪状态和错误信息。
+
+- 面板为目标 Agent 生成带随机 nonce、到期时间和 HMAC-SHA256 的短期票据；源 Agent 不会取得目标 Agent Token。
+- TCP 每个样本建立新连接，完成鉴权请求/响应后记录 TCP 建连耗时；UDP 每个样本执行带鉴权的 Echo RTT。
+- 请求 64 字节、响应 56 字节，响应小于请求；监听器另有全局速率、并发和超时限制。
+- 有向边身份包含源主机、目标主机、实际连接地址、目标探测端口和传输协议。公网、内网、IPv6 或不同端口不会合并。
+- 同一轮使用统一 `probeRoundId`。路径聚合只接受同轮完整边集，任一必经边缺失或超时则该轮路径为超时。
+- `agent_link_latest` 保存最新边状态，`agent_link_latency_stats` 保存历史；规则端点与服务健康分别写入 `rule_endpoint_latency_stats` 和 `service_health_stats`，不再混为同一种指标。
+- 探测端口是永久系统保留端口，规则、隧道、Mimic、WireGuard 和落地服务的分配路径均不得占用；Agent 仍会对遗漏的运行时动作做二次拒绝。
+
+该链路目前与原有规则 TCPing、隧道探测和拓扑 Ping 并行运行。旧探测仍是现有界面的数据源，迁移完成前不得用 Agent Link 成功替代真实转发路径或业务服务健康。
+
 ## 并发模型
 
 规则和探测数量较大时，不能由一个全局串行队列处理：

@@ -250,6 +250,12 @@ export const hosts = table("hosts", {
   cpuInfo: text("cpuInfo"),
   memoryTotal: bigint("memoryTotal", { mode: "number" }),
   agentVersion: text("agentVersion"),
+  agentProbeVersion: int("agentProbeVersion").notNull().default(0),
+  agentProbePort: int("agentProbePort").notNull().default(9811),
+  agentProbeTcpReady: boolean("agentProbeTcpReady").notNull().default(false),
+  agentProbeUdpReady: boolean("agentProbeUdpReady").notNull().default(false),
+  agentProbeMessage: text("agentProbeMessage"),
+  agentProbeCheckedAt: epoch("agentProbeCheckedAt"),
   mimicAvailable: boolean("mimicAvailable"),
   mimicVersion: text("mimicVersion"),
   mimicStatus: varchar("mimicStatus", { length: 64 }),
@@ -774,6 +780,122 @@ export const forwardGroupLatencyStats = table("forward_group_latency_stats", {
 });
 export type ForwardGroupLatencyStat = typeof forwardGroupLatencyStats.$inferSelect;
 export type InsertForwardGroupLatencyStat = typeof forwardGroupLatencyStats.$inferInsert;
+
+export const agentLinkLatest = table("agent_link_latest", {
+  id: serial("id"),
+  edgeKey: varchar("edgeKey", { length: 512 }).notNull().unique(),
+  sourceHostId: int("sourceHostId").notNull(),
+  targetHostId: int("targetHostId").notNull(),
+  targetAddress: text("targetAddress").notNull(),
+  targetPort: int("targetPort").notNull(),
+  transport: varchar("transport", { length: 8 }).notNull(),
+  probeVersion: int("probeVersion").notNull().default(1),
+  probeRoundId: varchar("probeRoundId", { length: 128 }).notNull(),
+  latencyMs: int("latencyMs"),
+  minLatencyMs: int("minLatencyMs"),
+  maxLatencyMs: int("maxLatencyMs"),
+  jitterMs: int("jitterMs"),
+  isTimeout: boolean("isTimeout").notNull().default(false),
+  probeCount: int("probeCount").notNull().default(1),
+  probeSuccesses: int("probeSuccesses").notNull().default(0),
+  errorCode: varchar("errorCode", { length: 64 }),
+  errorMessage: text("errorMessage"),
+  recordedAt: epoch("recordedAt").notNull().default(nowDefault()),
+  updatedAt: epoch("updatedAt").notNull().default(nowDefault()),
+});
+export type AgentLinkLatest = typeof agentLinkLatest.$inferSelect;
+export type InsertAgentLinkLatest = typeof agentLinkLatest.$inferInsert;
+
+export const agentLinkLatencyStats = table("agent_link_latency_stats", {
+  id: serial("id"),
+  edgeKey: varchar("edgeKey", { length: 512 }).notNull(),
+  sourceHostId: int("sourceHostId").notNull(),
+  targetHostId: int("targetHostId").notNull(),
+  targetAddress: text("targetAddress").notNull(),
+  targetPort: int("targetPort").notNull(),
+  transport: varchar("transport", { length: 8 }).notNull(),
+  probeVersion: int("probeVersion").notNull().default(1),
+  probeRoundId: varchar("probeRoundId", { length: 128 }).notNull(),
+  latencyMs: int("latencyMs"),
+  minLatencyMs: int("minLatencyMs"),
+  maxLatencyMs: int("maxLatencyMs"),
+  jitterMs: int("jitterMs"),
+  isTimeout: boolean("isTimeout").notNull().default(false),
+  probeCount: int("probeCount").notNull().default(1),
+  probeSuccesses: int("probeSuccesses").notNull().default(0),
+  errorCode: varchar("errorCode", { length: 64 }),
+  errorMessage: text("errorMessage"),
+  recordedAt: epoch("recordedAt").notNull().default(nowDefault()),
+});
+export type AgentLinkLatencyStat = typeof agentLinkLatencyStats.$inferSelect;
+export type InsertAgentLinkLatencyStat = typeof agentLinkLatencyStats.$inferInsert;
+
+export const agentLinkProbeTasks = table("agent_link_probe_tasks", {
+  id: serial("id"),
+  taskId: varchar("taskId", { length: 128 }).notNull().unique(),
+  edgeKey: varchar("edgeKey", { length: 512 }).notNull(),
+  probeRoundId: varchar("probeRoundId", { length: 128 }).notNull(),
+  sourceHostId: int("sourceHostId").notNull(),
+  targetHostId: int("targetHostId").notNull(),
+  targetAddress: text("targetAddress").notNull(),
+  targetPort: int("targetPort").notNull(),
+  transport: varchar("transport", { length: 8 }).notNull(),
+  probeVersion: int("probeVersion").notNull().default(1),
+  timeoutMs: int("timeoutMs").notNull(),
+  attemptsJson: text("attemptsJson").notNull(),
+  status: varchar("status", { length: 16 }).notNull().default("queued"),
+  createdAt: epoch("createdAt").notNull().default(nowDefault()),
+  expiresAt: epoch("expiresAt").notNull(),
+  dispatchedAt: epoch("dispatchedAt"),
+  completedAt: epoch("completedAt"),
+  updatedAt: epoch("updatedAt").notNull().default(nowDefault()),
+});
+export type AgentLinkProbeTaskRow = typeof agentLinkProbeTasks.$inferSelect;
+export type InsertAgentLinkProbeTaskRow = typeof agentLinkProbeTasks.$inferInsert;
+
+export const ruleEndpointLatencyStats = table("rule_endpoint_latency_stats", {
+  id: serial("id"),
+  endpointKey: varchar("endpointKey", { length: 512 }).notNull(),
+  ruleId: int("ruleId").notNull(),
+  sourceHostId: int("sourceHostId").notNull(),
+  targetHostId: int("targetHostId"),
+  targetAddress: text("targetAddress").notNull(),
+  targetPort: int("targetPort").notNull(),
+  transport: varchar("transport", { length: 8 }).notNull(),
+  probeMethod: varchar("probeMethod", { length: 32 }).notNull(),
+  probeRoundId: varchar("probeRoundId", { length: 128 }).notNull(),
+  latencyMs: int("latencyMs"),
+  isTimeout: boolean("isTimeout").notNull().default(false),
+  probeCount: int("probeCount").notNull().default(1),
+  probeSuccesses: int("probeSuccesses").notNull().default(0),
+  errorCode: varchar("errorCode", { length: 64 }),
+  errorMessage: text("errorMessage"),
+  recordedAt: epoch("recordedAt").notNull().default(nowDefault()),
+});
+export type RuleEndpointLatencyStat = typeof ruleEndpointLatencyStats.$inferSelect;
+export type InsertRuleEndpointLatencyStat = typeof ruleEndpointLatencyStats.$inferInsert;
+
+export const serviceHealthStats = table("service_health_stats", {
+  id: serial("id"),
+  serviceKey: varchar("serviceKey", { length: 512 }).notNull(),
+  serviceType: varchar("serviceType", { length: 32 }).notNull(),
+  serviceId: int("serviceId"),
+  hostId: int("hostId"),
+  targetAddress: text("targetAddress").notNull(),
+  targetPort: int("targetPort").notNull(),
+  transport: varchar("transport", { length: 8 }).notNull(),
+  probeMethod: varchar("probeMethod", { length: 32 }).notNull(),
+  probeRoundId: varchar("probeRoundId", { length: 128 }).notNull(),
+  status: varchar("status", { length: 16 }).notNull(),
+  latencyMs: int("latencyMs"),
+  probeCount: int("probeCount").notNull().default(1),
+  probeSuccesses: int("probeSuccesses").notNull().default(0),
+  errorCode: varchar("errorCode", { length: 64 }),
+  errorMessage: text("errorMessage"),
+  recordedAt: epoch("recordedAt").notNull().default(nowDefault()),
+});
+export type ServiceHealthStat = typeof serviceHealthStats.$inferSelect;
+export type InsertServiceHealthStat = typeof serviceHealthStats.$inferInsert;
 
 export const hostProbeServices = table("host_probe_services", {
   id: serial("id"),

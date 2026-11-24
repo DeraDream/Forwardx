@@ -8,8 +8,8 @@ import (
 func TestProfileASNNumber(t *testing.T) {
 	cases := map[any]int64{
 		"AS63150 BAGE CLOUD LLC": 63150,
-		"63150": 63150,
-		float64(63150): 63150,
+		"63150":                  63150,
+		float64(63150):           63150,
 	}
 	for input, expected := range cases {
 		if got := profileASNNumber(input); got != expected {
@@ -21,7 +21,7 @@ func TestProfileASNNumber(t *testing.T) {
 func TestProfileRiskLevel(t *testing.T) {
 	cases := []struct {
 		score float64
-		want string
+		want  string
 	}{
 		{0, "low"}, {25, "low"}, {26, "medium"}, {50, "medium"},
 		{51, "high"}, {75, "high"}, {76, "very_high"}, {100, "very_high"},
@@ -66,7 +66,6 @@ func TestProfileShortASNName(t *testing.T) {
 	}
 }
 
-
 func TestProfileIPNatureFromEvidence(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -75,28 +74,28 @@ func TestProfileIPNatureFromEvidence(t *testing.T) {
 		want       string
 	}{
 		{
-			name: "maxmind same country is native like IPQuality",
-			actual: []profileCountryEvidence{{Provider: "MaxMind GeoIP", Country: "SG"}},
+			name:       "maxmind same country is native like IPQuality",
+			actual:     []profileCountryEvidence{{Provider: "MaxMind GeoIP", Country: "SG"}},
 			registered: []profileCountryEvidence{{Provider: "MaxMind RegisteredCountry", Country: "SG"}},
-			want: "native",
+			want:       "native",
 		},
 		{
-			name: "maxmind different country is broadcast like IPQuality",
-			actual: []profileCountryEvidence{{Provider: "MaxMind GeoIP", Country: "SG"}},
+			name:       "maxmind different country is broadcast like IPQuality",
+			actual:     []profileCountryEvidence{{Provider: "MaxMind GeoIP", Country: "SG"}},
 			registered: []profileCountryEvidence{{Provider: "MaxMind RegisteredCountry", Country: "HK"}},
-			want: "broadcast",
+			want:       "broadcast",
 		},
 		{
-			name: "ipinfo fallback same country is native",
-			actual: []profileCountryEvidence{{Provider: "IPinfo GeoIP", Country: "SG"}},
+			name:       "ipinfo fallback same country is native",
+			actual:     []profileCountryEvidence{{Provider: "IPinfo GeoIP", Country: "SG"}},
 			registered: []profileCountryEvidence{{Provider: "IPinfo Abuse Country", Country: "SG"}},
-			want: "native",
+			want:       "native",
 		},
 		{
-			name: "consensus fallback compares countries",
-			actual: []profileCountryEvidence{{Provider: "ipwho.is", Country: "SG"}},
+			name:       "consensus fallback compares countries",
+			actual:     []profileCountryEvidence{{Provider: "ipwho.is", Country: "SG"}},
 			registered: []profileCountryEvidence{{Provider: "RDAP", Country: "US"}},
-			want: "broadcast",
+			want:       "broadcast",
 		},
 	}
 	for _, tc := range cases {
@@ -125,7 +124,6 @@ func TestProfileBGPToolsGraphPath(t *testing.T) {
 	}
 }
 
-
 func TestProfileBGPGraphSVGDataURL(t *testing.T) {
 	svg := `<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg"><text>ok</text></svg>`
 	got, err := profileBGPGraphSVGDataURL(svg)
@@ -145,7 +143,7 @@ func TestProfileBGPGraphSVGDataURL(t *testing.T) {
 
 func TestProfileBGPToolsGraphPathFromPrefix(t *testing.T) {
 	cases := map[string]string{
-		"155.103.50.0/24": "/pathimg/rt-155.103.50.0_24",
+		"155.103.50.0/24":      "/pathimg/rt-155.103.50.0_24",
 		"2401:a4a0:2:4bc::/64": "/pathimg/rt-2401:a4a0:2:4bc::_64",
 	}
 	for input, want := range cases {
@@ -169,7 +167,6 @@ func TestProfileDNSBLDomains(t *testing.T) {
 	}
 }
 
-
 func TestProfileHTMLTableRowCount(t *testing.T) {
 	html := `<html><table id="upstreamTable"><tr><th>AS</th></tr><tr><td>AS1</td></tr><tr class="x"><td>AS2</td></tr></table></html>`
 	if got := profileHTMLTableRowCount(html, "upstreamTable"); got != 2 {
@@ -187,7 +184,6 @@ func TestProfileBGPCountryPattern(t *testing.T) {
 		t.Fatalf("profileBGPCountryPattern failed: %#v", match)
 	}
 }
-
 
 func TestProfileIP2LocationDemoFields(t *testing.T) {
 	body := `
@@ -215,12 +211,12 @@ func TestProfileMergeRiskSourceFallback(t *testing.T) {
 	score := 20.0
 	hosting := true
 	fallback := profileRiskSource{
-		Name: "FFraud",
-		Score: &score,
-		Level: "low",
-		Country: "SG",
-		NetworkType: "Data Center",
-		CompanyType: "hosting",
+		Name:         "FFraud",
+		Score:        &score,
+		Level:        "low",
+		Country:      "SG",
+		NetworkType:  "Data Center",
+		CompanyType:  "hosting",
 		IsDatacenter: &hosting,
 	}
 	target := profileRiskSource{Name: "IP2Location", Error: "HTTP 403"}
@@ -248,14 +244,14 @@ func TestProfileMergeRiskSourceFallbackPreservesExactData(t *testing.T) {
 	exactScore := 4.0
 	fallbackScore := 80.0
 	target := profileRiskSource{
-		Name: "ipapi",
-		Score: &exactScore,
-		Level: "very_low",
+		Name:        "ipapi",
+		Score:       &exactScore,
+		Level:       "very_low",
 		NetworkType: "hosting",
 	}
 	fallback := profileRiskSource{
-		Score: &fallbackScore,
-		Level: "high",
+		Score:       &fallbackScore,
+		Level:       "high",
 		NetworkType: "Data Center",
 		CompanyType: "hosting",
 	}
@@ -274,10 +270,10 @@ func TestProfileMergeRiskSourceFallbackPreservesExactData(t *testing.T) {
 func TestProfileRiskLevelFromText(t *testing.T) {
 	score := 95.0
 	cases := map[string]string{
-		"none": "very_low",
-		"low": "low",
-		"medium": "medium",
-		"high": "high",
+		"none":     "very_low",
+		"low":      "low",
+		"medium":   "medium",
+		"high":     "high",
 		"critical": "very_high",
 	}
 	for input, want := range cases {
@@ -286,7 +282,6 @@ func TestProfileRiskLevelFromText(t *testing.T) {
 		}
 	}
 }
-
 
 func TestProfileRRCRegionForCountry(t *testing.T) {
 	cases := map[string]profileRRCRegionPlan{

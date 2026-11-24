@@ -29,14 +29,14 @@ type networkProfileRequest struct {
 }
 
 type networkProfileReport struct {
-	TaskID    string         `json:"taskId"`
-	Family    string         `json:"family"`
-	Stage     string         `json:"stage"`
-	Status    string         `json:"status"`
-	Data      any            `json:"data,omitempty"`
-	Message   string         `json:"message,omitempty"`
-	Completed bool           `json:"completed,omitempty"`
-	Failed    bool           `json:"failed,omitempty"`
+	TaskID    string `json:"taskId"`
+	Family    string `json:"family"`
+	Stage     string `json:"stage"`
+	Status    string `json:"status"`
+	Data      any    `json:"data,omitempty"`
+	Message   string `json:"message,omitempty"`
+	Completed bool   `json:"completed,omitempty"`
+	Failed    bool   `json:"failed,omitempty"`
 }
 
 //go:embed dnsbl.list
@@ -59,10 +59,10 @@ func profileHTTPClient(family string, timeout time.Duration) *http.Client {
 		DialContext: func(ctx context.Context, _ string, address string) (net.Conn, error) {
 			return dialer.DialContext(ctx, network, address)
 		},
-		TLSHandshakeTimeout: 4 * time.Second,
+		TLSHandshakeTimeout:   4 * time.Second,
 		ResponseHeaderTimeout: 10 * time.Second,
-		MaxIdleConns: 8,
-		IdleConnTimeout: 20 * time.Second,
+		MaxIdleConns:          8,
+		IdleConnTimeout:       20 * time.Second,
 	}
 	return &http.Client{Transport: transport, Timeout: timeout}
 }
@@ -613,22 +613,22 @@ func profileRiskLevel(score float64) string {
 }
 
 type profileRiskSource struct {
-	Name         string `json:"name"`
-	Score        *float64 `json:"score,omitempty"`
-	Level        string `json:"level,omitempty"`
-	Country      string `json:"country,omitempty"`
-	IsProxy      *bool `json:"isProxy,omitempty"`
-	IsVPN        *bool `json:"isVPN,omitempty"`
-	IsTor        *bool `json:"isTor,omitempty"`
-	IsDatacenter *bool `json:"isDatacenter,omitempty"`
-	IsAbuser     *bool `json:"isAbuser,omitempty"`
-	IsBot        *bool `json:"isBot,omitempty"`
-	NetworkType  string `json:"networkType,omitempty"`
+	Name             string   `json:"name"`
+	Score            *float64 `json:"score,omitempty"`
+	Level            string   `json:"level,omitempty"`
+	Country          string   `json:"country,omitempty"`
+	IsProxy          *bool    `json:"isProxy,omitempty"`
+	IsVPN            *bool    `json:"isVPN,omitempty"`
+	IsTor            *bool    `json:"isTor,omitempty"`
+	IsDatacenter     *bool    `json:"isDatacenter,omitempty"`
+	IsAbuser         *bool    `json:"isAbuser,omitempty"`
+	IsBot            *bool    `json:"isBot,omitempty"`
+	NetworkType      string   `json:"networkType,omitempty"`
 	NetworkTypeLabel string   `json:"networkTypeLabel,omitempty"`
-	CompanyType      string `json:"companyType,omitempty"`
+	CompanyType      string   `json:"companyType,omitempty"`
 	CompanyTypeLabel string   `json:"companyTypeLabel,omitempty"`
-	FallbackProvider string `json:"fallbackProvider,omitempty"`
-	Error            string `json:"error,omitempty"`
+	FallbackProvider string   `json:"fallbackProvider,omitempty"`
+	Error            string   `json:"error,omitempty"`
 }
 
 func profileBoolPtr(value any) *bool {
@@ -933,13 +933,13 @@ func profileIP2LocationDemoSource(client *http.Client, ip string) profileRiskSou
 	if fields := strings.Fields(fraudText); len(fields) > 0 {
 		if score := profileScorePtr(fields[0]); score != nil {
 			source.Score = score
-		switch {
-		case *score < 33:
-			source.Level = "low"
-		case *score < 66:
-			source.Level = "medium"
-		default:
-			source.Level = "high"
+			switch {
+			case *score < 33:
+				source.Level = "low"
+			case *score < 66:
+				source.Level = "medium"
+			default:
+				source.Level = "high"
 			}
 		}
 	}
@@ -1063,8 +1063,10 @@ func profilePanelAggregateSource(cfg Config, ip, provider, name string) profileR
 		source.NetworkType, source.CompanyType = profileString(payload["usage_type"]), profileString(profileMap(payload["as_info"])["as_usage_type"])
 		source.Score, source.IsProxy = profileScorePtr(payload["fraud_score"]), profileBoolPtr(payload["is_proxy"])
 	case "proxycheck":
-		item := profileMap(payload[ip]); source.Score, source.NetworkType, source.Country = profileScorePtr(item["risk"]), profileString(item["type"]), profileString(item["country"])
-		proxy := strings.EqualFold(profileString(item["proxy"]), "yes"); source.IsProxy = &proxy
+		item := profileMap(payload[ip])
+		source.Score, source.NetworkType, source.Country = profileScorePtr(item["risk"]), profileString(item["type"]), profileString(item["country"])
+		proxy := strings.EqualFold(profileString(item["proxy"]), "yes")
+		source.IsProxy = &proxy
 	case "scamalytics":
 		source.Score = profileScorePtr(payload["scamalytics_score"])
 		proxy := profileMap(payload["scamalytics_proxy"])
@@ -1110,7 +1112,9 @@ func profilePanelAggregateSource(cfg Config, ip, provider, name string) profileR
 
 func profilePanelPreferredSource(cfg Config, ip, provider, name string, fallback func() profileRiskSource) profileRiskSource {
 	source := profilePanelAggregateSource(cfg, ip, provider, name)
-	if profileRiskSourceHasUsefulData(source) { return source }
+	if profileRiskSourceHasUsefulData(source) {
+		return source
+	}
 	return fallback()
 }
 
@@ -1192,8 +1196,8 @@ func profileIPRegistrySource(client *http.Client, ip string) profileRiskSource {
 		}
 	}
 	headers := map[string]string{
-		"Accept": "application/json,text/plain,*/*",
-		"Origin": "https://ipregistry.co",
+		"Accept":  "application/json,text/plain,*/*",
+		"Origin":  "https://ipregistry.co",
 		"Referer": "https://ipregistry.co/",
 	}
 	code, body, err := profileReadRetry(client, "https://api.ipregistry.co/"+url.PathEscape(ip)+"?hostname=true&key="+url.QueryEscape(key), headers, 2)
@@ -1290,9 +1294,13 @@ func profileRisk(cfg Config, client *http.Client, ip string) map[string]any {
 		check func() profileRiskSource
 	}{
 		{"ProxyCheck", func() profileRiskSource { return profilePanelAggregateSource(cfg, ip, "proxycheck", "ProxyCheck") }},
-		{"IPinfo", func() profileRiskSource { return profilePanelPreferredSource(cfg, ip, "ipinfo", "IPinfo", func() profileRiskSource { return profileIPInfoSource(client, ip) }) }},
+		{"IPinfo", func() profileRiskSource {
+			return profilePanelPreferredSource(cfg, ip, "ipinfo", "IPinfo", func() profileRiskSource { return profileIPInfoSource(client, ip) })
+		}},
 		{"ipapi.is", func() profileRiskSource { return profileIPAPISource(cfg, ip) }},
-		{"ipregistry", func() profileRiskSource { return profilePanelPreferredSource(cfg, ip, "ipregistry", "ipregistry", func() profileRiskSource { return profileIPRegistrySource(client, ip) }) }},
+		{"ipregistry", func() profileRiskSource {
+			return profilePanelPreferredSource(cfg, ip, "ipregistry", "ipregistry", func() profileRiskSource { return profileIPRegistrySource(client, ip) })
+		}},
 		{"FFraud", func() profileRiskSource { return profileFFraudSource(client, ip) }},
 		{"IP99", func() profileRiskSource { return profileIP99Source(client, ip) }},
 		{"Scamalytics", func() profileRiskSource { return profilePanelAggregateSource(cfg, ip, "scamalytics", "Scamalytics") }},
@@ -1300,7 +1308,9 @@ func profileRisk(cfg Config, client *http.Client, ip string) map[string]any {
 		{"IPdata", func() profileRiskSource { return profilePanelAggregateSource(cfg, ip, "ipdata", "IPdata") }},
 		{"IPQualityScore", func() profileRiskSource { return profilePanelAggregateSource(cfg, ip, "ipqs", "IPQualityScore") }},
 
-		{"IP2Location", func() profileRiskSource { return profilePanelPreferredSource(cfg, ip, "ip2location", "IP2Location", func() profileRiskSource { return profileIP2LocationPrimarySource(client, ip) }) }},
+		{"IP2Location", func() profileRiskSource {
+			return profilePanelPreferredSource(cfg, ip, "ip2location", "IP2Location", func() profileRiskSource { return profileIP2LocationPrimarySource(client, ip) })
+		}},
 		{"AbuseIPDB", func() profileRiskSource { return profileAbuseIPDBSource(cfg, client, ip) }},
 	}
 
@@ -1345,11 +1355,11 @@ func profileRisk(cfg Config, client *http.Client, ip string) map[string]any {
 	scoreCount := 0
 	networkType := ""
 	preferredTypeSources := map[string]bool{
-		"IPinfo": true,
-		"ipregistry": true,
-		"ipapi.is": true,
+		"IPinfo":      true,
+		"ipregistry":  true,
+		"ipapi.is":    true,
 		"IP2Location": true,
-		"AbuseIPDB": true,
+		"AbuseIPDB":   true,
 	}
 	for _, source := range sources {
 		if source.Score != nil {
@@ -1370,40 +1380,40 @@ func profileRisk(cfg Config, client *http.Client, ip string) map[string]any {
 	}
 
 	return map[string]any{
-		"provider": "direct-multi-source",
-		"score": score,
-		"level": level,
-		"networkType": networkType,
-		"isProxy": profileRiskAnyTrue(sources, func(source profileRiskSource) *bool { return source.IsProxy }),
-		"isVPN": profileRiskAnyTrue(sources, func(source profileRiskSource) *bool { return source.IsVPN }),
-		"isTor": profileRiskAnyTrue(sources, func(source profileRiskSource) *bool { return source.IsTor }),
+		"provider":     "direct-multi-source",
+		"score":        score,
+		"level":        level,
+		"networkType":  networkType,
+		"isProxy":      profileRiskAnyTrue(sources, func(source profileRiskSource) *bool { return source.IsProxy }),
+		"isVPN":        profileRiskAnyTrue(sources, func(source profileRiskSource) *bool { return source.IsVPN }),
+		"isTor":        profileRiskAnyTrue(sources, func(source profileRiskSource) *bool { return source.IsTor }),
 		"isDatacenter": profileRiskAnyTrue(sources, func(source profileRiskSource) *bool { return source.IsDatacenter }),
-		"isAbuser": profileRiskAnyTrue(sources, func(source profileRiskSource) *bool { return source.IsAbuser }),
-		"isBot": profileRiskAnyTrue(sources, func(source profileRiskSource) *bool { return source.IsBot }),
-		"sources": sources,
+		"isAbuser":     profileRiskAnyTrue(sources, func(source profileRiskSource) *bool { return source.IsAbuser }),
+		"isBot":        profileRiskAnyTrue(sources, func(source profileRiskSource) *bool { return source.IsBot }),
+		"sources":      sources,
 	}
 }
 
 var profileKnownASNBrands = map[int64]string{
-	174: "Cogent",
-	701: "Verizon",
-	1299: "Arelion",
-	2914: "NTT",
-	3257: "GTT",
-	3320: "DTAG",
-	3356: "Lumen",
-	3491: "PCCW",
-	5511: "Orange",
-	6453: "TATA",
-	6461: "Zayo",
-	6762: "Sparkle",
-	6830: "Liberty",
-	7018: "AT&T",
-	12956: "Telxius",
-	4229: "Zenlayer",
-	9516: "SAKURA",
-	17676: "SoftBank",
-	49304: "SAKURA",
+	174:    "Cogent",
+	701:    "Verizon",
+	1299:   "Arelion",
+	2914:   "NTT",
+	3257:   "GTT",
+	3320:   "DTAG",
+	3356:   "Lumen",
+	3491:   "PCCW",
+	5511:   "Orange",
+	6453:   "TATA",
+	6461:   "Zayo",
+	6762:   "Sparkle",
+	6830:   "Liberty",
+	7018:   "AT&T",
+	12956:  "Telxius",
+	4229:   "Zenlayer",
+	9516:   "SAKURA",
+	17676:  "SoftBank",
+	49304:  "SAKURA",
 	137409: "GSL",
 	216211: "Cyberverse",
 	213845: "Cylix",
@@ -1477,9 +1487,9 @@ func profileNeighbourList(client *http.Client, raw any) []map[string]any {
 		return nil
 	}
 	type candidate struct {
-		asn int64
+		asn      int64
 		relation string
-		power float64
+		power    float64
 	}
 	candidates := make([]candidate, 0, len(items))
 	seen := map[int64]bool{}
@@ -1509,11 +1519,11 @@ func profileNeighbourList(client *http.Client, raw any) []map[string]any {
 			fullName := profileASNName(client, item.asn)
 			<-sem
 			results[index] = map[string]any{
-				"asn": item.asn,
-				"name": profileShortASNName(item.asn, fullName),
+				"asn":      item.asn,
+				"name":     profileShortASNName(item.asn, fullName),
 				"fullName": fullName,
 				"relation": item.relation,
-				"power": item.power,
+				"power":    item.power,
 			}
 		}()
 	}
@@ -1662,8 +1672,8 @@ func profileBGPToolsGraphDataURL(client *http.Client, prefix, rawPath string) (s
 	}
 	endpoint := "https://bgp.tools" + path
 	headers := map[string]string{
-		"Accept": "image/svg+xml,image/*;q=0.9,*/*;q=0.2",
-		"Referer": "https://bgp.tools/prefix/" + strings.TrimSpace(prefix),
+		"Accept":        "image/svg+xml,image/*;q=0.9,*/*;q=0.2",
+		"Referer":       "https://bgp.tools/prefix/" + strings.TrimSpace(prefix),
 		"Cache-Control": "no-cache",
 	}
 	code, body, err := profileReadRetry(client, endpoint, headers, 2)
@@ -1680,7 +1690,7 @@ func profileBGPTools(client *http.Client, ip string) map[string]any {
 	result := map[string]any{"provider": "BGP.Tools"}
 	headers := map[string]string{
 		"User-Agent": "ForwardX-Agent/" + Version + " (+https://github.com/DeraDream/Forwardx)",
-		"Accept": "text/html,application/xhtml+xml",
+		"Accept":     "text/html,application/xhtml+xml",
 	}
 	code, body, err := profileReadRetry(client, "https://bgp.tools/prefix/"+url.PathEscape(ip), headers, 2)
 	if err != nil || code < 200 || code >= 300 || strings.TrimSpace(body) == "" {
@@ -1813,15 +1823,15 @@ func profilePeering(client *http.Client, asnValue any) (map[string]any, error) {
 		netID, _ = value.Int64()
 	}
 	result := map[string]any{
-		"asn": asn,
-		"registered": true,
-		"provider": "PeeringDB",
-		"name": network["name"],
-		"aka": network["aka"],
-		"website": network["website"],
-		"infoType": network["info_type"],
+		"asn":           asn,
+		"registered":    true,
+		"provider":      "PeeringDB",
+		"name":          network["name"],
+		"aka":           network["aka"],
+		"website":       network["website"],
+		"infoType":      network["info_type"],
 		"policyGeneral": network["policy_general"],
-		"ixCount": network["ix_count"],
+		"ixCount":       network["ix_count"],
 		"facilityCount": network["fac_count"],
 	}
 	if netID <= 0 {
@@ -1838,12 +1848,12 @@ func profilePeering(client *http.Client, asnValue any) (map[string]any, error) {
 				break
 			}
 			ixps = append(ixps, map[string]any{
-				"id": ix["id"],
-				"name": ix["name"],
+				"id":       ix["id"],
+				"name":     ix["name"],
 				"nameLong": ix["name_long"],
-				"city": ix["city"],
-				"country": ix["country"],
-				"region": ix["region_continent"],
+				"city":     ix["city"],
+				"country":  ix["country"],
+				"region":   ix["region_continent"],
 			})
 		}
 		result["ixp"] = ixps
@@ -1983,10 +1993,10 @@ func profileNetflixCheck(client *http.Client) map[string]any {
 
 func profileChatGPTCheck(client *http.Client) map[string]any {
 	headers := map[string]string{
-		"Accept": "application/json, text/plain, */*",
+		"Accept":        "application/json, text/plain, */*",
 		"Authorization": "Bearer null",
-		"Origin": "https://platform.openai.com",
-		"Referer": "https://platform.openai.com/",
+		"Origin":        "https://platform.openai.com",
+		"Referer":       "https://platform.openai.com/",
 	}
 	apiCode, apiBody, apiErr := profileRead(client, "https://api.openai.com/compliance/cookie_requirements", headers)
 	unsupported := strings.Contains(strings.ToLower(apiBody), "unsupported_country")
@@ -2479,12 +2489,12 @@ func profileDNSBLCheck(ip string) map[string]any {
 		}
 	}
 	return map[string]any{
-		"supported": true,
-		"total": len(domains),
-		"clean": clean,
-		"marked": marked,
-		"blacklisted": blacklisted,
-		"markedBy": markedBy,
+		"supported":     true,
+		"total":         len(domains),
+		"clean":         clean,
+		"marked":        marked,
+		"blacklisted":   blacklisted,
+		"markedBy":      markedBy,
 		"blacklistedBy": blacklistedBy,
 	}
 }
@@ -2521,8 +2531,8 @@ func profileMailAndBlacklist(family, ip string) map[string]any {
 	wg.Wait()
 	return map[string]any{
 		"outbound25": map[string]any{"available": outboundOK, "detail": outboundDetail},
-		"providers": checks,
-		"dnsbl": profileDNSBLCheck(ip),
+		"providers":  checks,
+		"dnsbl":      profileDNSBLCheck(ip),
 	}
 }
 
@@ -3023,12 +3033,12 @@ func runNetworkProfile(cfg Config, request networkProfileRequest) {
 		report("app:"+id, status, streamItem, "")
 	}
 	report("unlock", "success", map[string]any{
-		"ai": len(aiApps),
-		"streaming": len(streamItems),
-		"country": actualCountry,
-		"regionGroup": profileRRCRegionForCountry(actualCountry).Label,
-		"warnings": streamWarnings,
-		"source": "RegionRestrictionCheck",
+		"ai":           len(aiApps),
+		"streaming":    len(streamItems),
+		"country":      actualCountry,
+		"regionGroup":  profileRRCRegionForCountry(actualCountry).Label,
+		"warnings":     streamWarnings,
+		"source":       "RegionRestrictionCheck",
 		"sourceCommit": profileRRCSourceCommit,
 	}, "")
 
@@ -3043,7 +3053,7 @@ func runNetworkProfile(cfg Config, request networkProfileRequest) {
 	reportNetworkProfile(cfg, networkProfileReport{
 		TaskID: request.TaskID, Family: request.Family, Stage: "complete",
 		Status: "success", Data: map[string]any{
-			"ip": ip,
+			"ip":              ip,
 			"durationSeconds": strconv.FormatFloat(time.Since(startedAt).Seconds(), 'f', 1, 64),
 		}, Completed: true,
 	})

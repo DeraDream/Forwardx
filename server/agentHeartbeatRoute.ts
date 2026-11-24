@@ -92,6 +92,11 @@ import { forwardGroupProbeTopologyKey, tunnelProbeTopologyKey } from "./probeTop
 import { resolveLocalForwardXTransportVersion, resolveRuleTrafficPortForHost } from "./agentRuntimeRuleState";
 import { isTunnelRelayFailover, tunnelRelayCandidates } from "@shared/tunnelRelay";
 import { normalizeExitGroupStrategy } from "@shared/exitStrategy";
+import { agentProbeStatusChanged, normalizeAgentProbeStatus } from "./agentProbeStatus";
+import { hasQueuedAgentLinkProbeTasks, takeAgentLinkProbeTasks } from "./agentLinkTasks";
+import { agentLinkCandidatesFromProbeLists, buildAgentLinkDemands } from "./agentLinkDemandBuilder";
+import { directRuleAgentLinkCandidates } from "./agentLinkRuleDemands";
+import { replaceAgentLinkDemands, touchAgentLinkDemands } from "./agentLinkScheduler";
 import { forwardXExitStrategy, gostExitSelector, shouldUseFastTunnelFailover } from "./tunnelExitStrategy";
 import {
   getMimicLifecycleRevisionSignature,
@@ -1601,6 +1606,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       normalizeAgentLocalRuntimeState(req.body?.localState),
     );
     const mimicEnvironment = normalizeMimicEnvironment(req.body?.mimicEnvironment);
+    const agentProbeStatus = normalizeAgentProbeStatus(req.body?.agentProbe);
+    const probeStatusChanged = agentProbeStatusChanged(previousHost, agentProbeStatus);
     const fxpEndpointEvents = Array.isArray(req.body?.fxpEndpointEvents) ? req.body.fxpEndpointEvents.slice(0, 256) : [];
     for (const rawEvent of fxpEndpointEvents) {
       const tunnelId = Math.max(0, Math.floor(Number(rawEvent?.tunnelId || 0)));
@@ -1703,6 +1710,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       || (agentLastAppliedRevision > 0 && agentLastAppliedRevision !== Number(previousHost.agentLastAppliedRevision || 0))
       || (!!agentLastReceivedHash && agentLastReceivedHash !== String(previousHost.agentLastReceivedHash || ""))
       || (!!agentLastAppliedHash && agentLastAppliedHash !== String(previousHost.agentLastAppliedHash || ""))
+      || probeStatusChanged
       || (!!mimicEnvironment && (
         previousHost.mimicAvailable !== mimicEnvironment.available
         || String(previousHost.mimicStatus || "") !== mimicEnvironment.status
@@ -1746,6 +1754,14 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         mimicMessage: mimicEnvironment.message,
         mimicCheckedAt: new Date(),
       } : {}),
+      ...(agentProbeStatus ? {
+        agentProbeVersion: agentProbeStatus.version,
+        agentProbePort: agentProbeStatus.port,
+        agentProbeTcpReady: agentProbeStatus.tcpReady,
+        agentProbeUdpReady: agentProbeStatus.udpReady,
+        agentProbeMessage: agentProbeStatus.message,
+        agentProbeCheckedAt: new Date(),
+      } : {}),
       ...(addressChanged ? {
         geoCountryCode: null,
         geoCountryName: null,
@@ -1763,6 +1779,22 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         "info",
         `[AgentUpgrade] host=${host.id} version=${String(previousHost.agentVersion || "-")} -> ${nextAgentVersion}; desired state marked for resync`,
       );
+    }
+    if (agentProbeStatus) {
+      Object.assign(host as any, {
+        agentProbeVersion: agentProbeStatus.version,
+        agentProbePort: agentProbeStatus.port,
+        agentProbeTcpReady: agentProbeStatus.tcpReady,
+        agentProbeUdpReady: agentProbeStatus.udpReady,
+        agentProbeMessage: agentProbeStatus.message,
+        agentProbeCheckedAt: new Date(),
+      });
+      if (probeStatusChanged) {
+        appendPanelLog(
+          agentProbeStatus.tcpReady && agentProbeStatus.udpReady ? "info" : "warn",
+          `[AgentProbe] host=${host.id} port=${agentProbeStatus.port} tcp=${agentProbeStatus.tcpReady} udp=${agentProbeStatus.udpReady}${agentProbeStatus.message ? ` message=${agentProbeStatus.message}` : ""}`,
+        );
+      }
     }
     if (mimicEnvironment) {
       Object.assign(host as any, {
@@ -1883,6 +1915,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         || hasQueuedLookingGlassAgentTasks(host.id)
         || hasQueuedIperf3AgentTasks(host.id)
         || hasQueuedLinkSpeedTasks(host.id)
+        || hasQueuedAgentLinkProbeTasks(host.id)
         || hasQueuedPluginAgentTasks(host.id),
       recoveryTriggered,
       addressChanged,
@@ -1903,6 +1936,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       agentLastAppliedHash,
     });
     if (stablePlan) {
+      touchAgentLinkDemands(`runtime-host:${Number(host.id)}`, 5 * 60_000);
       const topologyTrafficWatching = isHostTopologyTrafficWatching(host.id);
       const metricsWatching = isHostMetricsWatching(host.id) || topologyTrafficWatching;
       logAgentHeartbeatSummary({
@@ -1927,6 +1961,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         lookingGlassTests: [],
         iperf3Tasks: [],
         linkSpeedTasks: [],
+        agentLinkProbeTasks: [],
         pluginTasks: [],
         agentUpgrade: null,
         panelUrl: stablePlan.panelUrl,
@@ -3430,7 +3465,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
               const targetPort = Number(nextHop.listenPort || 0), targetHostId = Number(nextHop.hostId || 0);
               if (!targetIp || !targetPort || !targetHostId) return null;
               const seriesKey = currentHostIsEntry ? `relay-branch-entry-${targetHostId}` : `relay-branch-exit-${relayId}-${targetHostId}`;
-              return { tunnelId: tunnel.id, targetIp, targetPort, protocol: "tcp", hopIndex: currentHostIsEntry ? 0 : 1, hopCount: 2,
+              return { tunnelId: tunnel.id, targetIp, targetPort, targetHostId, protocol: "tcp", hopIndex: currentHostIsEntry ? 0 : 1, hopCount: 2,
                 seriesKey, seriesLabel: currentHostIsEntry ? `中转 ${targetHostId}` : `中转 ${relayId} / 出口 ${targetHostId}`,
                 probeKey: `tunnel:${Number(tunnel.id)}:host:${Number(host.id)}:${seriesKey}:${String(targetIp).toLowerCase()}:${targetPort}`,
                 topologyKey, wireGuardPeerId: isForwardXWireGuardV2(tunnel) ? String(targetHostId) : undefined };
@@ -3451,7 +3486,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
               const targetHostId = Number(nextHop.hostId || 0);
               if (!targetIp || !targetPort || !targetHostId) return null;
               const seriesKey = isFinalHop ? `branch-exit-${targetHostId}` : "branch-common";
-              return { tunnelId: tunnel.id, targetIp, targetPort, protocol: "tcp", hopIndex: routeHostIdx, hopCount: hops.length - 1,
+              return { tunnelId: tunnel.id, targetIp, targetPort, targetHostId, protocol: "tcp", hopIndex: routeHostIdx, hopCount: hops.length - 1,
                 seriesKey, seriesLabel: isFinalHop ? `出口 ${targetHostId}` : "公共段",
                 probeKey: `tunnel:${Number(tunnel.id)}:host:${Number(host.id)}:hop:${routeHostIdx}/${hops.length - 1}:${seriesKey}:${String(targetIp).toLowerCase()}:${targetPort}`,
                 topologyKey, wireGuardPeerId: isForwardXWireGuardV2(tunnel) ? String(targetHostId) : undefined };
@@ -3470,6 +3505,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
               tunnelId: tunnel.id,
               targetIp,
               targetPort,
+              targetHostId: Number(nextHop?.hostId || 0) || null,
               protocol: "tcp",
               hopIndex: relayFailover ? (currentHostIsEntry ? 0 : 1) : routeHostIdx,
               hopCount: relayFailover ? 2 : hops.length - 1,
@@ -3490,6 +3526,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           tunnelId: tunnel.id,
           targetIp: primaryEndpoint?.host || "",
           targetPort: Number(primaryEndpoint?.port) || 0,
+          targetHostId: Number(tunnel.exitHostId || 0) || null,
           protocol: "tcp",
           probeKey: `tunnel:${Number(tunnel.id)}:host:${Number(host.id)}:direct:${String(primaryEndpoint?.host || "").toLowerCase()}:${Number(primaryEndpoint?.port) || 0}`,
           topologyKey,
@@ -3512,6 +3549,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
             tunnelId: tunnel.id,
             targetIp: route.host,
             targetPort: Number(route.port) || 0,
+            targetHostId: Number((route as any).hostId || 0) || null,
             protocol: "tcp",
             seriesKey: `exit-${index + 2}`,
             seriesLabel: `出口 ${index + 2}`,
@@ -6103,6 +6141,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           groupId: probe.groupId,
           targetIp: probe.targetIp,
           targetPort: probe.targetPort,
+          targetHostId: Number(probe.toHostId || 0) || null,
           method: probe.method,
           hopIndex: probe.hopIndex,
           hopCount: probe.hopCount,
@@ -6195,6 +6234,12 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     ruleLatencyProbes.sort(
       (left: any, right: any) => Number(left.ruleId) - Number(right.ruleId),
     );
+    const directRuleCandidates = await directRuleAgentLinkCandidates(Number(host.id), agentAllRules as any[], processTarget);
+    const agentLinkDemands = await buildAgentLinkDemands([
+      ...agentLinkCandidatesFromProbeLists({ sourceHostId: Number(host.id), forwardGroupProbes, tunnelProbes }),
+      ...directRuleCandidates,
+    ]);
+    replaceAgentLinkDemands(`runtime-host:${Number(host.id)}`, agentLinkDemands, { mode: "background", ttlMs: 5 * 60_000 });
     // Topology displays physical RTT, not forwarding-listener behavior. Probe
     // every distinct next-hop address once with ICMP, independent of rule port.
     const topologySegmentProbes = buildTopologyPingProbes(host.id, ruleLatencyProbes);
@@ -6722,6 +6767,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     const lookingGlassTests = takeLookingGlassAgentTasks(host.id);
     const iperf3Tasks = takeIperf3AgentTasks(host.id);
     const linkSpeedTasks = takeLinkSpeedTasks(host.id);
+    const agentLinkProbeTasks = await takeAgentLinkProbeTasks(host.id);
     const pluginsAwaitingSync = new Set(pluginSyncTasks.map((task) => task.pluginId));
     const pluginTasks = supportsPluginTasks && reportedPluginInventory && !pluginSyncActionQueued
       ? takePluginAgentTasks(host.id, 4, (task) => (
@@ -6734,6 +6780,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       || iperf3Tasks.length > 0
       || linkSpeedTasks.length > 0
       || hasQueuedLinkSpeedTasks(host.id)
+      || agentLinkProbeTasks.length > 0
+      || hasQueuedAgentLinkProbeTasks(host.id)
       || pluginTasks.length > 0
       || hasPendingPluginTasks
       || pluginSyncActionQueued
@@ -6819,6 +6867,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       && iperf3Tasks.length === 0
       && linkSpeedTasks.length === 0
       && !hasQueuedLinkSpeedTasks(host.id)
+      && agentLinkProbeTasks.length === 0
+      && !hasQueuedAgentLinkProbeTasks(host.id)
       && pluginTasks.length === 0
       && !hasPendingPluginTasks
       && !pluginSyncActionQueued
@@ -6871,6 +6921,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         lookingGlassTests.length
         + iperf3Tasks.length
         + linkSpeedTasks.length
+        + agentLinkProbeTasks.length
         + pluginTasks.length
         + (hasPendingPluginTasks ? 1 : 0)
         + (forceTcping ? 1 : 0)
@@ -6887,6 +6938,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       lookingGlassTests,
       iperf3Tasks,
       linkSpeedTasks,
+      agentLinkProbeTasks,
       pluginTasks,
       agentUpgrade,
       panelUrl,

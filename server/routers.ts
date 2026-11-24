@@ -2,6 +2,7 @@ import { systemRouter } from "./_core/systemRouter";
 import { paymentRouter } from "./payment";
 import { router } from "./_core/trpc";
 import { agentTokensRouter } from "./routers/agentTokens";
+import { agentLinksRouter } from "./routers/agentLinks";
 import { announcementsRouter } from "./routers/announcements";
 import { authRouter } from "./routers/auth";
 import { billingRouter } from "./routers/billing";
@@ -37,6 +38,7 @@ export const appRouter = router({
   networkProfile: networkProfileRouter,
   users: usersRouter,
   hosts: hostsRouter,
+  agentLinks: agentLinksRouter,
   lookingGlass: lookingGlassRouter,
   linkSpeed: linkSpeedRouter,
   landing: landingRouter,

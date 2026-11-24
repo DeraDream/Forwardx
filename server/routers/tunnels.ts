@@ -51,6 +51,7 @@ import {
   publicLinkAvailabilitySummary,
   type LinkAvailabilitySummaryIndex,
 } from "../linkAvailabilitySummary";
+import { assertPortNotSystemReserved } from "../systemReservedPorts";
 
 const tunnelNetworkTypeSchema = z.enum(["public", "private"]);
 const tunnelModeSchema = z.enum(["forwardx", "tls", "wss", "tcp", "mtls", "mwss", "mtcp", "nginx_stream"]);
@@ -158,6 +159,7 @@ async function validateMimicUdpPort(input: {
   const port = Math.floor(Number(input.port || 0));
   if (!Number.isFinite(port) || port <= 0) return 0;
   if (port > 65535) throw new Error("mimic UDP 端口必须在 1-65535 范围内");
+  await assertPortNotSystemReserved(input.exitHostId, port);
   if (port === input.listenPort) throw new Error("mimic UDP 端口不能与出口监听端口相同");
   const policy = portPolicyFrom(input.exitHost);
   if (!isPortAllowedByPolicy(port, policy)) {
@@ -888,6 +890,7 @@ export const tunnelsRouter = router({
         {
           const exit = await db.getHostById(exitHostId) as any;
           if (listenPort > 0) {
+            await assertPortNotSystemReserved(exitHostId, listenPort);
             const policy = portPolicyFrom(exit);
             if (!isPortAllowedByPolicy(listenPort, policy)) {
               throw new Error(portPolicyErrorMessage(policy, "出口监听端口"));
@@ -1261,6 +1264,7 @@ export const tunnelsRouter = router({
           // handled only when the value is omitted or set to zero.
           const listenerChanged = requestedListenPort !== currentTunnelListenPort
             || exitHostChanged;
+          await assertPortNotSystemReserved(exitHostId, requestedListenPort);
           const policy = portPolicyFrom(exit as any);
           if (!isPortAllowedByPolicy(requestedListenPort, policy)) {
             throw new Error(portPolicyErrorMessage(policy, "出口监听端口"));

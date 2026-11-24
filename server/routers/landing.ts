@@ -5,6 +5,7 @@ import { pushAgentRefresh, requestHostTcping } from "../agentEvents";
 import { pushTunnelEndpointRefresh } from "./helpers";
 import { reserveSpecificHostPort } from "../portReservations";
 import { getLandingPortCheck, requestLandingPortCheck } from "../landingPortChecks";
+import { assertPortNotSystemReserved, getSystemReservedPort } from "../systemReservedPorts";
 
 const METHODS = [
   "aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305",
@@ -187,6 +188,8 @@ export const landingRouter = router({
   }),
   checkPort: protectedProcedure.input(z.object({ hostId: z.number().int().positive(), port: z.number().int().min(1).max(65535), excludeId: z.number().int().positive().optional() })).query(async ({ input, ctx }) => {
     await requireEligibleHost(ctx.user, input.hostId);
+    const reserved = await getSystemReservedPort(input.hostId, input.port);
+    if (reserved) return { available: false, complete: true, message: reserved.message };
     const services = await db.getLandingServicesForHost(input.hostId);
     const occupied = services.some((item: any) => Number(item.port) === input.port && Number(item.id) !== Number(input.excludeId || 0));
     if (occupied) return { available: false, complete: true, message: "端口已被另一个落地服务使用" };
@@ -205,6 +208,7 @@ export const landingRouter = router({
     endpoint: z.string().trim().min(1).max(255), latencyTargetHost: z.string().trim().min(1).max(255).default(DEFAULT_LANDING_LATENCY_TARGET), latencyTargetPort: z.number().int().min(1).max(65535).default(443),
   })).mutation(async ({ input, ctx }) => {
     const host = input.hostId ? await requireEligibleHost(ctx.user, input.hostId) : null;
+    if (host) await assertPortNotSystemReserved(input.hostId!, input.port);
     const wants2022 = input.protocol === "ss2022";
     if (wants2022 !== input.method.startsWith("2022-")) throw new Error("SS2022 必须使用 2022 加密方式，普通 SS 不能使用 2022 加密方式");
     const reservation = host ? await reserveSpecificHostPort({ hostId: input.hostId!, port: input.port, protocol: "both", isUsed: (port) => db.isPortUsedOnHost(input.hostId!, port, undefined, "both") }) : null;
@@ -227,6 +231,7 @@ export const landingRouter = router({
     const wants2022 = input.protocol === "ss2022";
     if (wants2022 !== input.method.startsWith("2022-")) throw new Error("SS2022 必须使用 2022 加密方式，普通 SS 不能使用 2022 加密方式");
     if (!service.isExternal) {
+      await assertPortNotSystemReserved(Number(service.hostId), input.port);
       const peers = await db.getLandingServicesForHost(Number(service.hostId), true, true);
       if (peers.some((item: any) => Number(item.id) !== input.id && Number(item.port) === input.port)) throw new Error("端口已被另一个落地服务使用");
     }
