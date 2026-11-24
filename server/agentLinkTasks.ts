@@ -289,12 +289,6 @@ export async function sweepExpiredAgentLinkProbeTasks(now = Date.now()) {
   return expiredTaskIds.size;
 }
 
-export function hasActiveAgentLinkProbeEdge(edgeKey: string) {
-  const taskId = activeByEdge.get(String(edgeKey || "").trim());
-  const state = taskId ? states.get(taskId) : null;
-  return !!state && ["queued", "running", "finalizing"].includes(state.status);
-}
-
 export function hasQueuedAgentLinkProbeTasks(hostId: number) {
   return (queues.get(Number(hostId))?.length || 0) > 0;
 }

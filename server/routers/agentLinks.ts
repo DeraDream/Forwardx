@@ -7,7 +7,7 @@ import {
   clearAgentLinkDemands,
   getAgentLinkDemandIdentities,
   replaceAgentLinkDemands,
-  runAgentLinkProbeIdentities,
+  runAgentLinkProbeRound,
 } from "../agentLinkScheduler";
 import { aggregateAgentLinkPathRound } from "../../shared/agentLinkAggregation";
 import { buildAgentLinkEdgeKey, type AgentLinkIdentity } from "../../shared/agentLink";
@@ -97,11 +97,10 @@ export const agentLinksRouter = router({
   probeNow: protectedProcedure.input(z.object({
     watcherId: z.string().uuid(),
     candidates: z.array(candidateSchema).min(1).max(100),
-    transport: transportSchema.optional().default("tcp"),
   })).mutation(async ({ input, ctx }) => {
     await requireEdgeAccess(ctx, input.candidates);
-    const identities = (await buildAgentLinkDemands(input.candidates)).filter((identity) => identity.transport === input.transport);
+    const identities = await buildAgentLinkDemands(input.candidates);
     replaceAgentLinkDemands(watcherOwner(ctx.user.id, input.watcherId), identities, { mode: "interactive", ttlMs: 15_000 });
-    return runAgentLinkProbeIdentities(identities, "interactive");
+    return runAgentLinkProbeRound("interactive");
   }),
 });
