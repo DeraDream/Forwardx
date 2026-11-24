@@ -4,7 +4,7 @@ import { topologyPathEdgeIds } from "./networkTopologyPaths";
 import { parseLinkTestMessage } from "@/components/LinkTestLatencySummary";
 import { topologyRuleHref } from "./topologyRuleLink";
 import { activeTopologySegmentProbeIds, latestAutomaticTopologySegment, mergeTopologySegmentProbeResults, summarizePhysicalTopologySegmentLabels, summarizeTopologySegmentLabels, topologySegmentProbeKey, type AutomaticTopologySegment, type TopologySegmentProbe } from "./topologySegmentProbeState";
-import { acyclicTopologyLayerEdges, improveTopologyOrder } from "./topologyLayout";
+import { acyclicTopologyLayerEdges, assignTopologyBranchRows } from "./topologyLayout";
 import { routeSmoothLayeredTopologyGraph, topologyRoutePath } from "./topologyRouting";
 import { topologyEnabledFlag, visibleTopologyTunnelVariants } from "./topologyTunnelVariants";
 import { combineTopologyHostVariants, joinTopologyHostPaths, MAX_TOPOLOGY_VARIANTS, type TopologyExpansionState } from "./topologyExpansion";
@@ -656,57 +656,10 @@ function buildGraph(paths: PhysicalPath[]) {
     return positioned;
   });
 
-  // 先根据上游重心排序，再做反向一遍参考下游重心，减少交叉线。
-  const rowHint = new Map<string, number>();
-  const sortedColumns = Array.from(columns.keys()).sort((a, b) => a - b);
-  for (const column of sortedColumns) {
-    const list = columns.get(column) || [];
-    list.sort((a, b) => {
-      if (column === 0) return a.label.localeCompare(b.label, "zh-CN");
-      if (column === landingColumn) {
-        const aDirect = directOnlySinkIds.has(a.id) ? 1 : 0;
-        const bDirect = directOnlySinkIds.has(b.id) ? 1 : 0;
-        if (aDirect !== bDirect) return aDirect - bDirect;
-      }
-      const aParents = incoming.get(a.id) || [];
-      const bParents = incoming.get(b.id) || [];
-      const aHint = aParents.length
-        ? aParents.reduce((sum, id) => sum + (rowHint.get(id) || 0), 0) / aParents.length
-        : Number.POSITIVE_INFINITY;
-      const bHint = bParents.length
-        ? bParents.reduce((sum, id) => sum + (rowHint.get(id) || 0), 0) / bParents.length
-        : Number.POSITIVE_INFINITY;
-      if (aHint !== bHint) return aHint - bHint;
-      return a.label.localeCompare(b.label, "zh-CN");
-    });
-    list.forEach((node, row) => {
-      node.row = row;
-      rowHint.set(node.id, row);
-    });
-  }
-
-  for (const column of [...sortedColumns].reverse()) {
-    if (column === 0 || column === landingColumn) continue;
-    const list = columns.get(column) || [];
-    list.sort((a, b) => {
-      const aChildren = outgoing.get(a.id) || [];
-      const bChildren = outgoing.get(b.id) || [];
-      const aHint = aChildren.length
-        ? aChildren.reduce((sum, id) => sum + (rowHint.get(id) || 0), 0) / aChildren.length
-        : Number.POSITIVE_INFINITY;
-      const bHint = bChildren.length
-        ? bChildren.reduce((sum, id) => sum + (rowHint.get(id) || 0), 0) / bChildren.length
-        : Number.POSITIVE_INFINITY;
-      if (aHint !== bHint) return aHint - bHint;
-      return a.label.localeCompare(b.label, "zh-CN");
-    });
-    list.forEach((node, row) => {
-      node.row = row;
-      rowHint.set(node.id, row);
-    });
-  }
-
-  improveTopologyOrder(columns, edges, directOnlySinkIds);
+  // A split keeps its own horizontal lane until it converges again. This is
+  // deliberately stronger than a barycentric sort: referenced forwarding
+  // services must not be squeezed into the direct forwarding service row.
+  assignTopologyBranchRows(columns, edges, rootIds, directOnlySinkIds);
 
   // The relationship overview is a layered physical graph: shared HK→SG and
   // HK→JP legs are represented once, while the router reserves lanes around

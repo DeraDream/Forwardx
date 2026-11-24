@@ -34,21 +34,18 @@ export function routeTopologyGraph(nodes: TopologyRoutingNode[], inputEdges: Top
   for (const node of nodes) add(columns, node.column, node);
   for (const list of columns.values()) list.sort((a, b) => a.row - b.row);
   const rowGap = nodeHeight + 18;
-  const maxRows = Math.max(1, ...[...columns.values()].map((list) => list.length));
-  const maxSpan = nodeHeight + (maxRows - 1) * rowGap + 34;
+  // Rows are branch lanes assigned by the layout. Do not re-center individual
+  // columns or replace them with local array indexes: that would collapse a
+  // referenced service branch back onto the direct-service branch.
+  const maxRow = Math.max(0, ...nodes.map((node) => node.row));
+  const maxSpan = nodeHeight + maxRow * rowGap + 34;
   const cardTop = 70 + edges.length * laneStep;
   const centerY = cardTop + maxSpan / 2;
   const positions = new Map<string, TopologyBox>();
   for (const [column, list] of columns) {
-    const directCount = list.filter((node) => directOnly.has(node.id)).length;
-    const extraGap = directCount > 0 && directCount < list.length ? 34 : 0;
-    const span = nodeHeight + Math.max(0, list.length - 1) * rowGap + extraGap;
-    const start = centerY - span / 2;
-    let directReached = false;
-    list.forEach((node, row) => {
-      if (directOnly.has(node.id)) directReached = true;
-      positions.set(node.id, { x: columnX.get(column)!, y: start + row * rowGap + (directReached ? extraGap : 0), width: nodeWidth, height: nodeHeight });
-    });
+    for (const node of list) {
+      positions.set(node.id, { x: columnX.get(column)!, y: cardTop + node.row * rowGap, width: nodeWidth, height: nodeHeight });
+    }
   }
   const edgeRoutes = new Map<string, TopologyPoint[]>();
   edges.forEach((edge, index) => {

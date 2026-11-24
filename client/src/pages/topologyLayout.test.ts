@@ -1,6 +1,23 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { acyclicTopologyLayerEdges, improveTopologyOrder } from "./topologyLayout";
+import { acyclicTopologyLayerEdges, assignTopologyBranchRows, improveTopologyOrder } from "./topologyLayout";
+
+test("referenced service branches receive a separate row until they merge", () => {
+  const entry = { id: "entry", label: "entry", column: 0, row: 0 };
+  const direct = { id: "direct", label: "direct", column: 3, row: 0 };
+  const relayA = { id: "relay-a", label: "relay-a", column: 1, row: 0 };
+  const relayB = { id: "relay-b", label: "relay-b", column: 2, row: 0 };
+  const columns = new Map([[0, [entry]], [1, [relayA]], [2, [relayB]], [3, [direct]]]);
+  assignTopologyBranchRows(columns, [
+    { id: "direct", from: "entry", to: "direct" },
+    { id: "branch-a", from: "entry", to: "relay-a" },
+    { id: "branch-b", from: "relay-a", to: "relay-b" },
+    { id: "merge", from: "relay-b", to: "direct" },
+  ], new Set(["entry"]), new Set());
+  assert.equal(entry.row, direct.row);
+  assert.equal(relayA.row, relayB.row);
+  assert.notEqual(relayA.row, entry.row);
+});
 
 test("cyclic service references retain a visible back edge without extending layered depth", () => {
   const edges = [

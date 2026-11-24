@@ -32,6 +32,55 @@ export function acyclicTopologyLayerEdges<T extends LayoutEdge>(nodeIds: Iterabl
   return forward;
 }
 
+/**
+ * Give each fork its own horizontal lane. A node remains unique; only the
+ * row assigned to a non-primary branch changes until that branch converges.
+ */
+export function assignTopologyBranchRows<T extends LayoutNode>(columns: Map<number, T[]>, edges: LayoutEdge[], rootIds: Set<string>, directOnlyIds: Set<string>) {
+  const byId = new Map([...columns.values()].flat().map((node) => [node.id, node]));
+  const incoming = new Map<string, LayoutEdge[]>(), outgoing = new Map<string, LayoutEdge[]>();
+  for (const edge of edges) {
+    if (!byId.has(edge.from) || !byId.has(edge.to)) continue;
+    incoming.set(edge.to, [...(incoming.get(edge.to) || []), edge]);
+    outgoing.set(edge.from, [...(outgoing.get(edge.from) || []), edge]);
+  }
+  // The furthest non-direct continuation is the visual spine. Every other
+  // continuation receives a separate lane instead of being squeezed into it.
+  const primaryOut = new Map<string, LayoutEdge>();
+  for (const [id, list] of outgoing) {
+    const candidates = list.filter((edge) => !directOnlyIds.has(edge.to));
+    const chosen = (candidates.length ? candidates : list).slice().sort((a, b) => {
+      const aNode = byId.get(a.to)!, bNode = byId.get(b.to)!;
+      return bNode.column - aNode.column
+        || (outgoing.get(b.to)?.length || 0) - (outgoing.get(a.to)?.length || 0)
+        || String(a.id || `${a.from}=>${a.to}`).localeCompare(String(b.id || `${b.from}=>${b.to}`));
+    })[0];
+    if (chosen) primaryOut.set(id, chosen);
+  }
+
+  let nextLane = 0;
+  const keys = [...columns.keys()].sort((a, b) => a - b);
+  for (const column of keys) {
+    const list = columns.get(column) || [];
+    const used = new Set<number>();
+    for (const node of list.filter((node) => rootIds.has(node.id)).sort((a, b) => a.label.localeCompare(b.label, "zh-CN"))) {
+      node.row = nextLane++;
+      used.add(node.row);
+    }
+    for (const node of list.filter((node) => !rootIds.has(node.id)).sort((a, b) => a.label.localeCompare(b.label, "zh-CN"))) {
+      const parents = incoming.get(node.id) || [];
+      const preferred = parents.filter((edge) => primaryOut.get(edge.from) === edge);
+      const choices = (preferred.length ? preferred : parents)
+        .filter((edge) => byId.has(edge.from))
+        .sort((a, b) => (byId.get(a.from)!.row - byId.get(b.from)!.row) || (byId.get(a.from)!.column - byId.get(b.from)!.column) || String(a.id || `${a.from}=>${a.to}`).localeCompare(String(b.id || `${b.from}=>${b.to}`)));
+      const inheritedLane = !directOnlyIds.has(node.id) && preferred.length > 0 ? byId.get(choices[0]?.from || "")?.row : undefined;
+      node.row = inheritedLane !== undefined && !used.has(inheritedLane) ? inheritedLane : nextLane++;
+      used.add(node.row);
+    }
+    list.sort((a, b) => a.row - b.row || a.label.localeCompare(b.label, "zh-CN"));
+  }
+}
+
 /** Reduce crossings without changing physical identity or inventing graph edges. */
 export function improveTopologyOrder<T extends LayoutNode>(columns: Map<number, T[]>, edges: LayoutEdge[], bottomIds: Set<string>) {
   const nodes = [...columns.values()].flat();
