@@ -1471,7 +1471,6 @@ function NetworkTopologyContent() {
   // Show the freshest physical measurement instead of presenting it as several paths.
   const physicalEdgeMeasurementLabel = (edge: TopologyEdge, edgePaths: PhysicalPath[], includePending = true) => {
     if (edgeSourceOffline(edge)) return "离线";
-    if (agentLinkPendingEdges.has(edge.id)) return "探测中";
     const candidates = [
       ...(agentLinkEdgeMeasurement(edge) ? [agentLinkEdgeMeasurement(edge)!] : []),
       ...(includePending ? edgePaths.filter((path) => !!path.ruleId && probingRuleIds.has(path.ruleId)).map((path) => ({
@@ -1506,7 +1505,7 @@ function NetworkTopologyContent() {
   };
   const pathEdgeMeasurementLabel = (path: PhysicalPath, edge: TopologyEdge) => {
     if (edgeSourceOffline(edge)) return "离线";
-    if (agentLinkPendingEdges.has(edge.id)) return "探测中";
+    if (agentLinkPendingEdges.has(topologySegmentProbeKey(path.id, edge.id))) return "探测中";
     if (path.ruleId && probingRuleIds.has(path.ruleId)) return "探测中";
     const ownProbe = segmentProbeFor(path, edge);
     if (ownProbe && ["pending", "running"].includes(ownProbe.status)) return "探测中";
@@ -1522,7 +1521,7 @@ function NetworkTopologyContent() {
     }
     return trpcUtils.agentLinks.pathRound.fetch({ edges, probeRoundId });
   };
-  const requestSegmentProbe = async (_path: PhysicalPath, edge: TopologyEdge) => {
+  const requestSegmentProbe = async (path: PhysicalPath, edge: TopologyEdge) => {
     const sourceHostId = Number(edge.from.replace(/^host:/, ""));
     const targetHostId = Number(edge.to.replace(/^host:/, ""));
     const identity = topologyAgentTcpEdgeByPair.get(`${sourceHostId}:${targetHostId}`);
@@ -1530,8 +1529,9 @@ function NetworkTopologyContent() {
       setProbeMessage("该相邻节点没有唯一可用的 Agent Link TCP 边，请检查 Agent 能力或 connectHost 配置。");
       return;
     }
-    if (agentLinkPendingEdges.has(edge.id)) return;
-    setAgentLinkPendingEdges((current) => new Set(current).add(edge.id));
+    const pendingKey = topologySegmentProbeKey(path.id, edge.id);
+    if (agentLinkPendingEdges.has(pendingKey)) return;
+    setAgentLinkPendingEdges((current) => new Set(current).add(pendingKey));
     setProbeMessage(`正在探测 ${identity.targetAddress}:${identity.targetPort} Agent Link TCP…`);
     try {
       const round = await probeAgentLinksNow.mutateAsync({
@@ -1544,7 +1544,7 @@ function NetworkTopologyContent() {
     } catch (error) {
       setProbeMessage(`Agent Link 单跳探测失败：${error instanceof Error ? error.message : String(error)}`);
     } finally {
-      setAgentLinkPendingEdges((current) => { const next = new Set(current); next.delete(edge.id); return next; });
+      setAgentLinkPendingEdges((current) => { const next = new Set(current); next.delete(pendingKey); return next; });
     }
   };
   const requestPathProbe = async (path: PhysicalPath) => {
@@ -1557,7 +1557,8 @@ function NetworkTopologyContent() {
     }
     const candidates = edges.map((edge) => ({ sourceHostId: edge.sourceHostId, targetHostId: edge.targetHostId, targetAddress: edge.targetAddress }));
     setAgentLinkPathProbes((current) => ({ ...current, [path.id]: { status: "pending", probeRoundId: "", latencyMs: null } }));
-    setAgentLinkPendingEdges((current) => new Set([...current, ...topologyPathEdgeIds([path.entry, ...path.relays, path.landing].map((node) => node.id))]));
+    const pathEdgeIds = topologyPathEdgeIds([path.entry, ...path.relays, path.landing].map((node) => node.id));
+    setAgentLinkPendingEdges((current) => new Set([...current, ...pathEdgeIds.map((edgeId) => topologySegmentProbeKey(path.id, edgeId))]));
     setProbeMessage("正在执行同轮 Agent Link TCP 逐跳探测…");
     try {
       const round = await probeAgentLinksNow.mutateAsync({ watcherId: agentLinkWatcherIdRef.current, candidates });
@@ -1574,8 +1575,8 @@ function NetworkTopologyContent() {
       setAgentLinkPathProbes((current) => ({ ...current, [path.id]: { status: "timeout", probeRoundId: "", latencyMs: null } }));
       setProbeMessage(`Agent Link 路径探测失败：${error instanceof Error ? error.message : String(error)}`);
     } finally {
-      const edgeIds = new Set(topologyPathEdgeIds([path.entry, ...path.relays, path.landing].map((node) => node.id)));
-      setAgentLinkPendingEdges((current) => new Set([...current].filter((id) => !edgeIds.has(id))));
+      const pendingKeys = new Set(pathEdgeIds.map((edgeId) => topologySegmentProbeKey(path.id, edgeId)));
+      setAgentLinkPendingEdges((current) => new Set([...current].filter((id) => !pendingKeys.has(id))));
     }
   };
   const nodePaths = selectedNode ? paths.filter((path) => [path.entry, ...path.relays, path.landing].some((node) => node.id === selectedNode.id)) : [];
