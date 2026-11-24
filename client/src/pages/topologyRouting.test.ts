@@ -47,6 +47,20 @@ test("relationship overview uses smooth curves and routes long direct exits outs
   assert.ok(direct[1].y > result.positions.get("relay")!.y + result.positions.get("relay")!.height);
 });
 
+test("long smooth edges use compact reusable lanes, independent of ordinary edge count", () => {
+  const nodes = [
+    { id: "a", column: 0, row: 0 }, { id: "b", column: 1, row: 0 },
+    { id: "c", column: 2, row: 0 }, { id: "d", column: 3, row: 0 },
+  ];
+  const ordinary = Array.from({ length: 30 }, (_, index) => ({ id: `ordinary-${index}`, from: "a", to: "b" }));
+  const graph = routeSmoothLayeredTopologyGraph(nodes, [...ordinary, { id: "long", from: "a", to: "d" }], new Set());
+  const long = graph.edgeRoutes.get("long")!;
+  // Ordinary links do not consume the long-link track budget.
+  assert.equal(long[1].y, long[2].y);
+  assert.ok(long[1].y > -80, "the long edge was sent to a lane based on all edge indices");
+  assert.ok(graph.height < 500, "ordinary fan-out unnecessarily enlarged the canvas");
+});
+
 test("smooth fan-out ports follow destination positions, not edge IDs", () => {
   const nodes = [{id:"hk",column:0,row:0}, {id:"jp",column:1,row:0}, {id:"sg",column:1,row:1}];
   const graph = routeSmoothLayeredTopologyGraph(nodes, [

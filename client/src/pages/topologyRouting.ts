@@ -181,8 +181,37 @@ export function routeSmoothLayeredTopologyGraph(nodes: TopologyRoutingNode[], in
   const bottom = Math.max(...[...base.positions.values()].map((box) => box.y + box.height));
   const top = Math.min(...[...base.positions.values()].map((box) => box.y));
   let lowestLane = bottom;
+
+  // A long edge must leave the card rows, but it must not receive a lane based
+  // on its index amongst *all* edges.  That used to make a newly-expanded
+  // forwarding service push every long edge hundreds of pixels upwards: a
+  // dense fan-out has many ordinary edges before the first long one.  Reuse a
+  // lane whenever its column interval is disjoint; only simultaneously
+  // crossing long edges need separate lanes.
+  const longLaneByEdge = new Map<string, number>();
+  const longLaneIntervals: Array<Array<{ start: number; end: number }>> = [];
+  const longEdges = inputEdges
+    .filter((edge) => {
+      const source = byId.get(edge.from)?.column;
+      const target = byId.get(edge.to)?.column;
+      return source !== undefined && target !== undefined && target - source > 1 && !directOnly.has(edge.to);
+    })
+    .slice()
+    .sort((a, b) => {
+      const aStart = byId.get(a.from)!.column, bStart = byId.get(b.from)!.column;
+      const aEnd = byId.get(a.to)!.column, bEnd = byId.get(b.to)!.column;
+      return aStart - bStart || bEnd - aEnd || a.id.localeCompare(b.id);
+    });
+  for (const edge of longEdges) {
+    const start = byId.get(edge.from)!.column, end = byId.get(edge.to)!.column;
+    let lane = longLaneIntervals.findIndex((intervals) => intervals.every((other) => end <= other.start || start >= other.end));
+    if (lane < 0) { lane = longLaneIntervals.length; longLaneIntervals.push([]); }
+    longLaneIntervals[lane].push({ start, end });
+    longLaneByEdge.set(edge.id, lane);
+  }
+
   const edgeRoutes = new Map<string, TopologyPoint[]>();
-  [...base.edgeRoutes.keys()].sort().forEach((edgeId, index) => {
+  [...base.edgeRoutes.keys()].sort().forEach((edgeId) => {
     const edge = inputEdges.find((candidate) => candidate.id === edgeId)!;
     const from = base.positions.get(edge.from)!;
     const to = base.positions.get(edge.to)!;
@@ -198,7 +227,11 @@ export function routeSmoothLayeredTopologyGraph(nodes: TopologyRoutingNode[], in
     let controlY1 = start.y;
     let controlY2 = end.y;
     if (spansRelayLayer) {
-      const laneY = isDirectLanding ? end.y + 16 : top - 44 - index * 14;
+      // Direct sinks deliberately travel below the relay rows. Other long
+      // edges use compact, reusable tracks above them.
+      const laneY = isDirectLanding
+        ? end.y + 16
+        : top - 40 - (longLaneByEdge.get(edge.id) || 0) * 16;
       controlY1 = laneY;
       controlY2 = laneY;
       if (isDirectLanding) lowestLane = Math.max(lowestLane, laneY);
