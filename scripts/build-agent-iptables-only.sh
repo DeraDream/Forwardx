@@ -20,8 +20,9 @@ for arch in amd64 arm64; do
       go build -tags iptablesonly -trimpath -ldflags "-s -w -X main.Version=$STANDARD_VERSION -X main.iptablesOnlyVersion=$VERSION" -o "$package_dir/forwardx-agent" .
   )
   install -m 0755 "$ROOT_DIR/scripts/install-agent-iptables-only.sh" "$package_dir/install.sh"
+  install -m 0755 "$ROOT_DIR/scripts/forwardx-iptables-menu.sh" "$package_dir/forwardx-menu"
   printf '%s\n' "$VERSION" > "$package_dir/VERSION"
-  tar -C "$package_dir" -czf "$OUT_DIR/forwardx-agent-iptables-only-v$VERSION-linux-$arch.tar.gz" forwardx-agent install.sh VERSION
+  tar -C "$package_dir" -czf "$OUT_DIR/forwardx-agent-iptables-only-v$VERSION-linux-$arch.tar.gz" forwardx-agent install.sh forwardx-menu VERSION
   rm -rf "$package_dir"
 done
 (cd "$OUT_DIR" && sha256sum "forwardx-agent-iptables-only-v$VERSION-linux-"*.tar.gz > "iptables-only-v$VERSION-SHA256SUMS")

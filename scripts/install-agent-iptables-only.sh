@@ -11,12 +11,20 @@ if ! command -v systemctl >/dev/null 2>&1 || [ ! -d /run/systemd/system ]; then
   echo '此离线包目前仅支持 systemd 系统' >&2; exit 1
 fi
 SERVICE=forwardx-agent-iptables-only
-BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/forwardx-agent"
+PACKAGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BIN="$PACKAGE_DIR/forwardx-agent"
+MENU_SCRIPT="$PACKAGE_DIR/forwardx-menu"
 if systemctl is-active --quiet forwardx-agent || systemctl is-enabled --quiet forwardx-agent; then
   echo '检测到标准 forwardx-agent 正在运行或设置为开机启动：请先停用标准 Agent，避免两个 Agent 共用状态文件' >&2; exit 1
 fi
 if [ ! -f "$BIN" ]; then echo "找不到 $BIN" >&2; exit 1; fi
-if [ -L "$BIN" ]; then echo '拒绝安装符号链接二进制' >&2; exit 1; fi
+if [ -L "$BIN" ] || [ ! -f "$MENU_SCRIPT" ] || [ -L "$MENU_SCRIPT" ]; then
+  echo '安装包缺少菜单脚本，或包含符号链接；请使用新版轻量包' >&2; exit 1
+fi
+if [ -e /usr/local/bin/forwardx ] && ! grep -qF '# ForwardX iptables-only management menu' /usr/local/bin/forwardx; then
+  echo '/usr/local/bin/forwardx 已被其他程序占用，拒绝覆盖' >&2; exit 1
+fi
+command -v python3 >/dev/null || { echo '轻量版菜单需要 python3，请先安装' >&2; exit 1; }
 CONFIG=/etc/forwardx/agent/config.json
 PROXY_DROPIN=/etc/systemd/system/${SERVICE}.service.d/proxy.conf
 if [ ! -f "$CONFIG" ]; then
@@ -28,7 +36,7 @@ if [ ! -f "$CONFIG" ]; then
   if [ -t 0 ]; then
     if [ -z "$proxy_url" ]; then read -r -p '代理地址（如 http://中转机IP:5555，直连请留空）: ' proxy_url; fi
     if [ -z "$panel_url" ]; then read -r -p '真实面板地址（如 https://panel.example.com）: ' panel_url; fi
-    if [ -z "$token" ]; then read -r -s -p 'Agent Token（输入不回显）: ' token; echo; fi
+    if [ -z "$token" ]; then read -r -p 'Agent Token（输入显示）: ' token; fi
     if [ -z "$public_ipv4" ]; then read -r -p '本机公网 IPv4（不能直连公网 IP 检测服务时填写，直连请留空）: ' public_ipv4; fi
   fi
   case "$panel_url" in http://*|https://*) ;; *) echo '面板地址必须是 http(s) URL' >&2; exit 1 ;; esac
@@ -56,10 +64,14 @@ if [ ! -f "$CONFIG" ]; then
   unset token
 fi
 install -m 0755 "$BIN" /usr/local/bin/forwardx-agent-iptables-only
+install -m 0755 "$MENU_SCRIPT" /usr/local/bin/forwardx
 # DNAT forwarding requires kernel IP forwarding as well as iptables userspace.
 printf 'net.ipv4.ip_forward=1\n' > /etc/sysctl.d/90-forwardx-agent-iptables.conf
 sysctl -w net.ipv4.ip_forward=1 >/dev/null
 install -d -m 0755 /var/log/forwardx-agent /var/lib/forwardx-agent
+if [ -f "$PACKAGE_DIR/VERSION" ]; then
+  install -m 0644 "$PACKAGE_DIR/VERSION" /var/lib/forwardx-agent/iptables-only-version
+fi
 cat > "/etc/systemd/system/${SERVICE}.service" <<'EOF'
 [Unit]
 Description=ForwardX Agent (iptables-only installation)
@@ -79,3 +91,4 @@ systemctl daemon-reload
 systemctl enable --now "$SERVICE"
 systemctl restart "$SERVICE"
 echo 'Agent 已安装。请在面板只分配 iptables 转发规则；其他运行时未安装。'
+if [ -t 0 ]; then /usr/local/bin/forwardx; fi
