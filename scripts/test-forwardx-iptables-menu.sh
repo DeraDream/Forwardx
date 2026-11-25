@@ -18,6 +18,9 @@ import os
 from pathlib import Path
 root = Path(os.environ['ROOT']); t = Path(os.environ['TEST_DIR'])
 s = (root/'scripts/forwardx-iptables-menu.sh').read_text()
+# The real menu is root-only; the sandbox tests use private temporary paths
+# and must also run under the unprivileged GitHub Actions user.
+s = s.replace('[ "$(id -u)" -eq 0 ]', 'true')
 for old, new in [
     ('/etc/forwardx/agent/config.json', str(t/'etc/config.json')),
     ('/etc/systemd/system/${SERVICE}.service.d/proxy.conf', str(t/'etc/proxy.conf')),
