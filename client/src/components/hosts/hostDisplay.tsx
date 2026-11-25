@@ -72,6 +72,8 @@ export function compareVersions(a: string | null | undefined, b: string | null |
 }
 
 export function isAgentVersionBehind(version: string | null | undefined, target: string | null | undefined) {
+  // Offline iptables-only Agents have their own version and release channel.
+  if (/^\d+\.\d+\.\d+-iptables-only\.\d+\.\d+\.\d+$/.test(normalizeVersion(version))) return false;
   if (!version || !target) return false;
   return compareVersions(version, target) < 0;
 }

@@ -2810,6 +2810,9 @@ func main() {
 	setRuntimePanelURL(cfg.PanelURL)
 	runtimeAgentToken.Store(cfg.Token)
 	initializePanelMigration(cfg)
+	if iptablesOnlyBuild {
+		logf("iptables-only Agent version=%s protocol-version=%s", iptablesOnlyVersion, Version)
+	}
 
 	if *onceRegister {
 		if err := register(cfg); err != nil {
@@ -3573,7 +3576,7 @@ func register(cfg Config) error {
 		"osInfo":       osInfo(),
 		"cpuInfo":      cpuInfo(),
 		"memoryTotal":  memTotal(),
-		"agentVersion": Version,
+		"agentVersion": reportedAgentVersion(),
 		"agentProbe":   currentAgentProbeStatus(),
 	}
 	var out map[string]any
@@ -3909,7 +3912,7 @@ func heartbeat(cfg Config, forceReconcile ...bool) (heartbeatResult, error) {
 			"diskTotal":    diskTotal,
 			"uptime":       uptimeValue,
 			"cpuInfo":      currentStatic.CPUInfo,
-			"agentVersion": Version,
+			"agentVersion": reportedAgentVersion(),
 		}
 	}
 	if len(forceReconcile) > 0 && forceReconcile[0] {
@@ -3931,7 +3934,7 @@ func heartbeat(cfg Config, forceReconcile ...bool) (heartbeatResult, error) {
 	}
 	if compactEnabled && shouldReportStatic {
 		payload["cpuInfo"] = currentStatic.CPUInfo
-		payload["agentVersion"] = Version
+		payload["agentVersion"] = reportedAgentVersion()
 	}
 	if currentStatic.DefaultNetworkInterface != "" {
 		payload["defaultNetworkInterface"] = currentStatic.DefaultNetworkInterface
@@ -3977,7 +3980,7 @@ func heartbeat(cfg Config, forceReconcile ...bool) (heartbeatResult, error) {
 		return heartbeatResult{NextInterval: cfg.Interval}, nil
 	}
 	syncPanelURLFromResponse(resp.PanelURL)
-	if resp.AgentUpgrade != nil {
+	if resp.AgentUpgrade != nil && !iptablesOnlyBuild {
 		if handleLegacyPanelMigrationUpgrade(cfg, resp.AgentUpgrade) {
 			return heartbeatResult{NextInterval: cfg.Interval}, nil
 		}
@@ -4151,7 +4154,7 @@ func heartbeatKeepalive(cfg Config) (heartbeatResult, error) {
 	}
 	if compactAgentReports.Load() && shouldReportStatic {
 		payload["cpuInfo"] = currentStatic.CPUInfo
-		payload["agentVersion"] = Version
+		payload["agentVersion"] = reportedAgentVersion()
 	}
 	if currentStatic.DefaultNetworkInterface != "" {
 		payload["defaultNetworkInterface"] = currentStatic.DefaultNetworkInterface
@@ -4801,7 +4804,7 @@ func agentEventStream(cfg Config) {
 }
 
 func runAgentEventStream(cfg Config) error {
-	env, err := encrypt(map[string]any{"agentVersion": Version}, cfg.Token)
+	env, err := encrypt(map[string]any{"agentVersion": reportedAgentVersion()}, cfg.Token)
 	if err != nil {
 		return err
 	}
@@ -4879,6 +4882,8 @@ func runAgentEventStream(cfg Config) error {
 				}
 				if err := decodeEventDataForPanel(data.String(), cfg.Token, panelURL, serverTimeHeader, &msg); err != nil {
 					logf("decode agent upgrade event: %v", err)
+				} else if msg.Type == "agent-upgrade" && iptablesOnlyBuild {
+					logf("iptables-only Agent: ignoring panel standard Agent upgrade event")
 				} else if msg.Type == "agent-upgrade" {
 					var up agentUpgrade
 					if err := json.Unmarshal(msg.Data, &up); err != nil {

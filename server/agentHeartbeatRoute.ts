@@ -2,7 +2,7 @@ import { Router, Request, Response } from "express";
 import * as db from "./db";
 import { AGENT_VERSION } from "./_core/systemRouter";
 import { clearHostTcpingRequest, hasHostTcpingRequest, isHostMetricsWatching, isHostTopologyTrafficWatching, pushAgentDesiredState } from "./agentEvents";
-import { AGENT_PLUGIN_TASK_VERSION, buildMetaAgentSelfTestPayload, buildRuleAgentSelfTestPayload, hasAgentVersionChanged, isAgentUpgradeTargetSatisfied, isAgentVersionAtLeast, parseSelfTestMeta, tunnelSecretSeed } from "./agentRouteUtils";
+import { AGENT_PLUGIN_TASK_VERSION, buildMetaAgentSelfTestPayload, buildRuleAgentSelfTestPayload, hasAgentVersionChanged, isAgentUpgradeTargetSatisfied, isAgentVersionAtLeast, isIptablesOnlyAgentVersion, parseSelfTestMeta, tunnelSecretSeed } from "./agentRouteUtils";
 import { resolveAgentAdvertisedPanelUrl } from "./agentPanelUrl";
 import { getAgentMigrationSwitchTarget, getPanelMigrationAgentDirective } from "./panelMigrationAgentState";
 import * as hopRepo from "./repositories/tunnelRepository";
@@ -6285,6 +6285,12 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       }
     }
 
+    // The offline iptables-only build has its own release channel; never send
+    // the standard Agent installer to it, even for an older queued request.
+    const standaloneAgent = isIptablesOnlyAgentVersion(effectiveAgentVersion);
+    if (standaloneAgent && (host as any).agentUpgradeRequested) {
+      await db.clearHostAgentUpgradeRequest(host.id);
+    }
     const requestedTargetVersion = (host as any).agentUpgradeTargetVersion || AGENT_VERSION;
     const agentUpgradeCompleted = (host as any).agentUpgradeRequested
       && agentVersion
@@ -6301,7 +6307,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     if (staleMigrationUpgrade) await db.clearHostAgentUpgradeRequest(host.id);
     const agentUpgradeRequestedAt = heartbeatTimestampMs((host as any).agentUpgradeRequestedAt);
     const agentUpgradeDue = agentUpgradeRequestedAt <= 0 || agentUpgradeRequestedAt <= responseIssuedAt;
-    const agentUpgrade = (host as any).agentUpgradeRequested && agentUpgradeDue && !agentUpgradeCompleted && !staleMigrationUpgrade ? {
+    const agentUpgrade = !standaloneAgent && (host as any).agentUpgradeRequested && agentUpgradeDue && !agentUpgradeCompleted && !staleMigrationUpgrade ? {
       targetVersion: requestedTargetVersion,
       panelUrl: agentMigrationTargetPanelUrl || panelUrl,
       releaseVersion: (host as any).agentUpgradeReleaseVersion || null,

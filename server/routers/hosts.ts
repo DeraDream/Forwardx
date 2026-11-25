@@ -8,7 +8,7 @@ import { markHostMetricsWatching, pushAgentRefresh, pushAgentUpgrade } from "../
 import { AGENT_ASSET_NAMES, getMissingBundledAgentAssets } from "../agentAssets";
 import { pushTunnelEndpointRefresh, requireHostAccess } from "./helpers";
 import { AGENT_VERSION, APP_VERSION, REPO_URL } from "../_core/systemRouter";
-import { isAgentUpgradeTargetSatisfied, isAgentVersionAtLeast } from "../agentRouteUtils";
+import { isAgentUpgradeTargetSatisfied, isAgentVersionAtLeast, isIptablesOnlyAgentVersion } from "../agentRouteUtils";
 import { scheduleHostGeoRefresh } from "../hostGeo";
 import { refreshHostAddressRuntime } from "../hostAddressRuntime";
 import { scheduleHostDdnsUpdate } from "../hostDdns";
@@ -818,7 +818,7 @@ export const hostsRouter = router({
         let onlineOutdatedItems = 0;
         let offlineUpgradeableItems = 0;
         for (const row of pageData.versionCounts as any[]) {
-          if (!row?.agentVersion || isAgentVersionAtLeast(row.agentVersion, AGENT_VERSION)) continue;
+          if (!row?.agentVersion || isIptablesOnlyAgentVersion(row.agentVersion) || isAgentVersionAtLeast(row.agentVersion, AGENT_VERSION)) continue;
           const count = Math.max(0, Number(row.count || 0));
           outdatedItems += count;
           if (row.online) onlineOutdatedItems += count;
@@ -848,7 +848,7 @@ export const hostsRouter = router({
         scheduleStaleHostUpgradeCleanup();
         const hosts = await db.getHostUpgradeCandidates(input) as any[];
         const outdated = hosts.filter((host: any) => (
-          !!host.agentVersion && !isAgentVersionAtLeast(host.agentVersion, AGENT_VERSION)
+          !!host.agentVersion && !isIptablesOnlyAgentVersion(host.agentVersion) && !isAgentVersionAtLeast(host.agentVersion, AGENT_VERSION)
         ));
         const candidates = outdated.filter((host: any) => {
           if (!host.isOnline) return false;
@@ -1485,6 +1485,9 @@ export const hostsRouter = router({
       .mutation(async ({ input }) => {
         const host = await db.getHostById(input.hostId);
         if (!host) throw new Error("主机不存在");
+        if (isIptablesOnlyAgentVersion((host as any).agentVersion)) {
+          throw new Error("轻量 Agent 通过离线包独立更新，不支持面板标准 Agent 升级");
+        }
         if (!(host as any).isOnline) {
           return { success: true, pushed: false, alreadyLatest: false, skippedOffline: true };
         }
@@ -1520,6 +1523,10 @@ export const hostsRouter = router({
           const host = await db.getHostById(hostId);
           if (!host) {
             missing.push(hostId);
+            continue;
+          }
+          if (isIptablesOnlyAgentVersion((host as any).agentVersion)) {
+            skippedLatest += 1;
             continue;
           }
           if (!(host as any).isOnline) {

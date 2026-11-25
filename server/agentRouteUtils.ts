@@ -40,8 +40,12 @@ export function isAgentUpgradeTargetSatisfied(
   return compareVersions(normalizedVersion, normalizedTarget) >= 0;
 }
 
+export function isIptablesOnlyAgentVersion(version: string | null | undefined) {
+  return /^\d+\.\d+\.\d+-iptables-only\.\d+\.\d+\.\d+$/.test(normalizeVersion(version));
+}
+
 export function isAgentVersionBehind(version: string | null | undefined, target: string | null | undefined) {
-  if (!version || !target) return false;
+  if (isIptablesOnlyAgentVersion(version) || !version || !target) return false;
   return compareVersions(version, target) < 0;
 }
 

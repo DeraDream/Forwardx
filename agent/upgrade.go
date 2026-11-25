@@ -8,6 +8,10 @@ import (
 )
 
 func selfUpgrade(cfg Config, up *agentUpgrade) {
+	if iptablesOnlyBuild {
+		logf("iptables-only Agent: ignoring panel standard Agent upgrade request")
+		return
+	}
 	if isLegacyPanelMigrationUpgrade(up) {
 		handleLegacyPanelMigrationUpgrade(cfg, up)
 		return
