@@ -24,10 +24,12 @@ if [ ! -f "$CONFIG" ]; then
   proxy_url="${FORWARDX_AGENT_PROXY_URL:-}"
   panel_url="${FORWARDX_PANEL_URL:-}"
   token="${FORWARDX_AGENT_TOKEN:-}"
+  public_ipv4="${FORWARDX_AGENT_PUBLIC_IPV4:-}"
   if [ -t 0 ]; then
     if [ -z "$proxy_url" ]; then read -r -p '代理地址（如 http://中转机IP:5555，直连请留空）: ' proxy_url; fi
     if [ -z "$panel_url" ]; then read -r -p '真实面板地址（如 https://panel.example.com）: ' panel_url; fi
     if [ -z "$token" ]; then read -r -s -p 'Agent Token（输入不回显）: ' token; echo; fi
+    if [ -z "$public_ipv4" ]; then read -r -p '本机公网 IPv4（不能直连公网 IP 检测服务时填写，直连请留空）: ' public_ipv4; fi
   fi
   case "$panel_url" in http://*|https://*) ;; *) echo '面板地址必须是 http(s) URL' >&2; exit 1 ;; esac
   if [ -n "$proxy_url" ]; then
@@ -42,8 +44,11 @@ if [ ! -f "$CONFIG" ]; then
   if [[ ! "$token" =~ ^[a-zA-Z0-9_-]+$ ]]; then
     echo 'Token 无效（仅接受面板生成的字母、数字、下划线和连字符）' >&2; exit 1
   fi
+  if [ -n "$public_ipv4" ] && [[ ! "$public_ipv4" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+    echo '本机公网 IPv4 格式不正确' >&2; exit 1
+  fi
   install -d -m 0700 /etc/forwardx/agent
-  (umask 077; printf '{"panelUrl":"%s","token":"%s","interval":30}\n' "${panel_url%/}" "$token" > "$CONFIG")
+  (umask 077; printf '{"panelUrl":"%s","token":"%s","interval":30,"publicIpv4":"%s"}\n' "${panel_url%/}" "$token" "$public_ipv4" > "$CONFIG")
   if [ -n "$proxy_url" ]; then
     install -d -m 0755 "/etc/systemd/system/${SERVICE}.service.d"
     printf '[Service]\nEnvironment="HTTP_PROXY=%s"\nEnvironment="HTTPS_PROXY=%s"\n' "$proxy_url" "$proxy_url" > "$PROXY_DROPIN"

@@ -283,6 +283,9 @@ var dnsWatchRetiredSnapshots = map[string]dnsWatchRetiredSnapshot{}
 var pendingDNSChanges []dnsChangeReport
 var publicIPMu sync.Mutex
 var publicIPv4Cache string
+// Set at startup before the IP refresh loop; a static address avoids querying
+// public-IP services through a proxy (which would report the relay IP).
+var configuredPublicIPv4 string
 var publicIPv6Cache string
 var publicIPCheckedAt time.Time
 var publicIPRefreshRunning bool
@@ -812,6 +815,7 @@ type Config struct {
 	PanelURL                  string `json:"panelUrl"`
 	Token                     string `json:"token"`
 	Interval                  int    `json:"interval"`
+	PublicIPv4                string `json:"publicIpv4,omitempty"`
 	ProbePort                 int    `json:"probePort,omitempty"`
 	MigrationFallbackPanelURL string `json:"migrationFallbackPanelUrl,omitempty"`
 	PanelMigrationID          string `json:"panelMigrationId,omitempty"`
@@ -2809,6 +2813,9 @@ func main() {
 	activeConfigPath = resolvedConfigPath
 	setRuntimePanelURL(cfg.PanelURL)
 	runtimeAgentToken.Store(cfg.Token)
+	if err := configurePublicIPv4(cfg.PublicIPv4); err != nil {
+		fatal("%v", err)
+	}
 	initializePanelMigration(cfg)
 	if iptablesOnlyBuild {
 		logf("iptables-only Agent version=%s protocol-version=%s", iptablesOnlyVersion, Version)
@@ -14421,6 +14428,21 @@ func osInfo() string {
 	return runtime.GOOS + "/" + runtime.GOARCH
 }
 
+func configurePublicIPv4(value string) error {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	ip := net.ParseIP(strings.TrimSpace(value))
+	if ip == nil || ip.To4() == nil || !ip.IsGlobalUnicast() || ip.IsPrivate() {
+		return fmt.Errorf("invalid publicIpv4: expected a public IPv4 address")
+	}
+	configuredPublicIPv4 = ip.String()
+	publicIPMu.Lock()
+	publicIPv4Cache = configuredPublicIPv4
+	publicIPMu.Unlock()
+	return nil
+}
+
 func publicIPs() (string, string) {
 	publicIPMu.Lock()
 	ipv4, ipv6 := publicIPv4Cache, publicIPv6Cache
@@ -14437,6 +14459,10 @@ func refreshPublicIPs() {
 	ipv4Ch := make(chan string, 1)
 	ipv6Ch := make(chan string, 1)
 	go func() {
+		if configuredPublicIPv4 != "" {
+			ipv4Ch <- configuredPublicIPv4
+			return
+		}
 		ipv4Ch <- fetchPublicIP([]string{
 			"https://api.ipify.org",
 			"https://ipv4.icanhazip.com",
