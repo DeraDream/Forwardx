@@ -71,6 +71,12 @@ export function compareVersions(a: string | null | undefined, b: string | null |
   return 0;
 }
 
+export function formatHostAgentVersion(version: string | null | undefined) {
+  if (!version) return "未上报";
+  const standalone = /^\d+\.\d+\.\d+-iptables-only\.(\d+\.\d+\.\d+)$/.exec(normalizeVersion(version));
+  return standalone ? `Lite v${standalone[1]}` : `v${normalizeVersion(version)}`;
+}
+
 export function isAgentVersionBehind(version: string | null | undefined, target: string | null | undefined) {
   // Offline iptables-only Agents have their own version and release channel.
   if (/^\d+\.\d+\.\d+-iptables-only\.\d+\.\d+\.\d+$/.test(normalizeVersion(version))) return false;

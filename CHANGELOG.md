@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.4.138] - 2026-11-25
+
+### Changed
+
+- 主机管理中独立轻量 Agent 的版本标签简写为 `Lite vX.Y.Z`，普通 Agent 版本标签保持不变；不修改上报版本或标准 Agent 升级判断。
+
+Agent 保持 `2.2.248`；ForwardX FXP runtime 保持 `2.2.117`，Android APP 保持 `2.3.97`。
+
 ## [2.4.137] - 2026-11-24
 
 ### Changed

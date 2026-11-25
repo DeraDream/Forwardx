@@ -45,6 +45,7 @@ import {
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   formatBytes,
+  formatHostAgentVersion,
   formatUptime,
   HostRegionBadge,
   hostPrimaryAddressText,
@@ -836,7 +837,7 @@ export default function HostCard({
                       : "border-muted-foreground/20 bg-muted/20"
                   }`}
                 >
-                  {host.agentVersion ? `v${host.agentVersion}` : "未上报"}
+                  {formatHostAgentVersion(host.agentVersion)}
                 </span>
                 {agentNeedsUpdate && (
                   <Badge
@@ -884,7 +885,7 @@ export default function HostCard({
                       : "border-muted-foreground/20 bg-muted/20"
                   }`}
                 >
-                  {host.agentVersion ? `v${host.agentVersion}` : "未上报"}
+                  {formatHostAgentVersion(host.agentVersion)}
                 </span>
                 {agentNeedsUpdate && (
                   <Badge

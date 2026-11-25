@@ -15,6 +15,7 @@ import {
   agentDetectedIpText,
   compareVersions,
   formatBytes,
+  formatHostAgentVersion,
   formatUptime,
   hostAddressText,
   hostPrimaryAddressText,
@@ -359,7 +360,7 @@ function renderHostGlobeTooltip(point: HostGlobePoint) {
     { label: "地址", value: point.addressText },
     { label: "地区", value: point.regionText || "地区获取中" },
     { label: "系统", value: point.host.osInfo || "系统信息未上报" },
-    { label: "Agent", value: point.host.agentVersion ? `v${point.host.agentVersion}` : "未上报" },
+    { label: "Agent", value: formatHostAgentVersion(point.host.agentVersion) },
   ];
   const regionValue = point.flagUrl
     ? `<span style="display:inline-flex;min-width:0;align-items:center;gap:7px;"><img src="${escapeTooltipHtml(point.flagUrl)}" alt="${escapeTooltipHtml(point.countryCode)}" referrerpolicy="no-referrer" style="width:20px;height:15px;flex:0 0 auto;border-radius:2px;object-fit:cover;" onerror="this.style.display='none';this.nextElementSibling.style.display='inline';" /><span style="display:none;flex:0 0 auto;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono',monospace;font-size:11px;color:#cbd5e1;">${escapeTooltipHtml(point.countryCode)}</span><span style="min-width:0;overflow:hidden;text-overflow:ellipsis;">${escapeTooltipHtml(point.regionText || "地区获取中")}</span></span>`
@@ -2760,7 +2761,7 @@ function HostsContent() {
                               <div className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-[11px] text-muted-foreground">
                                 {host.agentVersion && (
                                   <span className="shrink-0 rounded border border-border/50 bg-muted/35 px-1.5 py-0.5 font-mono text-[10px] leading-none text-muted-foreground">
-                                    v{host.agentVersion}
+                                    {formatHostAgentVersion(host.agentVersion)}
                                   </span>
                                 )}
                                 {agentNeedsUpdate && (
