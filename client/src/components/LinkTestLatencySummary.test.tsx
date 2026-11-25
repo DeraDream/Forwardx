@@ -560,6 +560,9 @@ test("multi-entry chain converges once and shows independent entry totals", () =
   ] }));
   const html = renderToStaticMarkup(<LinkTestProbeView parsed={parsed} isSuccess isTesting={false} />);
   assert.equal(html.match(/入口节点/g)?.length, 2);
+  assert.match(html, /grid-template-columns:repeat\(2, minmax\(0, 1fr\)\)/);
+  assert.match(html, /M 250 0 L 500 55/);
+  assert.match(html, /M 750 0 L 500 55/);
   assert.equal(html.match(/中转节点/g)?.length, 2);
   assert.equal(html.match(/落地节点/g)?.length, 1);
   assert.match(html, /Po0-999 路径/);

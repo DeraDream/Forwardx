@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { buildPhysicalPaths, groupTopologyListRows, relationshipOverviewPaths } from "./NetworkTopology";
+import { buildOverviewGraph, buildPhysicalPaths, groupTopologyListRows, relationshipOverviewPaths } from "./NetworkTopology";
 
 const hosts = [1,2,3,4,5,6].map((id) => ({ id, name: `host-${id}`, ip: `192.0.2.${id}`, isOnline: true }));
 const tunnel = { id: 100, mode: "tls", hopHostIds: [2,3], loadBalanceEnabled: true, loadBalanceStrategy: "round_robin", loadBalanceExits: [{ hostId: 4, isEnabled: true }] };
@@ -47,7 +47,7 @@ test("multi-entry chain remains separate graph paths but one list row", () => {
   assert.deepEqual(rows[0].path.relays.map((node) => node.id), ["host:2", "host:3"]);
 });
 
-test("relationship overview keeps an entry's direct landing but omits standalone direct forwards", () => {
+test("relationship overview places standalone forwards above chains and shared direct landings below forwarded landings", () => {
   const rules = [
     { id: 1, name: "IX chain", hostId: 1, forwardGroupId: 20, targetIp: "198.51.100.10", targetPort: 443 },
     { id: 2, name: "IX direct", hostId: 1, targetIp: "198.51.100.11", targetPort: 443 },
@@ -55,7 +55,35 @@ test("relationship overview keeps an entry's direct landing but omits standalone
   ];
   const groups = [{ id: 20, groupMode: "chain", members: [{ memberType: "host", hostId: 1, isEnabled: true }, { memberType: "host", hostId: 2, isEnabled: true }] }];
   const result = buildPhysicalPaths(rules, hosts, [], groups, [], [], "all", "");
-  assert.deepEqual(relationshipOverviewPaths(result.paths).map((path) => path.name).sort(), ["IX chain", "IX direct"]);
+  const overview = relationshipOverviewPaths(result.paths);
+  assert.deepEqual(overview.map((path) => path.name).sort(), ["IX chain", "IX direct", "unrelated direct"]);
+  const graph = buildOverviewGraph(overview);
+  const pos = graph.positions;
+  assert.ok(pos.get("host:6")!.y < pos.get("host:1")!.y, "standalone port forwards go above the forwarding chain");
+  assert.ok(pos.get("target:198.51.100.11:443")!.y > pos.get("target:198.51.100.10:443")!.y, "shared direct landings go below forwarded destinations");
+  assert.ok(graph.edges.some((edge) => edge.from === "host:1" && edge.to === "target:198.51.100.11:443"));
+  assert.ok(graph.edges.some((edge) => edge.from === "host:2" && edge.to === "target:198.51.100.10:443"));
+});
+
+test("parallel entry, shared relays and direct convergence exits keep their real connections", () => {
+  const node = (id: string) => ({ id, label: id, kind: "relay" });
+  const paths = [
+    ...["po0-999", "po0-1288"].flatMap((entry) => ["sg", "jp"].map((exit) => ({
+      id: `${entry}-${exit}`, category: "chain", name: "shared", entry: node(entry),
+      relays: [node("qhix"), node("hk"), node(exit)], landing: node(`${exit}-landing`),
+    }))),
+    { id: "direct", category: "local", name: "direct", entry: node("qhix"), relays: [], landing: node("direct-landing") },
+  ] as any;
+  const graph = buildOverviewGraph(paths);
+  const y = (id: string) => graph.positions.get(id)!.y;
+  const center = (id: string) => y(id) + graph.positions.get(id)!.height / 2;
+  assert.ok(y("po0-999") !== y("po0-1288"));
+  assert.equal(center("qhix"), center("hk"));
+  assert.equal((center("sg") + center("jp")) / 2, center("hk"));
+  assert.ok(y("direct-landing") > y("sg-landing"));
+  assert.ok(y("direct-landing") > y("jp-landing"));
+  assert.ok(graph.edges.some((edge) => edge.from === "qhix" && edge.to === "direct-landing"));
+  assert.ok(!graph.edges.some((edge) => edge.from === "sg" && edge.to === "direct-landing"));
 });
 
 test("overview excludes draft, cancelled and not-yet-deployed full chains", () => {

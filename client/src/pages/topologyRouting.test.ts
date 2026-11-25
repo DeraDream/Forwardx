@@ -33,6 +33,12 @@ test("non-planar multi-exit and long links do not pass through cards or overlap"
   assert.match(topologyRoutePath(result.edgeRoutes.get("long")!), /^M .* L /);
 });
 
+test("empty relationship overview has finite canvas dimensions", () => {
+  const graph = routeSmoothLayeredTopologyGraph([], [], new Set());
+  assert.ok(Number.isFinite(graph.width) && Number.isFinite(graph.height));
+  assert.equal(graph.positions.size, 0);
+});
+
 test("relationship overview uses smooth curves and routes long direct exits outside relay cards", () => {
   const nodes = [
     { id: "entry", column: 0, row: 0 }, { id: "relay", column: 1, row: 0 },
@@ -44,7 +50,11 @@ test("relationship overview uses smooth curves and routes long direct exits outs
   ], new Set(["direct"]));
   assert.match(topologyRoutePath(result.edgeRoutes.get("chain-a")!), /^M .* C /);
   const direct = result.edgeRoutes.get("direct-exit")!;
-  assert.ok(direct[1].y > result.positions.get("relay")!.y + result.positions.get("relay")!.height);
+  assert.ok(direct[2].y > result.positions.get("relay")!.y + result.positions.get("relay")!.height);
+  assert.ok(result.positions.get("direct")!.y > result.positions.get("landing")!.y);
+  for (const line of segments(new Map([["direct-exit", direct]]))) {
+    assert.equal(intersectsCard(line, result.positions.get("relay")!), false, "direct exit crossed the relay");
+  }
 });
 
 test("long smooth edges use compact reusable lanes, independent of ordinary edge count", () => {

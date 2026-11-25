@@ -163,8 +163,32 @@ export function routeNaturalTopologyGraph(nodes: TopologyRoutingNode[], inputEdg
  * so they pass below the relay layer instead of through its cards.
  */
 export function routeSmoothLayeredTopologyGraph(nodes: TopologyRoutingNode[], inputEdges: TopologyRoutingEdge[], directOnly: Set<string>) {
+  if (!nodes.length) return {
+    positions: new Map<string, TopologyBox>(), edgeRoutes: new Map<string, TopologyPoint[]>(),
+    columnX: new Map<number, number>(), width: 820, height: 440, centerY: 220,
+  };
   const base = routeTopologyGraph(nodes, inputEdges, directOnly);
   const byId = new Map(nodes.map((node) => [node.id, node]));
+  // Keep all relay stages centered on the forwarded landing group.  The
+  // landing column has one continuous upper block for chain destinations and
+  // a separate lower block for direct destinations.
+  const groups = new Map<number, TopologyRoutingNode[]>();
+  for (const node of nodes) groups.set(node.column, [...(groups.get(node.column) || []), node]);
+  const landingColumn = Math.max(...groups.keys());
+  const landingNodes = (groups.get(landingColumn) || []).sort((a, b) =>
+    Number(directOnly.has(a.id)) - Number(directOnly.has(b.id)) || a.row - b.row);
+  const mainCount = landingNodes.filter((node) => !directOnly.has(node.id)).length;
+  const step = Math.max(...[...base.positions.values()].map((box) => box.height)) + 18;
+  const anchor = Math.min(...[...base.positions.values()].map((box) => box.y)) + Math.max(0, mainCount - 1) * step / 2;
+  for (const [column, group] of groups) {
+    const ordered = column === landingColumn ? landingNodes : group.sort((a, b) => a.row - b.row);
+    const mainLength = column === landingColumn ? mainCount : ordered.length;
+    const start = anchor - Math.max(0, mainLength - 1) * step / 2;
+    ordered.forEach((node, index) => {
+      const box = base.positions.get(node.id);
+      if (box) box.y = start + index * step;
+    });
+  }
   const outgoing = new Map<string, TopologyRoutingEdge[]>();
   const incoming = new Map<string, TopologyRoutingEdge[]>();
   for (const edge of inputEdges) {
@@ -178,6 +202,7 @@ export function routeSmoothLayeredTopologyGraph(nodes: TopologyRoutingNode[], in
   const bottom = Math.max(...[...base.positions.values()].map((box) => box.y + box.height));
   const top = Math.min(...[...base.positions.values()].map((box) => box.y));
   let lowestLane = bottom;
+  const directLane = Math.max(...[...base.positions].filter(([id]) => !directOnly.has(id)).map(([, box]) => box.y + box.height)) + 24;
 
   // A long edge must leave the card rows, but it must not receive a lane based
   // on its index amongst *all* edges.  That used to make a newly-expanded
@@ -227,13 +252,20 @@ export function routeSmoothLayeredTopologyGraph(nodes: TopologyRoutingNode[], in
       // Direct sinks deliberately travel below the relay rows. Other long
       // edges use compact, reusable tracks above them.
       const laneY = isDirectLanding
-        ? end.y + 16
+        ? directLane + Math.max(0, landingNodes.indexOf(byId.get(edge.to)!) - mainCount) * 12
         : top - 40 - (longLaneByEdge.get(edge.id) || 0) * 16;
       controlY1 = laneY;
       controlY2 = laneY;
       if (isDirectLanding) lowestLane = Math.max(lowestLane, laneY);
     }
-    edgeRoutes.set(edge.id, [
+    edgeRoutes.set(edge.id, isDirectLanding && spansRelayLayer ? [
+      start,
+      { x: start.x + 24, y: start.y },
+      { x: start.x + 24, y: controlY1 },
+      { x: end.x - 24, y: controlY2 },
+      { x: end.x - 24, y: end.y },
+      end,
+    ] : [
       start,
       { x: start.x + distance * 0.34, y: controlY1, curve: true },
       { x: end.x - distance * 0.34, y: controlY2, curve: true },

@@ -1,14 +1,8 @@
 name: Release Agent
 
+# Standalone rebuild only; tagged panel releases already build and upload Agent assets.
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    tags:
-      - "v*.*.*"
-    paths:
-      - "package.json"
 
 permissions:
   contents: write

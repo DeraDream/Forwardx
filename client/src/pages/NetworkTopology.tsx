@@ -540,14 +540,13 @@ export function groupTopologyListRows(paths: PhysicalPath[]) {
   return rows;
 }
 
-// This filter belongs only to the relationship overview. The per-rule link
-// view must continue to show every configured direct forward.
+// Keep direct forwards in the overview; standalone forwards occupy an upper
+// band while direct exits sharing a chain node remain attached to that chain.
 export function relationshipOverviewPaths(paths: PhysicalPath[]) {
-  const entriesWithRelayChains = new Set(paths.filter((path) => path.relays.length > 0).map((path) => path.entry.id));
-  return paths.filter((path) => path.relays.length > 0 || entriesWithRelayChains.has(path.entry.id));
+  return paths;
 }
 
-function buildGraph(paths: PhysicalPath[]) {
+export function buildGraph(paths: PhysicalPath[]) {
   const nodeMap = new Map<string, PhysicalNode>();
   const edgeMap = new Map<string, TopologyEdge>();
   const desiredDepth = new Map<string, number>();
@@ -620,14 +619,6 @@ function buildGraph(paths: PhysicalPath[]) {
       .map((node) => node.id),
   );
 
-  // 直达落地：目标只由入口直接连接，完全没有经过中转。
-  // 这类落地单独排到落地列下方，避免长连线横穿中转节点。
-  const directOnlySinkIds = new Set(
-    Array.from(sinkIds).filter((sinkId) => {
-      const parents = incoming.get(sinkId) || [];
-      return parents.length > 0 && parents.every((parentId) => rootIds.has(parentId));
-    }),
-  );
   // 角色由整张真实物理图决定：
   // 没有上游的是入口，有上下游的是中转，没有下游的是落地/最终目标。
   const classifiedNodes = rawNodes.map((node): PhysicalNode => ({
@@ -660,6 +651,16 @@ function buildGraph(paths: PhysicalPath[]) {
     .filter((node) => !sinkIds.has(node.id))
     .map((node) => depth.get(node.id) || 0);
   const maxMiddleDepth = Math.max(0, ...nonSinkDepths);
+  // A landing reached directly from the entry or first convergence node is
+  // below the forwarded-chain landings, even when that convergence node has
+  // incoming edges from multiple group members and is not itself a root.
+  const directOnlySinkIds = new Set(
+    Array.from(sinkIds).filter((sinkId) => {
+      const parents = incoming.get(sinkId) || [];
+      return parents.length > 0 && parents.every((parentId) =>
+        rootIds.has(parentId) || (maxMiddleDepth > 1 && (depth.get(parentId) || 0) === 1));
+    }),
+  );
   const landingColumn = Math.max(1, maxMiddleDepth + 1);
   for (const node of classifiedNodes) {
     if (sinkIds.has(node.id) && !rootIds.has(node.id)) depth.set(node.id, landingColumn);
@@ -685,6 +686,29 @@ function buildGraph(paths: PhysicalPath[]) {
   // cards so a dense connection bends rather than crossing a node.
   const routed = routeSmoothLayeredTopologyGraph(positionedNodes, edges, directOnlySinkIds);
   return { nodes: positionedNodes, edges, ...routed };
+}
+
+export function buildOverviewGraph(paths: PhysicalPath[]) {
+  const chainPaths = paths.filter((path) => path.relays.length > 0);
+  const chainNodeIds = new Set(chainPaths.flatMap((path) =>
+    [path.entry, ...path.relays, path.landing].map((node) => node.id)));
+  const standalone = paths.filter((path) => path.relays.length === 0
+    && ![path.entry.id, path.landing.id].some((id) => chainNodeIds.has(id)));
+  const connected = paths.filter((path) => !standalone.includes(path));
+  if (!standalone.length) return buildGraph(connected);
+  if (!connected.length) return buildGraph(standalone);
+  const direct = buildGraph(standalone);
+  const chain = buildGraph(connected);
+  const offset = direct.height + 64;
+  return {
+    ...chain,
+    nodes: [...direct.nodes, ...chain.nodes],
+    edges: [...direct.edges, ...chain.edges],
+    positions: new Map([...direct.positions, ...[...chain.positions].map(([id, box]) => [id, { ...box, y: box.y + offset }] as const)]),
+    edgeRoutes: new Map([...direct.edgeRoutes, ...[...chain.edgeRoutes].map(([id, points]) => [id, points.map((point) => ({ ...point, y: point.y + offset }))] as const)]),
+    width: Math.max(direct.width, chain.width),
+    height: offset + chain.height,
+  };
 }
 
 function fallbackNodeIcon(kind: PhysicalNodeKind) {
@@ -1392,7 +1416,7 @@ function NetworkTopologyContent() {
   // Only the list collapses entry variants; the canvas retains physical edges.
   const listRows = useMemo(() => groupTopologyListRows(visiblePaths), [visiblePaths]);
   const overviewPaths = useMemo(() => relationshipOverviewPaths(visiblePaths), [visiblePaths]);
-  const graph = useMemo(() => buildGraph(overviewPaths), [overviewPaths]);
+  const graph = useMemo(() => buildOverviewGraph(overviewPaths), [overviewPaths]);
   const topologyAgentPairs = useMemo(() => graph.edges.flatMap((edge) => {
     const sourceHostId = Number(edge.from.replace(/^host:/, ""));
     const targetHostId = Number(edge.to.replace(/^host:/, ""));
@@ -1977,7 +2001,7 @@ function NetworkTopologyContent() {
             />;
           })}
         </div>}
-        {layoutMode !== "list" && <section className="overflow-hidden rounded-xl border border-border/60 bg-card/80 shadow-sm backdrop-blur-md"> <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-border/40 px-4 py-3"><div className="flex flex-wrap items-center gap-4"><h2 className="text-sm font-bold text-foreground">链路拓扑</h2><div className="flex gap-3.5 text-xs text-muted-foreground"><span><i className="mr-1.5 inline-block h-2 w-2 rounded-full bg-chart-3" />入口节点</span><span><i className="mr-1.5 inline-block h-2 w-2 rounded-full bg-chart-2" />中转节点</span><span><i className="mr-1.5 inline-block h-2 w-2 rounded-full bg-chart-4" />落地节点</span></div></div><div className="flex items-center gap-1.5"><button onClick={() => setZoom(1)} className="rounded-lg border border-slate-200 p-1.5 text-slate-500"><Scan className="h-3.5 w-3.5" /></button><button onClick={() => setZoom(z => Math.max(.2, z - .1))} className="rounded-l-lg border border-slate-200 px-2 py-1">−</button><span className="border-y border-slate-200 px-2 py-1 font-mono text-[11px]">{Math.round(zoom * 100)}%</span><button onClick={() => setZoom(z => Math.min(1.5, z + .1))} className="rounded-r-lg border border-slate-200 px-2 py-1">+</button></div></div><div ref={canvasRef} className="topo-grid-bg relative h-[340px] min-h-[280px] max-h-[48vh] touch-auto overflow-auto overscroll-contain p-2 md:h-auto md:max-h-none md:min-h-[430px]"><div style={{ width: graph.width * zoom, height: graph.height * zoom, margin: "auto" }}><div className="relative origin-top-left" style={{ width: graph.width, height: graph.height, transform: `scale(${zoom})` }}><svg className="absolute inset-0 h-full w-full" width={graph.width} height={graph.height}><defs><marker id="topology-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 8 4 L 0 8 z" fill="var(--primary)" fillOpacity=".48" /></marker><marker id="topology-arrow-active" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 8 4 L 0 8 z" fill="var(--primary)" /></marker><marker id="topology-arrow-blocked" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 8 4 L 0 8 z" fill="var(--destructive)" /></marker><marker id="topology-arrow-offline" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 8 4 L 0 8 z" fill="var(--muted-foreground)" /></marker></defs>{graph.edges.map(edge => { const points = graph.edgeRoutes.get(edge.id); if (!points) return null; const active = highlightedEdges.has(edge.id) || selectedEdgeId === edge.id; const edgePaths = visiblePaths.filter((path) => topologyPathEdgeIds([path.entry, ...path.relays, path.landing].map((node) => node.id)).includes(edge.id)); const latencyLabel = physicalEdgeMeasurementLabel(edge, edgePaths); const blocked = latencyLabel === "阻断"; const offline = latencyLabel === "离线"; const blockedIncident = blocked ? edgePaths.map((path) => blockIncidentForSegment(automaticEdgeMeasurement(edge, path))).find(Boolean) || null : null; const labelPoint = points.length === 4 ? { x: (points[0].x + 3 * points[1].x + 3 * points[2].x + points[3].x) / 8, y: (points[0].y + 3 * points[1].y + 3 * points[2].y + points[3].y) / 8 } : { x: (points[0].x + points.at(-1)!.x) / 2, y: (points[0].y + points.at(-1)!.y) / 2 }; const labelX = labelPoint.x; const labelY = labelPoint.y - 8; const labelWidth = Math.max(38, latencyLabel.length * 6 + 14); return <g key={edge.id}><path d={topologyRoutePath(points)} fill="none" stroke="transparent" strokeWidth="12" style={{ cursor: "pointer", pointerEvents: "stroke" }} onMouseEnter={(event) => showBlockTooltip(event.currentTarget, blockedIncident)} onMouseLeave={hideBlockTooltip} onClick={(event) => selectGraphEdge(edge, false, graphPopupAnchor(event, { x: labelX, y: labelY }))} /><path d={topologyRoutePath(points)} fill="none" stroke={offline ? "var(--muted-foreground)" : blocked ? "var(--destructive)" : "var(--primary)"} strokeOpacity={offline || blocked || active ? 1 : .48} strokeWidth={blocked || active ? 2.4 : 1.5} strokeDasharray={offline ? "4 5" : undefined} style={{ pointerEvents: "none" }} markerEnd={`url(#${offline ? "topology-arrow-offline" : blocked ? "topology-arrow-blocked" : active ? "topology-arrow-active" : "topology-arrow"})`} className={active && !offline ? "edge-flow-active" : ""} /><rect x={labelX - labelWidth / 2} y={labelY - 11} width={labelWidth} height="20" rx="6" fill="var(--card)" fillOpacity=".96" stroke={offline ? "var(--muted-foreground)" : blocked ? "var(--destructive)" : active ? "var(--primary)" : "var(--border)"} strokeOpacity={active ? .45 : 1} style={{ cursor: "pointer" }} onMouseEnter={(event) => showBlockTooltip(event.currentTarget, blockedIncident)} onMouseLeave={hideBlockTooltip} onClick={(event) => { event.stopPropagation(); selectGraphEdge(edge, true, graphPopupAnchor(event, { x: labelX, y: labelY })); }}>{!blockedIncident && <title>点击立即重测此逻辑链路</title>}</rect><text pointerEvents="none" x={labelX} y={labelY + 3} textAnchor="middle" fontSize="10" fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace" fontWeight={offline || blocked || active ? "600" : "500"} fill={offline ? "var(--muted-foreground)" : blocked ? "var(--destructive)" : active ? "var(--primary)" : "var(--muted-foreground)"}>{latencyLabel}</text></g>; })}</svg>{graph.nodes.map(node => { const pos = graph.positions.get(node.id); if (!pos) return null; const role = node.kind; const active = highlightedNodes.has(node.id) || selectedNodeId === node.id; return <button key={node.id} onClick={() => { setSelectedNodeId(node.id); setSelectedPathId(null); setSelectedEdgeId(null); }} style={{ left: pos.x, top: pos.y, width: pos.width, height: pos.height }} className={cn("absolute flex items-center gap-2.5 overflow-hidden rounded-[10px] border px-3 py-2 text-left shadow-sm", role === "entry" ? "border-chart-3/30 bg-chart-3/10" : role === "relay" ? "border-chart-2/30 bg-chart-2/10" : "border-chart-4/30 bg-chart-4/10", active && "ring-2 ring-primary/30")}><span className="flex h-[18px] w-6 shrink-0 items-center justify-center">{nodeIcon(node)}</span><span className="min-w-0"><span className="flex items-center gap-1 text-xs font-bold text-foreground"><span className="truncate">{node.label}</span><i className={cn("ml-auto h-2 w-2 rounded-full", node.online === false ? "bg-destructive" : node.online === true ? "bg-chart-2" : "bg-muted-foreground/40")} /></span><span className="mt-0.5 block truncate font-mono text-[11px] text-muted-foreground">{node.subtitle || node.detail || "—"}</span></span>{node.online === false && <span className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-slate-900/55 text-xs font-bold tracking-wide text-white backdrop-blur-[1px]"><span className="rounded-md border border-white/30 bg-red-600/90 px-2.5 py-1 shadow-sm">节点离线</span></span>}</button>; })}</div></div></div></section>}
+        {layoutMode !== "list" && <section className="overflow-hidden rounded-xl border border-border/60 bg-card/80 shadow-sm backdrop-blur-md"> <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-border/40 px-4 py-3"><div className="flex flex-wrap items-center gap-4"><h2 className="text-sm font-bold text-foreground">链路拓扑</h2><div className="flex gap-3.5 text-xs text-muted-foreground"><span><i className="mr-1.5 inline-block h-2 w-2 rounded-full bg-chart-3" />入口节点</span><span><i className="mr-1.5 inline-block h-2 w-2 rounded-full bg-chart-2" />中转节点</span><span><i className="mr-1.5 inline-block h-2 w-2 rounded-full bg-chart-4" />落地节点</span></div></div><div className="flex items-center gap-1.5"><button onClick={() => setZoom(1)} className="rounded-lg border border-slate-200 p-1.5 text-slate-500"><Scan className="h-3.5 w-3.5" /></button><button onClick={() => setZoom(z => Math.max(.2, z - .1))} className="rounded-l-lg border border-slate-200 px-2 py-1">−</button><span className="border-y border-slate-200 px-2 py-1 font-mono text-[11px]">{Math.round(zoom * 100)}%</span><button onClick={() => setZoom(z => Math.min(1.5, z + .1))} className="rounded-r-lg border border-slate-200 px-2 py-1">+</button></div></div><div ref={canvasRef} className="topo-grid-bg relative h-[340px] min-h-[280px] max-h-[48vh] touch-auto overflow-auto overscroll-contain p-2 md:h-auto md:max-h-none md:min-h-[430px]"><div style={{ width: graph.width * zoom, height: graph.height * zoom, margin: "auto" }}><div className="relative origin-top-left" style={{ width: graph.width, height: graph.height, transform: `scale(${zoom})` }}><svg className="absolute inset-0 h-full w-full" width={graph.width} height={graph.height}><defs><marker id="topology-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 8 4 L 0 8 z" fill="var(--primary)" fillOpacity=".48" /></marker><marker id="topology-arrow-active" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 8 4 L 0 8 z" fill="var(--primary)" /></marker><marker id="topology-arrow-blocked" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 8 4 L 0 8 z" fill="var(--destructive)" /></marker><marker id="topology-arrow-offline" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 8 4 L 0 8 z" fill="var(--muted-foreground)" /></marker></defs>{graph.edges.map(edge => { const points = graph.edgeRoutes.get(edge.id); if (!points) return null; const active = highlightedEdges.has(edge.id) || selectedEdgeId === edge.id; const edgePaths = visiblePaths.filter((path) => topologyPathEdgeIds([path.entry, ...path.relays, path.landing].map((node) => node.id)).includes(edge.id)); const latencyLabel = physicalEdgeMeasurementLabel(edge, edgePaths); const blocked = latencyLabel === "阻断"; const offline = latencyLabel === "离线"; const blockedIncident = blocked ? edgePaths.map((path) => blockIncidentForSegment(automaticEdgeMeasurement(edge, path))).find(Boolean) || null : null; const labelPoint = points.length === 4 ? { x: (points[0].x + 3 * points[1].x + 3 * points[2].x + points[3].x) / 8, y: (points[0].y + 3 * points[1].y + 3 * points[2].y + points[3].y) / 8 } : points.length === 6 ? { x: (points[2].x + points[3].x) / 2, y: points[2].y } : { x: (points[0].x + points.at(-1)!.x) / 2, y: (points[0].y + points.at(-1)!.y) / 2 }; const labelX = labelPoint.x; const labelY = labelPoint.y - 8; const labelWidth = Math.max(38, latencyLabel.length * 6 + 14); return <g key={edge.id}><path d={topologyRoutePath(points)} fill="none" stroke="transparent" strokeWidth="12" style={{ cursor: "pointer", pointerEvents: "stroke" }} onMouseEnter={(event) => showBlockTooltip(event.currentTarget, blockedIncident)} onMouseLeave={hideBlockTooltip} onClick={(event) => selectGraphEdge(edge, false, graphPopupAnchor(event, { x: labelX, y: labelY }))} /><path d={topologyRoutePath(points)} fill="none" stroke={offline ? "var(--muted-foreground)" : blocked ? "var(--destructive)" : "var(--primary)"} strokeOpacity={offline || blocked || active ? 1 : .48} strokeWidth={blocked || active ? 2.4 : 1.5} strokeDasharray={offline ? "4 5" : undefined} style={{ pointerEvents: "none" }} markerEnd={`url(#${offline ? "topology-arrow-offline" : blocked ? "topology-arrow-blocked" : active ? "topology-arrow-active" : "topology-arrow"})`} className={active && !offline ? "edge-flow-active" : ""} /><rect x={labelX - labelWidth / 2} y={labelY - 11} width={labelWidth} height="20" rx="6" fill="var(--card)" fillOpacity=".96" stroke={offline ? "var(--muted-foreground)" : blocked ? "var(--destructive)" : active ? "var(--primary)" : "var(--border)"} strokeOpacity={active ? .45 : 1} style={{ cursor: "pointer" }} onMouseEnter={(event) => showBlockTooltip(event.currentTarget, blockedIncident)} onMouseLeave={hideBlockTooltip} onClick={(event) => { event.stopPropagation(); selectGraphEdge(edge, true, graphPopupAnchor(event, { x: labelX, y: labelY })); }}>{!blockedIncident && <title>点击立即重测此逻辑链路</title>}</rect><text pointerEvents="none" x={labelX} y={labelY + 3} textAnchor="middle" fontSize="10" fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace" fontWeight={offline || blocked || active ? "600" : "500"} fill={offline ? "var(--muted-foreground)" : blocked ? "var(--destructive)" : active ? "var(--primary)" : "var(--muted-foreground)"}>{latencyLabel}</text></g>; })}</svg>{graph.nodes.map(node => { const pos = graph.positions.get(node.id); if (!pos) return null; const role = node.kind; const active = highlightedNodes.has(node.id) || selectedNodeId === node.id; return <button key={node.id} onClick={() => { setSelectedNodeId(node.id); setSelectedPathId(null); setSelectedEdgeId(null); }} style={{ left: pos.x, top: pos.y, width: pos.width, height: pos.height }} className={cn("absolute flex items-center gap-2.5 overflow-hidden rounded-[10px] border px-3 py-2 text-left shadow-sm", role === "entry" ? "border-chart-3/30 bg-chart-3/10" : role === "relay" ? "border-chart-2/30 bg-chart-2/10" : "border-chart-4/30 bg-chart-4/10", active && "ring-2 ring-primary/30")}><span className="flex h-[18px] w-6 shrink-0 items-center justify-center">{nodeIcon(node)}</span><span className="min-w-0"><span className="flex items-center gap-1 text-xs font-bold text-foreground"><span className="truncate">{node.label}</span><i className={cn("ml-auto h-2 w-2 rounded-full", node.online === false ? "bg-destructive" : node.online === true ? "bg-chart-2" : "bg-muted-foreground/40")} /></span><span className="mt-0.5 block truncate font-mono text-[11px] text-muted-foreground">{node.subtitle || node.detail || "—"}</span></span>{node.online === false && <span className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-slate-900/55 text-xs font-bold tracking-wide text-white backdrop-blur-[1px]"><span className="rounded-md border border-white/30 bg-red-600/90 px-2.5 py-1 shadow-sm">节点离线</span></span>}</button>; })}</div></div></div></section>}
       </>}
       {layoutMode !== "list" && selectedPath && <section className="overflow-hidden rounded-xl border border-border/60 bg-card/80 shadow-sm backdrop-blur-md">
         <div className="flex items-center justify-between border-b border-border/40 px-5 py-3.5"><h3 className="text-sm font-bold text-foreground">链路详情: <span>{selectedPath.name}</span></h3><span className={cn("inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium", selectedPathMetrics?.latestLatencyIsTimeout ? "border-red-200 bg-red-50 text-red-600" : "border-emerald-200 bg-emerald-50 text-emerald-600")}><i className={cn("h-1.5 w-1.5 rounded-full", selectedPathMetrics?.latestLatencyIsTimeout ? "bg-red-500" : "bg-emerald-500")} />{selectedPathMetrics?.latestLatencyIsTimeout ? "超时" : "运行中"}</span></div>

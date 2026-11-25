@@ -930,14 +930,24 @@ export function LinkTestProbeView({
       {isConvergedEntryView && convergedEntryView ? (
         <>
           <div className="mb-2 text-xs font-semibold text-slate-500">入口分支</div>
-          {convergedEntryView.entrySegments.map((segment, index) => (
-            <div key={`entry-${segment.fromHostId || segment.from}-${index}`} className="mb-3 rounded-lg border border-slate-200/80 p-2">
-              {renderTimelineNode(segment.from, segment.fromMeta, "entry", `entry-from-${index}`)}
-              {renderTimelineConnector(segment, `entry-connector-${index}`)}
-              <div className="text-center text-[11px] text-slate-500">汇入 {convergedEntryView.convergenceLabel}</div>
+          <div className="overflow-x-auto pb-1">
+            <div style={{ minWidth: Math.max(0, convergedEntryView.entrySegments.length * 175) }}>
+              <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${convergedEntryView.entrySegments.length}, minmax(0, 1fr))` }}>
+                {convergedEntryView.entrySegments.map((segment, index) => (
+                  <div key={`entry-${segment.fromHostId || segment.from}-${index}`} className="min-w-0 rounded-lg border border-slate-200/80 p-2">
+                    {renderTimelineNode(segment.from, segment.fromMeta, "entry", `entry-from-${index}`)}
+                    {renderTimelineConnector(segment, `entry-connector-${index}`)}
+                  </div>
+                ))}
+              </div>
+              <svg viewBox="0 0 1000 56" preserveAspectRatio="none" className="h-14 w-full" aria-label={`各入口分别汇入 ${convergedEntryView.convergenceLabel}`}>
+                {convergedEntryView.entrySegments.map((segment, index) => {
+                  const state = getSegmentState(segment);
+                  return <path key={`merge-${index}`} d={`M ${(index + .5) * 1000 / convergedEntryView.entrySegments.length} 0 L 500 55`} fill="none" stroke={state.ok ? "#34d399" : state.testing ? "#3b82f6" : state.idle ? "#fbbf24" : "#f87171"} strokeWidth="2" vectorEffect="non-scaling-stroke" />;
+                })}
+              </svg>
             </div>
-          ))}
-          <div className="my-3 border-t border-dashed border-slate-200" />
+          </div>
           {renderTimelineNode(convergedEntryView.convergenceLabel, convergedEntryView.convergenceMeta, convergedEntryView.restSegments.length ? "relay" : "landing", "converged-node")}
           {convergedEntryView.restSegments.map((segment, index) => (
             <div key={`shared-${segment.from}-${segment.to}-${index}`}>

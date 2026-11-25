@@ -3,14 +3,8 @@ name: Release Panel
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
     tags:
       - "v*.*.*"
-    paths:
-      - "package.json"
-      - "pnpm-lock.yaml"
-      - ".github/workflows/release-panel.yml"
 
 permissions:
   contents: write
@@ -158,3 +152,19 @@ jobs:
             attempt=$((attempt + 1))
             delay=$((delay * 2))
           done
+
+          # Reuse the Agent binaries already built for the panel bundle.
+          agent_files=(
+            dist/agent/forwardx-agent-linux-amd64
+            dist/agent/forwardx-agent-linux-arm64
+            dist/agent/forwardx-fxp-linux-amd64
+            dist/agent/forwardx-fxp-linux-arm64
+            dist/agent/forwardx-runtime-linux-amd64
+            dist/agent/forwardx-runtime-linux-arm64
+            dist/agent/SHA256SUMS
+            dist/agent/THIRD_PARTY_NOTICES.md
+          )
+          for file in "${agent_files[@]}"; do
+            test -f "$file" || { echo "Missing Agent release artifact: $file" >&2; exit 1; }
+          done
+          gh release upload "$RELEASE_VERSION" "${agent_files[@]}" --clobber
