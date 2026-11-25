@@ -927,7 +927,26 @@ export function LinkTestProbeView({
   };
   const renderVerticalTimeline = () => (
     <div className="mx-auto w-full max-w-[38rem] px-1 py-2 sm:px-3">
-      {segments.map((segment, index) => {
+      {isConvergedEntryView && convergedEntryView ? (
+        <>
+          <div className="mb-2 text-xs font-semibold text-slate-500">入口分支</div>
+          {convergedEntryView.entrySegments.map((segment, index) => (
+            <div key={`entry-${segment.fromHostId || segment.from}-${index}`} className="mb-3 rounded-lg border border-slate-200/80 p-2">
+              {renderTimelineNode(segment.from, segment.fromMeta, "entry", `entry-from-${index}`)}
+              {renderTimelineConnector(segment, `entry-connector-${index}`)}
+              <div className="text-center text-[11px] text-slate-500">汇入 {convergedEntryView.convergenceLabel}</div>
+            </div>
+          ))}
+          <div className="my-3 border-t border-dashed border-slate-200" />
+          {renderTimelineNode(convergedEntryView.convergenceLabel, convergedEntryView.convergenceMeta, convergedEntryView.restSegments.length ? "relay" : "landing", "converged-node")}
+          {convergedEntryView.restSegments.map((segment, index) => (
+            <div key={`shared-${segment.from}-${segment.to}-${index}`}>
+              {renderTimelineConnector(segment, `shared-connector-${index}`)}
+              {renderTimelineNode(segment.to, segment.toMeta, index === convergedEntryView.restSegments.length - 1 ? "landing" : "relay", `shared-to-${index}`)}
+            </div>
+          ))}
+        </>
+      ) : segments.map((segment, index) => {
         const previous = segments[index - 1];
         const next = segments[index + 1];
         const sectionLabel = timelineSectionLabel(segment);
@@ -958,8 +977,19 @@ export function LinkTestProbeView({
       ) : !hasResult ? (
         <div className="rounded-xl border border-dashed border-border/70 px-3 py-6 text-center text-sm text-muted-foreground">尚未运行探测</div>
       ) : null}
+      {isConvergedEntryView && convergedEntryView && !effectiveTesting ? (
+        <div className="space-y-1 border-t border-border/70 pt-2 text-xs">
+          {convergedEntryView.entrySegments.map((entry, index) => {
+            const shared = convergedEntryView.restSegments;
+            const complete = entry.success && shared.every((segment) => segment.success)
+              && [entry, ...shared].every((segment) => hasUsableLatencyValue(segment.latencyMs));
+            const latency = complete ? [entry, ...shared].reduce((sum, segment) => sum + Number(segment.latencyMs), 0) : null;
+            return <div key={`entry-total-${entry.fromHostId || entry.from}-${index}`} className="flex justify-between gap-2"><span>{entry.from} 路径</span><span>{latency === null ? "不可用或待探测" : formatLatencyMs(latency)}</span></div>;
+          })}
+        </div>
+      ) : null}
       <div className="flex items-center justify-between border-t border-border/70 pt-3 text-sm">
-        <span className="text-muted-foreground">{isBranchView ? "最大延迟" : "合计"}</span>
+        <span className="text-muted-foreground">{isBranchView ? "最大延迟" : isConvergedEntryView ? "最长入口路径" : "合计"}</span>
         <span className={cn("font-semibold tabular-nums", totalLatency !== null ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground")}>
           {effectiveTesting ? "探测中" : !hasResult ? "等待探测" : parsed.tunnelProbeTimedOut && totalLatency === null ? "超时" : formatLatencyMs(totalLatency)}
         </span>

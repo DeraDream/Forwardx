@@ -91,8 +91,8 @@ export function summarizePhysicalTopologySegmentLabels(
 
 export function summarizeTopologySegmentLabels(labels: string[]) {
   if (labels.some((label) => label === "离线" || label === "源节点离线")) return { pending: false, timeout: true, blocked: true, offline: true, latencyMs: null };
-  if (labels.some((label) => label === "探测中" || label === "检测中")) return { pending: true, timeout: false, blocked: false, offline: false, latencyMs: null };
   if (labels.some((label) => label === "阻断")) return { pending: false, timeout: true, blocked: true, offline: false, latencyMs: null };
+  if (labels.some((label) => label === "探测中" || label === "检测中" || label === "加载中")) return { pending: true, timeout: false, blocked: false, offline: false, latencyMs: null };
   if (labels.some((label) => label === "超时")) return { pending: false, timeout: true, blocked: false, offline: false, latencyMs: null };
   const values = labels.map((label) => Number.parseFloat(label));
   return values.length > 0 && values.every(Number.isFinite)

@@ -19,6 +19,14 @@ const probe = (testId: number, status: string, requestedAt: number, latencyMs: n
   requestedAt,
 });
 
+test("loading and probing are not failures, but a confirmed blocked hop takes precedence", () => {
+  assert.equal(summarizeTopologySegmentLabels(["加载中"]).pending, true);
+  assert.equal(summarizeTopologySegmentLabels(["探测中"]).timeout, false);
+  assert.deepEqual(summarizeTopologySegmentLabels(["阻断", "探测中"]), {
+    pending: false, timeout: true, blocked: true, offline: false, latencyMs: null,
+  });
+});
+
 test("segment probe identity is isolated by complete logical path", () => {
   assert.notEqual(
     topologySegmentProbeKey("rule:7:0", "host:1=>host:2"),

@@ -551,6 +551,38 @@ test("vertical probe timeline renders flags without icon pills and shows offline
   assert.doesNotMatch(html, /bg-amber-100|bg-blue-100|bg-emerald-100/);
 });
 
+test("multi-entry chain converges once and shows independent entry totals", () => {
+  const parsed = parseLinkTestMessage(JSON.stringify({ kind: "forward-chain-hop-summary", totalLatencyMs: 41, details: [
+    { success: true, latencyMs: 6, routeLabel: "Po0-999 -> A", fromHostId: 13, toHostId: 1 },
+    { success: true, latencyMs: 5, routeLabel: "Po0-1288 -> A", fromHostId: 14, toHostId: 1 },
+    { success: true, latencyMs: 2, routeLabel: "A -> HK", fromHostId: 1, toHostId: 2 },
+    { success: true, latencyMs: 33, routeLabel: "HK -> SG", fromHostId: 2, toHostId: 3 },
+  ] }));
+  const html = renderToStaticMarkup(<LinkTestProbeView parsed={parsed} isSuccess isTesting={false} />);
+  assert.equal(html.match(/入口节点/g)?.length, 2);
+  assert.equal(html.match(/中转节点/g)?.length, 2);
+  assert.equal(html.match(/落地节点/g)?.length, 1);
+  assert.match(html, /Po0-999 路径/);
+  assert.match(html, /Po0-1288 路径/);
+  assert.match(html, /41 ms/);
+  assert.match(html, /40 ms/);
+});
+
+test("rule chain convergence keeps one terminal landing for three entrances", () => {
+  const parsed = parseLinkTestMessage(JSON.stringify({ kind: "forward-chain-hop-summary", details: [
+    ...["Po0-999", "Po0-1288", "Po0-third"].map((name, index) => ({ success: true, latencyMs: index + 3, routeLabel: `${name} -> A` })),
+    { success: true, latencyMs: 20, routeLabel: "A -> SG" },
+    { success: true, latencyMs: 4, routeLabel: "SG -> Onidel-SG" },
+  ] }));
+  const html = renderToStaticMarkup(<LinkTestProbeView parsed={parsed} isSuccess isTesting={false} />);
+  assert.equal(html.match(/入口节点/g)?.length, 3);
+  assert.equal(html.match(/落地节点/g)?.length, 1);
+  assert.match(html, /Po0-third 路径/);
+  assert.match(html, /27 ms/);
+  assert.match(html, /28 ms/);
+  assert.match(html, /29 ms/);
+});
+
 test("parses the actual upstream TCP target for topology edge matching", () => {
   const parsed = parseLinkTestMessage(JSON.stringify({ details: [{
     success: true, latencyMs: 42, fromHostId: 2, targetIp: "frontier.lazycat.cv", targetPort: 37360,

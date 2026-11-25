@@ -1362,7 +1362,7 @@ function HostsContent() {
   const hostListRefreshInterval = visiblePollingInterval("slow", pageVisible);
   const hostPageQuery = trpc.hosts.listPage.useQuery({
     page: hostPageRequest.page,
-    pageSize: 12,
+    pageSize: 16,
     search: hostSearchQuery,
     groupId: selectedHostGroupId === "all" ? null : Number(selectedHostGroupId),
   }, {
@@ -2033,7 +2033,7 @@ function HostsContent() {
     bulkUpgradeCandidateQuery.data?.offlineItems ?? hostPageQuery.data?.offlineUpgradeableItems ?? 0,
   );
   const hostPagination = useServerPagination<any>(usesFullHostDisplay ? [] : filteredDisplayHosts, Number(hostPageQuery.data?.totalItems || 0), hostPageRequest, {
-    pageSize: 12,
+    pageSize: 16,
     isReady: !hostPageQuery.isLoading && !!hostPageQuery.data,
   });
   const pagedHosts = hostPagination.items;

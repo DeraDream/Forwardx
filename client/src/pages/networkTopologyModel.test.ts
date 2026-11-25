@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { buildPhysicalPaths, relationshipOverviewPaths } from "./NetworkTopology";
+import { buildPhysicalPaths, groupTopologyListRows, relationshipOverviewPaths } from "./NetworkTopology";
 
 const hosts = [1,2,3,4,5,6].map((id) => ({ id, name: `host-${id}`, ip: `192.0.2.${id}`, isOnline: true }));
 const tunnel = { id: 100, mode: "tls", hopHostIds: [2,3], loadBalanceEnabled: true, loadBalanceStrategy: "round_robin", loadBalanceExits: [{ hostId: 4, isEnabled: true }] };
@@ -31,6 +31,20 @@ test("nested target rules retain every segment rule ID", () => {
   const groups = [{ id: 20, groupMode: "chain", members: [{memberType:"host",hostId:2,isEnabled:true},{memberType:"host",hostId:3,isEnabled:true}] }];
   const result = buildPhysicalPaths(rules, hosts, [], groups, [], [], "all", "");
   assert.deepEqual(result.paths.find((path) => path.ruleId === 1)?.segmentRuleIds, [1, 2]);
+});
+
+test("multi-entry chain remains separate graph paths but one list row", () => {
+  const rules = [{ id: 99, name: "shared chain", hostId: 1, forwardGroupId: 20, targetIp: "198.51.100.10", targetPort: 443 }];
+  const groups = [
+    { id: 10, groupMode: "entry", members: [{ memberType: "host", hostId: 1, isEnabled: true }, { memberType: "host", hostId: 6, isEnabled: true }] },
+    { id: 20, groupMode: "chain", entryGroupId: 10, members: [{ memberType: "host", hostId: 2, isEnabled: true }, { memberType: "host", hostId: 3, isEnabled: true }] },
+  ];
+  const result = buildPhysicalPaths(rules, hosts, [], groups, [], [], "all", "");
+  assert.equal(result.paths.length, 2);
+  const rows = groupTopologyListRows(result.paths);
+  assert.equal(rows.length, 1);
+  assert.deepEqual(rows[0].entrances.map((path) => path.entry.id), ["host:1", "host:6"]);
+  assert.deepEqual(rows[0].path.relays.map((node) => node.id), ["host:2", "host:3"]);
 });
 
 test("relationship overview keeps an entry's direct landing but omits standalone direct forwards", () => {
