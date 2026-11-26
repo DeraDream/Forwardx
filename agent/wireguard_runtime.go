@@ -354,6 +354,16 @@ func newWireGuardRuntime(spec wireGuardSpec) (*wireGuardRuntime, error) {
 	if err != nil {
 		return nil, err
 	}
+	// wireguard-go logs a bind failure but Device.Up may still return nil.
+	// Reject a port already owned by another process before reporting the
+	// runtime as started (and allow identity replacement to roll back).
+	if normalized.ListenPort > 0 {
+		probe, probeErr := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: normalized.ListenPort})
+		if probeErr != nil {
+			return nil, fmt.Errorf("wireguard listen port %d unavailable: %w", normalized.ListenPort, probeErr)
+		}
+		probe.Close()
+	}
 	address := netip.MustParseAddr(normalized.Address)
 	tunDevice, tnet, err := netstack.CreateNetTUN([]netip.Addr{address}, nil, normalized.MTU)
 	if err != nil {
