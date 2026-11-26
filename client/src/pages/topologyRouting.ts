@@ -7,7 +7,7 @@ export type TopologyBox = { x: number; y: number; width: number; height: number 
  * Orthogonal router retained for dense/minimap tests and fallback layouts.
  * Every edge gets a separate channel, so no segment enters a VPS card.
  */
-export function routeTopologyGraph(nodes: TopologyRoutingNode[], inputEdges: TopologyRoutingEdge[], directOnly: Set<string>) {
+export function routeTopologyGraph(nodes: TopologyRoutingNode[], inputEdges: TopologyRoutingEdge[], directOnly: Set<string>, cardSize?: { width: number; height: number }) {
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const edges = inputEdges.filter((edge) => edge.from !== edge.to && byId.has(edge.from) && byId.has(edge.to))
     .slice().sort((a, b) => a.id.localeCompare(b.id));
@@ -25,7 +25,7 @@ export function routeTopologyGraph(nodes: TopologyRoutingNode[], inputEdges: Top
   const maxDegree = Math.max(1, ...nodes.map((node) => Math.max(outgoing.get(node.id)?.length || 0, incoming.get(node.id)?.length || 0)));
   // Keep the relationship canvas dense enough for the dashboard while retaining
   // sufficient routing room around cards and arrow labels.
-  const nodeWidth = 176, nodeHeight = Math.max(56, (maxDegree + 1) * 8), laneStep = 8;
+  const nodeWidth = cardSize?.width ?? 176, nodeHeight = Math.max(cardSize?.height ?? 56, (maxDegree + 1) * 8), laneStep = 8;
   const gapWidth = (column: number) => Math.max(50, 30 + ((sourceByGap.get(column)?.length || 0) + (targetByGap.get(column)?.length || 0)) * laneStep);
   const columnX = new Map<number, number>();
   columnX.set(0, 32 + gapWidth(-1));
@@ -162,12 +162,12 @@ export function routeNaturalTopologyGraph(nodes: TopologyRoutingNode[], inputEdg
  * right-angle circuit. Long direct-to-landing edges reserve an outside lane,
  * so they pass below the relay layer instead of through its cards.
  */
-export function routeSmoothLayeredTopologyGraph(nodes: TopologyRoutingNode[], inputEdges: TopologyRoutingEdge[], directOnly: Set<string>) {
+export function routeSmoothLayeredTopologyGraph(nodes: TopologyRoutingNode[], inputEdges: TopologyRoutingEdge[], directOnly: Set<string>, cardSize?: { width: number; height: number }) {
   if (!nodes.length) return {
     positions: new Map<string, TopologyBox>(), edgeRoutes: new Map<string, TopologyPoint[]>(),
     columnX: new Map<number, number>(), width: 820, height: 440, centerY: 220,
   };
-  const base = routeTopologyGraph(nodes, inputEdges, directOnly);
+  const base = routeTopologyGraph(nodes, inputEdges, directOnly, cardSize);
   const byId = new Map(nodes.map((node) => [node.id, node]));
   // Give an early direct exit enough room to fan out below the relay row,
   // rather than dropping two parallel lines vertically beside the source.

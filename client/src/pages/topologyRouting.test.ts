@@ -33,6 +33,30 @@ test("non-planar multi-exit and long links do not pass through cards or overlap"
   assert.match(topologyRoutePath(result.edgeRoutes.get("long")!), /^M .* L /);
 });
 
+test("node density dimensions are reflected in routed card boxes and canvas", () => {
+  const nodes = [
+    { id: "entry", column: 0, row: 0 }, { id: "relay", column: 1, row: 0 },
+    { id: "landing", column: 2, row: 0 }, { id: "direct", column: 2, row: 1 },
+  ];
+  const edges = [
+    { id: "a", from: "entry", to: "relay" }, { id: "b", from: "relay", to: "landing" },
+    { id: "c", from: "entry", to: "direct" },
+  ];
+  for (const size of [{ width: 196, height: 82 }, { width: 218, height: 110 }, { width: 244, height: 146 }]) {
+    const graph = routeSmoothLayeredTopologyGraph(nodes, edges, new Set(["direct"]), size);
+    assert.equal(graph.positions.get("relay")?.width, size.width);
+    assert.equal(graph.positions.get("relay")?.height, size.height);
+    for (const [id, box] of graph.positions) {
+      assert.ok(box.x >= 0 && box.y >= 0 && box.x + box.width <= graph.width && box.y + box.height <= graph.height, `${id} escaped the canvas`);
+    }
+    const relay = graph.positions.get("relay")!;
+    for (let index = 1; index < 100; index++) {
+      const point = cubicAt(graph.edgeRoutes.get("c")!, index / 100);
+      assert.ok(!(point.x > relay.x && point.x < relay.x + relay.width && point.y > relay.y && point.y < relay.y + relay.height), "direct exit crossed relay at a new density");
+    }
+  }
+});
+
 test("empty relationship overview has finite canvas dimensions", () => {
   const graph = routeSmoothLayeredTopologyGraph([], [], new Set());
   assert.ok(Number.isFinite(graph.width) && Number.isFinite(graph.height));

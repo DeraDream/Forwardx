@@ -466,6 +466,8 @@ export async function getHostOptions(ownerUserId?: number, allowedHostIds?: numb
         isOnline: hosts.isOnline,
         lastHeartbeat: hosts.lastHeartbeat,
         agentVersion: hosts.agentVersion,
+        trafficLimit: hosts.trafficLimit,
+        trafficMeasureMode: hosts.trafficMeasureMode,
         agentProbeVersion: hosts.agentProbeVersion,
         agentProbePort: hosts.agentProbePort,
         agentProbeTcpReady: hosts.agentProbeTcpReady,
