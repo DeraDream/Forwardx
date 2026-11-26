@@ -123,6 +123,24 @@ test("latency series resolve direct rules, active forward-group children, tunnel
     assert.equal(await forwardTests.getLatestTunnelLatency(31), undefined);
     const chainSeries = await metrics.getForwardGroupLatencySeries(20, { since });
     assert.deepEqual(chainSeries.map((item) => item.latencyMs), [66]);
+
+    // A multi-entry chain has two complete entry-to-landing samples. The card
+    // must choose the lower path, not sum the parallel entries and relay rows.
+    await insert("forward_groups", ["id", "name", "groupType", "groupMode", "entryGroupId", "targetIp", "userId", "isEnabled"], [21, "multi-entry", "host", "chain", 22, "0.0.0.0", 1, 1]);
+    await insert("forward_groups", ["id", "name", "groupType", "groupMode", "targetIp", "userId", "isEnabled"], [22, "entries", "host", "entry", "0.0.0.0", 1, 1]);
+    await insert("forward_group_members", ["id", "groupId", "memberType", "hostId", "priority", "isEnabled"], [221, 22, "host", 13, 0, 1]);
+    await insert("forward_group_members", ["id", "groupId", "memberType", "hostId", "priority", "isEnabled"], [222, 22, "host", 14, 1, 1]);
+    await insert("forward_rules", ruleColumns, [131, 13, "multi-entry template", "iptables", "tcp", 21, null, null, 1, 40297, "example.test", 443, 1, 1, 1]);
+    for (const [id, hostId, memberId, latency] of [[132, 1, 201, 5], [133, 2, 202, 35], [134, 3, 203, 37], [135, 13, 201, 44], [136, 14, 201, 43]]) {
+      await insert("forward_rules", ruleColumns, [id, hostId, "chain child", "iptables", "tcp", 21, 131, memberId, 0, 40297, "example.test", 443, 1, 1, 1]);
+      await insert("tcping_stats", ["ruleId", "hostId", "latencyMs", "isTimeout", "recordedAt"], [id, hostId, latency, 0, now - 10]);
+    }
+    await insert("traffic_stats", ["ruleId", "hostId", "recordedAt"], [131, 13, now - 10]);
+    await insert("forward_tests", ["ruleId", "hostId", "userId", "status", "latencyMs", "updatedAt"], [131, 13, 1, "success", 163, now - 5]);
+    const multiEntrySummary = await metrics.getTrafficSummaryByRule({ userId: 1, ruleIds: [131], since });
+    assert.equal(multiEntrySummary.find((row) => row.ruleId === 131)?.latestLatencyMs, 43,
+      "an older or newer aggregate self-test must not overwrite the lower entry path");
+
     const serviceSeries = await probes.getHostProbeServiceSeries({ serviceIds: [40], hostId: 1, hours: 1 });
     assert.deepEqual(serviceSeries.map((item) => item.latencyMs), [77]);
     const limitedServiceSeries = await probes.getHostProbeServiceSeries({ serviceIds: [41], hostId: 1, hours: 1, limit: 3 });

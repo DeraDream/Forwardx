@@ -221,10 +221,7 @@ export function routeSmoothLayeredTopologyGraph(nodes: TopologyRoutingNode[], in
   const centerY = (id: string) => { const box = base.positions.get(id)!; return box.y + box.height / 2; };
   for (const list of outgoing.values()) list.sort((a, b) => centerY(a.to) - centerY(b.to) || a.id.localeCompare(b.id));
   for (const list of incoming.values()) list.sort((a, b) => centerY(a.from) - centerY(b.from) || a.id.localeCompare(b.id));
-  const bottom = Math.max(...[...base.positions.values()].map((box) => box.y + box.height));
   const top = Math.min(...[...base.positions.values()].map((box) => box.y));
-  let lowestLane = bottom;
-  const directLane = Math.max(...[...base.positions].filter(([id]) => !directOnly.has(id)).map(([, box]) => box.y + box.height)) + 24;
 
   // A long edge must leave the card rows, but it must not receive a lane based
   // on its index amongst *all* edges.  That used to make a newly-expanded
@@ -265,31 +262,30 @@ export function routeSmoothLayeredTopologyGraph(nodes: TopologyRoutingNode[], in
     const sourceColumn = byId.get(edge.from)?.column || 0;
     const targetColumn = byId.get(edge.to)?.column || sourceColumn + 1;
     const spansRelayLayer = targetColumn - sourceColumn > 1;
-    const start = isDirectLanding && spansRelayLayer
-      ? { x: from.x + from.width * (0.48 + 0.38 * (fromEdges.indexOf(edge) + 1) / (fromEdges.length + 1)), y: from.y + from.height }
-      : { x: from.x + from.width, y: from.y + from.height * (fromEdges.indexOf(edge) + 1) / (fromEdges.length + 1) };
+    const directFromEdges = fromEdges.filter((candidate) => directOnly.has(candidate.to)
+      && (byId.get(candidate.to)?.column || 0) - sourceColumn > 1);
+    const directRank = directFromEdges.indexOf(edge);
+    // Match source-port order to destination order: upper exits start above
+    // lower exits, so their curves cannot swap places near the source card.
+    const start = { x: from.x + from.width, y: from.y + from.height * (directRank >= 0
+      ? 0.45 + 0.5 * (directRank + 1) / (directFromEdges.length + 1)
+      : (fromEdges.indexOf(edge) + 1) / (fromEdges.length + 1)) };
     const end = { x: to.x, y: to.y + to.height * (toEdges.indexOf(edge) + 1) / (toEdges.length + 1) };
     const distance = Math.max(80, end.x - start.x);
     let controlY1 = start.y;
     let controlY2 = end.y;
-    if (spansRelayLayer) {
-      // Direct sinks deliberately travel below the relay rows. Other long
-      // edges use compact, reusable tracks above them.
-      const laneY = isDirectLanding
-        ? directLane + Math.max(0, landingNodes.indexOf(byId.get(edge.to)!) - mainCount) * 32
-        : top - 40 - (longLaneByEdge.get(edge.id) || 0) * 16;
+    if (spansRelayLayer && !isDirectLanding) {
+      const laneY = top - 40 - (longLaneByEdge.get(edge.id) || 0) * 16;
       controlY1 = laneY;
       controlY2 = laneY;
-      if (isDirectLanding) lowestLane = Math.max(lowestLane, laneY);
     }
-    const bendX = from.x + from.width + 100;
+    // Direct landings are already below forwarded landings. One long, shallow
+    // cubic reaches each target without a hairpin or a shared horizontal bus.
+    const rise = Math.max(0, end.y - start.y);
     edgeRoutes.set(edge.id, isDirectLanding && spansRelayLayer ? [
       start,
-      { x: start.x + 34, y: start.y + 14, curve: true },
-      { x: bendX - 42, y: controlY1, curve: true },
-      { x: bendX, y: controlY1, curve: true },
-      { x: bendX + Math.min(110, (end.x - bendX) * .3), y: controlY2, curve: true },
-      { x: end.x - 90, y: end.y, curve: true },
+      { x: start.x + distance * .22, y: start.y + rise * .36, curve: true },
+      { x: end.x - distance * .3, y: end.y - rise * .20, curve: true },
       end,
     ] : [
       start,
@@ -312,10 +308,6 @@ export function routeSmoothLayeredTopologyGraph(nodes: TopologyRoutingNode[], in
 }
 
 export function topologyRoutePath(points: TopologyPoint[]) {
-  if (points.length === 7 && points.slice(1, 6).every((point) => point.curve)) {
-    const [start, control1, control2, bend, control3, control4, end] = points;
-    return `M ${start.x} ${start.y} C ${control1.x} ${control1.y} ${control2.x} ${control2.y} ${bend.x} ${bend.y} C ${control3.x} ${control3.y} ${control4.x} ${control4.y} ${end.x} ${end.y}`;
-  }
   if (points.length === 4 && points[1]?.curve && points[2]?.curve) {
     return `M ${points[0].x} ${points[0].y} C ${points[1].x} ${points[1].y} ${points[2].x} ${points[2].y} ${points[3].x} ${points[3].y}`;
   }

@@ -39,6 +39,11 @@ test("empty relationship overview has finite canvas dimensions", () => {
   assert.equal(graph.positions.size, 0);
 });
 
+function cubicAt(points: TopologyPoint[], t: number) {
+  const weights = [(1-t)**3, 3*(1-t)**2*t, 3*(1-t)*t*t, t**3];
+  return { x: points.reduce((sum, point, index) => sum + point.x * weights[index], 0), y: points.reduce((sum, point, index) => sum + point.y * weights[index], 0) };
+}
+
 test("relationship overview uses smooth curves and routes long direct exits outside relay cards", () => {
   const nodes = [
     { id: "entry", column: 0, row: 0 }, { id: "relay", column: 1, row: 0 },
@@ -50,13 +55,15 @@ test("relationship overview uses smooth curves and routes long direct exits outs
   ], new Set(["direct"]));
   assert.match(topologyRoutePath(result.edgeRoutes.get("chain-a")!), /^M .* C /);
   const direct = result.edgeRoutes.get("direct-exit")!;
-  assert.equal(direct.length, 7);
-  assert.match(topologyRoutePath(direct), /^M .* C .* C /);
-  assert.ok(direct[2].y > result.positions.get("relay")!.y + result.positions.get("relay")!.height);
+  assert.equal(direct.length, 4);
+  assert.match(topologyRoutePath(direct), /^M .* C /);
   assert.ok(result.positions.get("direct")!.y > result.positions.get("landing")!.y);
-  assert.ok(direct[2].x < result.positions.get("relay")!.x, "the exit reaches its lower lane before the relay card");
-  assert.ok(direct[3].y > result.positions.get("relay")!.y + result.positions.get("relay")!.height);
-  assert.ok(direct[0].x < direct[1].x && direct[1].x < direct[2].x, "the exit fans out diagonally, not as a vertical hairpin");
+  assert.ok(direct[0].x < direct[1].x && direct[1].x < direct[2].x && direct[2].x < direct[3].x, "the exit never turns back or makes a hairpin");
+  const relay = result.positions.get("relay")!;
+  for (let i = 1; i < 100; i++) {
+    const point = cubicAt(direct, i / 100);
+    assert.ok(!(point.x > relay.x && point.x < relay.x + relay.width && point.y > relay.y && point.y < relay.y + relay.height), "direct curve crossed the relay card");
+  }
 });
 
 test("forwarded destinations follow their relay order before direct destinations", () => {
@@ -101,9 +108,18 @@ test("parallel direct exits have separate labeled lanes below the shared chain",
   ], new Set(["direct-a", "direct-b"]));
   const first = graph.edgeRoutes.get("direct-a")!;
   const second = graph.edgeRoutes.get("direct-b")!;
-  assert.ok(first[2].x < graph.positions.get("hk")!.x);
-  assert.ok(first[2].y > graph.positions.get("sg")!.y + graph.positions.get("sg")!.height);
-  assert.ok(Math.abs(first[2].y - second[2].y) >= 30, "latency badges need separate lanes");
+  assert.equal(first.length, 4);
+  assert.equal(second.length, 4);
+  assert.ok(first[0].y < second[0].y, "the upper destination leaves from the upper port");
+  const relays = ["hk", "sg"].map((id) => graph.positions.get(id)!);
+  for (let i = 1; i < 100; i++) {
+    const a = cubicAt(first, i / 100), b = cubicAt(second, i / 100);
+    assert.ok(a.y < b.y, "direct curves must never cross");
+    for (const point of [a, b]) for (const box of relays) {
+      assert.ok(!(point.x > box.x && point.x < box.x + box.width && point.y > box.y && point.y < box.y + box.height), "direct curve crossed a relay card");
+    }
+  }
+  assert.ok(cubicAt(second, .5).y - cubicAt(first, .5).y >= 25, "latency badges need separate lanes");
   assert.ok(graph.positions.get("direct-a")!.y > graph.positions.get("forwarded")!.y);
   assert.ok(graph.positions.get("direct-b")!.y > graph.positions.get("direct-a")!.y);
 });

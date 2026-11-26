@@ -86,6 +86,36 @@ test("parallel entry, shared relays and direct convergence exits keep their real
   assert.ok(!graph.edges.some((edge) => edge.from === "sg" && edge.to === "direct-landing"));
 });
 
+test("two QHIX direct routes stay ordered and clear the SG/JP relay cards", () => {
+  const node = (id: string) => ({ id, label: id, kind: "relay" });
+  const paths = [
+    ...["po0-999", "po0-1288"].flatMap((entry) => [
+      ...["sgs", "legend", "onidel"].map((landing) => ({ id: `${entry}-${landing}`, category: "chain", entry: node(entry), relays: [node("qhix"), node("hk"), node("sg")], landing: node(landing) })),
+      ...["jps", "us"].map((landing) => ({ id: `${entry}-${landing}`, category: "chain", entry: node(entry), relays: [node("qhix"), node("hk"), node("jp")], landing: node(landing) })),
+    ]),
+    ...["hks", "ciallo"].map((landing) => ({ id: `direct-${landing}`, category: "local", entry: node("qhix"), relays: [], landing: node(landing) })),
+  ] as any;
+  const graph = buildOverviewGraph(paths);
+  const upper = graph.edgeRoutes.get("qhix=>hks")!, lower = graph.edgeRoutes.get("qhix=>ciallo")!;
+  // The displayed destination order, not the lexical ID order, determines the ports.
+  const ordered = [upper, lower].sort((a, b) => a[3].y - b[3].y);
+  const cubic = (points: typeof upper, t: number) => {
+    const weights = [(1-t)**3, 3*(1-t)**2*t, 3*(1-t)*t*t, t**3];
+    return { x: points.reduce((sum, point, i) => sum + point.x * weights[i], 0), y: points.reduce((sum, point, i) => sum + point.y * weights[i], 0) };
+  };
+  const relays = ["hk", "sg", "jp"].map((id) => graph.positions.get(id)!);
+  for (let index = 0; index <= 100; index++) {
+    const t = index / 100;
+    const first = cubic(ordered[0], t), second = cubic(ordered[1], t);
+    assert.ok(first.y < second.y, `direct routes crossed at ${t}`);
+    for (const point of [first, second]) for (const box of relays) {
+      assert.ok(!(point.x > box.x && point.x < box.x + box.width && point.y > box.y && point.y < box.y + box.height), `direct route crossed a relay card at ${t}`);
+    }
+  }
+  assert.ok(graph.positions.get("hks")!.y > graph.positions.get("jps")!.y);
+  assert.ok(graph.positions.get("ciallo")!.y > graph.positions.get("jps")!.y);
+});
+
 test("overview excludes draft, cancelled and not-yet-deployed full chains", () => {
   const chains = ["draft", "ports-ready", "ready-to-deploy", "cancelled", "running"].map((status, id) => ({
     id: id + 1, name: status, status, isEnabled: true, nodes: [{hostId:1}, {hostId:2}, {hostId:3}],

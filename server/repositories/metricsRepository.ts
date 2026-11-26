@@ -1936,6 +1936,29 @@ function withEmptyTrafficLatency(rows: TrafficSummaryRow[]) {
   }));
 }
 
+// Each entry child reports its own complete path. Parallel entries must never be
+// summed with each other or with the shared relay children.
+export function lowestEntryChainLatency(
+  entryHostIds: ReadonlySet<number>,
+  children: ReadonlyArray<{ id: number; hostId: number }>,
+  latestByRule: ReadonlyMap<number, { latencyMs: number | null; isTimeout: boolean; recordedAt: Date | string }>,
+) {
+  const entries = children.filter((child) => entryHostIds.has(child.hostId));
+  if (!entries.length) return null;
+  const samples = entries.map((child) => latestByRule.get(child.id)).filter((sample) => !!sample);
+  const successful = samples.filter((sample) => !sample.isTimeout && sample.latencyMs !== null && Number.isFinite(Number(sample.latencyMs)));
+  const best = successful.reduce<(typeof successful)[number] | null>(
+    (lowest, sample) => !lowest || Number(sample.latencyMs) < Number(lowest.latencyMs) ? sample : lowest,
+    null,
+  );
+  const newest = samples.reduce<(typeof samples)[number] | null>(
+    (latest, sample) => !latest || new Date(sample.recordedAt).getTime() > new Date(latest.recordedAt).getTime() ? sample : latest,
+    null,
+  );
+  return { latencyMs: best ? Number(best.latencyMs) : null, isTimeout: !best && samples.length > 0,
+    recordedAt: best?.recordedAt ?? newest?.recordedAt ?? null };
+}
+
 export function shouldUseLatencyCandidate(
   current: { recordedAt?: Date | string | null } | null | undefined,
   candidate: { recordedAt?: Date | string | null },
@@ -2086,12 +2109,16 @@ export async function getTrafficSummaryByRule(opts: {
         groupId: forwardRules.forwardGroupId,
         parentId: forwardRules.forwardGroupRuleId,
         memberId: forwardRules.forwardGroupMemberId,
+        hostId: forwardRules.hostId,
       })
       .from(forwardRules)
       .where(sql`${forwardRules.forwardGroupRuleId} IN (${sql.join(ruleIds.map(id => sql`${id}`), sql`, `)}) AND ${forwardRules.pendingDelete} = ${sqlBool(false)}`)
     : [];
   const latencyGroupModeById = await getForwardGroupModeMap((childLatencyRows as any[]).map((row: any) => Number(row.groupId || 0)));
   const parentChainChildren = new Map<number, number[]>();
+  const parentChainChildRows = new Map<number, Array<{ id: number; hostId: number }>>();
+  const chainGroupByParent = new Map<number, number>();
+  const entryChainParentIds = new Set<number>();
   const parentFailoverChildren = new Map<number, number[]>();
   const parentFailoverChildRows = new Map<number, ForwardGroupLatencyChildRow[]>();
   const parentByChildRule = new Map<number, number>();
@@ -2107,6 +2134,10 @@ export async function getTrafficSummaryByRule(opts: {
       const children = parentChainChildren.get(parentId) || [];
       children.push(childId);
       parentChainChildren.set(parentId, children);
+      const childRows = parentChainChildRows.get(parentId) || [];
+      childRows.push({ id: childId, hostId: Number(row.hostId || 0) });
+      parentChainChildRows.set(parentId, childRows);
+      chainGroupByParent.set(parentId, groupId);
       continue;
     }
     parentByChildRule.set(childId, parentId);
@@ -2116,6 +2147,26 @@ export async function getTrafficSummaryByRule(opts: {
     const childRows = parentFailoverChildRows.get(parentId) || [];
     childRows.push({ id: childId, groupId, memberId });
     parentFailoverChildRows.set(parentId, childRows);
+  }
+  const chainGroupIds = Array.from(new Set(chainGroupByParent.values()));
+  const chainGroupRows = chainGroupIds.length > 0
+    ? await db.select({ id: forwardGroups.id, entryGroupId: forwardGroups.entryGroupId })
+      .from(forwardGroups)
+      .where(sql`${forwardGroups.id} IN (${sql.join(chainGroupIds.map(id => sql`${id}`), sql`, `)})`)
+    : [];
+  const entryGroupByChain = new Map((chainGroupRows as any[])
+    .map((row) => [Number(row.id), Number(row.entryGroupId || 0)] as const));
+  const entryGroupIds = Array.from(new Set([...entryGroupByChain.values()].filter((id) => id > 0)));
+  const entryHostRows = entryGroupIds.length > 0
+    ? await db.select({ groupId: forwardGroupMembers.groupId, hostId: forwardGroupMembers.hostId })
+      .from(forwardGroupMembers)
+      .where(sql`${forwardGroupMembers.groupId} IN (${sql.join(entryGroupIds.map(id => sql`${id}`), sql`, `)}) AND ${forwardGroupMembers.isEnabled} = ${sqlBool(true)}`)
+    : [];
+  const entryHostsByGroup = new Map<number, Set<number>>();
+  for (const row of entryHostRows as any[]) {
+    const hostIds = entryHostsByGroup.get(Number(row.groupId)) || new Set<number>();
+    hostIds.add(Number(row.hostId));
+    entryHostsByGroup.set(Number(row.groupId), hostIds);
   }
   const latencyRuleIds = Array.from(new Set([
     ...ruleIds,
@@ -2188,6 +2239,15 @@ export async function getTrafficSummaryByRule(opts: {
     }
   }
   for (const [parentId, childIds] of parentChainChildren.entries()) {
+    const entryHostIds = entryHostsByGroup.get(entryGroupByChain.get(chainGroupByParent.get(parentId) || 0) || 0);
+    const entryResult = entryHostIds && lowestEntryChainLatency(
+      entryHostIds, parentChainChildRows.get(parentId) || [], latestByRawRule,
+    );
+    if (entryResult) {
+      latestByRule.set(parentId, { ruleId: parentId, ...entryResult });
+      entryChainParentIds.add(parentId);
+      continue;
+    }
     let latencySum = 0;
     let recordedAt: Date | null = null;
     let isTimeout = childIds.length === 0;
@@ -2237,7 +2297,7 @@ export async function getTrafficSummaryByRule(opts: {
     : [];
   for (const row of latestChainTestRows as any[]) {
     const ruleId = Number(row.ruleId);
-    if (!chainParentRuleIds.has(ruleId) || latestByRule.get(ruleId)?.source === "forward_test") continue;
+    if (!chainParentRuleIds.has(ruleId) || entryChainParentIds.has(ruleId) || latestByRule.get(ruleId)?.source === "forward_test") continue;
     const status = String(row.status || "").toLowerCase();
     const candidate = {
       ruleId,
