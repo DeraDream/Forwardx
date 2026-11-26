@@ -12,6 +12,15 @@ test("copying a final SS URI defaults to the saved landing service endpoint", ()
   assert.match(buildFinalLandingSsUri({ ...service, endpoint: "" }, "landing"), /@203\.0\.113\.5:30001#/);
 });
 
+test("rule copies use the current rule name as the fragment without changing the landing service", () => {
+  for (const mode of ["entry", "landing"] as const) {
+    const name = "香港入口 #1 / 备用";
+    const uri = buildFinalLandingSsUri(service, mode, "entry.example.org", name);
+    assert.equal(uri, buildFinalLandingSsUri(service, mode, "entry.example.org").split("#")[0] + "#" + encodeURIComponent(name));
+    assert.equal(service.name, "landing");
+  }
+});
+
 test("entry IP and entry-group domain only change the URI host, not its credentials or port", () => {
   const original = buildFinalLandingSsUri(service, "landing");
   for (const address of ["42.193.170.239", "ix.example.org", "2001:db8::1"]) {

@@ -8235,7 +8235,7 @@ function RulesContent() {
       ? entryDomainForForwardGroup(group)
       : getRuleTransferDisplay(rule).entryAddresses.find((entry) => entry.copyable)?.value;
     if (useEntryAddress && !entryAddress) return toast.error("规则入口地址不可用，请检查入口组域名或入口主机");
-    const link = service ? buildFinalLandingSsUri(service, useEntryAddress ? "entry" : "landing", entryAddress) : "";
+    const link = service ? buildFinalLandingSsUri(service, useEntryAddress ? "entry" : "landing", entryAddress, rule.name) : "";
     if (!link) return toast.error("最终 SS 配置不可用");
     const copied = await copyTextToClipboard(link);
     toast[copied ? "success" : "error"](copied ? "最终 SS 链接已复制" : "复制失败，请手动复制");
@@ -11075,7 +11075,7 @@ function RulesContent() {
                       </div>
                     </>
                   )}
-                  {editingId && (form.routeMode === "local" || form.routeMode === "chain") && (
+                  {(form.routeMode === "local" || form.routeMode === "chain") && (
                     <div className="space-y-2 sm:col-span-2">
                       <Label>复制最终 SS 链接的地址</Label>
                       <Select value={form.targetLandingGroupId ? "entry" : form.copySsHostMode} disabled={!!form.targetLandingGroupId} onValueChange={(value: "landing" | "entry") => setForm((prev) => ({ ...prev, copySsHostMode: value }))}>
