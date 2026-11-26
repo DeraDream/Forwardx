@@ -23,5 +23,10 @@ test("node density switches preserve genuine rates and never show sample packet 
   assert.match(detailed, /25%/);
   const missing = renderToStaticMarkup(<TopologyGraphNodeCard {...base} {...topologyCardSize("compact")} density="compact" />);
   assert.match(missing, /—/);
-  assert.doesNotMatch(missing, /25%/);
+  assert.match(missing, /3 条路径经过/, "compact mode must retain the path count");
+  assert.doesNotMatch(missing, /CPU|月流量|>25%<|丢包/);
+  const single = renderToStaticMarkup(<TopologyGraphNodeCard {...base} sharedCount={1} {...topologyCardSize("compact")} density="compact" />);
+  assert.match(single, /独立路径/);
+  assert.ok(topologyCardSize("compact").width < topologyCardSize("standard").width);
+  assert.ok(topologyCardSize("standard").width < topologyCardSize("detailed").width);
 });

@@ -1,6 +1,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import { routeSmoothLayeredTopologyGraph, routeTopologyGraph, topologyRoutePath, type TopologyBox, type TopologyPoint } from "./topologyRouting";
+import { topologyCardSize } from "./TopologyGraphNodeCard";
 
 type Segment = { a: TopologyPoint; b: TopologyPoint; edge: string };
 function segments(routes: Map<string, TopologyPoint[]>) {
@@ -42,7 +43,7 @@ test("node density dimensions are reflected in routed card boxes and canvas", ()
     { id: "a", from: "entry", to: "relay" }, { id: "b", from: "relay", to: "landing" },
     { id: "c", from: "entry", to: "direct" },
   ];
-  for (const size of [{ width: 196, height: 82 }, { width: 218, height: 110 }, { width: 244, height: 146 }]) {
+  for (const size of (["compact", "standard", "detailed"] as const).map(topologyCardSize)) {
     const graph = routeSmoothLayeredTopologyGraph(nodes, edges, new Set(["direct"]), size);
     assert.equal(graph.positions.get("relay")?.width, size.width);
     assert.equal(graph.positions.get("relay")?.height, size.height);
