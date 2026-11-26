@@ -1156,7 +1156,7 @@ export function TemplateVisualEditorDialog({
           if (!next) requestClose();
         }}
       >
-        <DialogContent onOpenAutoFocus={(event) => event.preventDefault()} className="flex h-[calc(100svh-50px)] max-h-[calc(100svh-50px)] w-[calc(100vw-1.5rem)] max-w-[1560px] flex-col gap-0 overflow-hidden border border-border bg-card p-0 text-card-foreground shadow-2xl [&>button]:hidden sm:w-[calc(100vw-3rem)] sm:p-0">
+        <DialogContent onOpenAutoFocus={(event) => event.preventDefault()} onEscapeKeyDown={event => event.preventDefault()} onPointerDownOutside={event => event.preventDefault()} className="flex h-[calc(100svh-50px)] max-h-[calc(100svh-50px)] w-[calc(100vw-1.5rem)] max-w-[1560px] flex-col gap-0 overflow-hidden border border-border bg-card p-0 text-card-foreground shadow-2xl [&>button]:hidden sm:w-[calc(100vw-3rem)] sm:p-0">
           <DialogHeader className="relative shrink-0 border-b border-border bg-muted/30 px-6 py-4 pr-20">
             <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
               <div className="grid size-10 shrink-0 place-items-center rounded-lg border border-border bg-primary/10 text-primary"><Code2 className="size-5" /></div>
@@ -1694,7 +1694,7 @@ export function TemplateVisualEditorDialog({
           if (!value) setRuleEditor(null);
         }}
       >
-        <DialogContent onOpenAutoFocus={(event) => event.preventDefault()} onPointerDownOutside={(event) => event.preventDefault()} onEscapeKeyDown={(event) => event.preventDefault()} className="max-w-[900px] gap-0 overflow-hidden border border-border bg-card p-0 text-card-foreground shadow-2xl sm:p-0">
+        <DialogContent onOpenAutoFocus={(event) => event.preventDefault()} className="max-w-[900px] gap-0 overflow-hidden border border-border bg-card p-0 text-card-foreground shadow-2xl sm:p-0">
           <DialogHeader className="border-b border-border bg-muted/30 px-6 py-5 pr-16">
             <DialogTitle className="flex items-center gap-3 text-xl text-foreground"><span className="grid size-9 place-items-center rounded-lg bg-primary/10 text-primary"><Code2 className="size-5" /></span>
               {ruleEditor?.index === null ? "添加流量规则" : "编辑流量规则"}

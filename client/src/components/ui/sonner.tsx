@@ -21,7 +21,7 @@ const Toaster = ({ className, style, toastOptions, ...props }: ToasterProps) => 
       toastOptions={{
         ...toastOptions,
         classNames: {
-          toast: "group toast !w-[min(42rem,calc(100vw-2rem))] !max-w-[calc(100vw-2rem)] !justify-center !rounded-lg !border-0 !bg-white !px-4 !py-3 !text-center !text-zinc-900 !shadow-[0_8px_20px_rgba(15,23,42,0.16)] dark:!bg-white dark:!text-zinc-900",
+          toast: "group toast !left-1/2 !right-auto !-translate-x-1/2 !w-max !max-w-[min(42rem,calc(100vw-2rem))] !justify-center !rounded-lg !border-0 !bg-white !px-4 !py-3 !text-center !text-zinc-900 !shadow-[0_8px_20px_rgba(15,23,42,0.16)] dark:!bg-white dark:!text-zinc-900",
           content: "!min-w-0 !whitespace-normal !break-words !text-center",
           title: "!whitespace-normal !break-words !text-center !font-medium",
           description: "!whitespace-normal !break-words !text-center !text-zinc-600",

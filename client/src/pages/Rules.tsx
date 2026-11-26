@@ -8242,6 +8242,13 @@ function RulesContent() {
     }
   };
 
+  const [ssCopyFeedback, setSsCopyFeedback] = useState<{ ruleId: number } | null>(null);
+  useEffect(() => {
+    if (!ssCopyFeedback) return;
+    const timer = window.setTimeout(() => setSsCopyFeedback(null), 1800);
+    return () => window.clearTimeout(timer);
+  }, [ssCopyFeedback]);
+
   const copyFinalLandingService = async (rule: any) => {
     const resolved = await resolveFinalLanding(rule);
     if (!resolved?.serviceId) return toast.error("当前规则最终目标没有可复制的 SS");
@@ -8257,7 +8264,10 @@ function RulesContent() {
     const link = service ? buildFinalLandingSsUri(service, useEntryAddress ? "entry" : "landing", entryAddress, rule.name) : "";
     if (!link) return toast.error("最终 SS 配置不可用");
     const copied = await copyTextToClipboard(link);
-    toast[copied ? "success" : "error"](copied ? "最终 SS 链接已复制" : "复制失败，请手动复制");
+    if (copied) {
+      setSsCopyFeedback({ ruleId: Number(rule.id) });
+      toast.success("最终 SS 链接已复制", { id: "rule-ss-copied" });
+    } else toast.error("复制失败，请手动复制");
   };
 
   const openFinalLandingNetworkProfile = async (rule: any) => {
@@ -9003,8 +9013,13 @@ function RulesContent() {
         </Button>
         {(ruleCategory === "local" || ruleCategory === "chain") && (Number(rule.targetLandingServiceId) > 0 || Number(rule.targetRuleId) > 0) && (
           <>
-            <Button variant="ghost" size="icon" className="h-8 w-8" title="复制最终 SS 链接" onClick={() => void copyFinalLandingService(rule)}>
-              <Copy className="h-3.5 w-3.5" />
+            <Button variant="ghost" size="icon" className="relative h-8 w-8" aria-label="复制最终 SS 链接" title="复制最终 SS 链接" onClick={() => void copyFinalLandingService(rule)}>
+              {ssCopyFeedback?.ruleId === Number(rule.id) ? (
+                <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+              ) : <Copy className="h-3.5 w-3.5" />}
+              <span role="status" className="pointer-events-none absolute bottom-full left-1/2 mb-1 -translate-x-1/2 whitespace-nowrap rounded-md bg-foreground px-2 py-1 text-xs font-medium text-background shadow-sm empty:hidden">
+                {ssCopyFeedback?.ruleId === Number(rule.id) ? "已复制" : ""}
+              </span>
             </Button>
             <Button variant="ghost" size="icon" className="h-8 w-8" title="最终落地机网络画像" onClick={() => void openFinalLandingNetworkProfile(rule)}>
               <Globe2 className="h-3.5 w-3.5" />

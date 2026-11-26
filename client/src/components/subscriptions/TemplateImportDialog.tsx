@@ -1,10 +1,9 @@
-import { createPortal } from "react-dom";
+import { SubscriptionDialogFrame } from "./SubscriptionDialogFrame";
 import { useMemo, useRef, useState } from "react";
 import { Braces, CheckCircle2, CloudDownload, Code2, FileCode2, FilePlus2, Info, Link2, Loader2, PlusCircle, RefreshCw, Trash2, Upload, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { useOverlayContainer } from "@/components/ui/overlay-root";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -27,7 +26,6 @@ function skeleton(core: Core) {
 function filenameFor(core: Core) { return core === "loon" ? "loon.conf" : core === "egern" ? "egern.yaml" : "clash.yaml"; }
 
 export function TemplateImportDialog({ open, saving, onClose, onSave, onFetch }: Props) {
-  const overlay = useOverlayContainer();
   const fileRef = useRef<HTMLInputElement>(null);
   const [mode, setMode] = useState<Mode>("blank");
   const [core, setCore] = useState<Core>("clash");
@@ -58,7 +56,7 @@ export function TemplateImportDialog({ open, saving, onClose, onSave, onFetch }:
   const preview = useMemo(() => content.split("\n").slice(0, 9).join("\n"), [content]);
   if (!open) return null;
 
-  const dialog = <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-slate-950/55 p-3 dark:bg-black/70">
+  return <SubscriptionDialogFrame title="导入模板" onClose={onClose}>
     <section role="dialog" aria-modal="true" aria-label="导入模板" className="my-auto flex w-full max-w-[720px] flex-col overflow-hidden rounded-xl border border-border bg-card text-card-foreground shadow-2xl">
       <div className="h-1 w-full bg-gradient-to-r from-transparent via-primary to-chart-1" />
       <header className="flex items-start justify-between px-6 pb-4 pt-6 sm:px-7"><div><div className="flex items-center gap-2"><span className="size-2.5 rounded-full bg-chart-1 shadow-[0_0_8px_color-mix(in_oklch,var(--chart-1)_75%,transparent)]" /><h2 className="text-[22px] font-semibold tracking-tight">创建模板</h2><Badge variant="secondary" className="font-mono text-[11px] tracking-wider">WIZARD</Badge></div><p className="mt-1.5 text-xs text-muted-foreground">创建或导入 Clash/Mihomo、Egern、Loon 模板。</p></div><Button aria-label="关闭" variant="ghost" size="icon" className="h-8 w-8" onClick={onClose}><X className="size-[18px]" /></Button></header>
@@ -73,6 +71,5 @@ export function TemplateImportDialog({ open, saving, onClose, onSave, onFetch }:
       <footer className="mt-3 flex items-center justify-between border-t border-border bg-muted/25 px-6 py-4 sm:px-7"><span className="flex items-center gap-1.5 text-[11px] text-muted-foreground"><Info className="size-4 text-primary" />生成的配置将同步至本地规则集群</span><div className="flex gap-2"><Button variant="secondary" onClick={onClose}>取消</Button><Button disabled={!canSave || saving} onClick={() => void save()}>{saving ? <Loader2 className="mr-1 size-4 animate-spin" /> : <PlusCircle className="mr-1 size-4" />}{saving ? "创建中…" : "创建"}</Button></div></footer>
       <input ref={fileRef} className="hidden" type="file" accept=".yaml,.yml,.conf,.list,text/yaml,text/plain" onChange={(event) => { void chooseFile(event.target.files?.[0]); event.currentTarget.value = ""; }} />
     </section>
-  </div>;
-  return overlay ? createPortal(dialog, overlay) : dialog;
+  </SubscriptionDialogFrame>;
 }

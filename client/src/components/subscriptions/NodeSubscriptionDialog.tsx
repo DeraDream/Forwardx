@@ -1,4 +1,4 @@
-import { createPortal } from "react-dom";
+import { SubscriptionDialogFrame } from "./SubscriptionDialogFrame";
 import { closestCenter, DndContext, DragOverlay, PointerSensor, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -8,7 +8,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
-import { useOverlayContainer } from "@/components/ui/overlay-root";
 import { cn } from "@/lib/utils";
 
 type Node = { ID: number; Name: string; Link: string; Disabled?: boolean };
@@ -45,13 +44,12 @@ function SelectedNodeList({ nodes, onRemove, onReorder }: { nodes: Node[]; onRem
 
 export function NodeSubscriptionDialog(p: Props) {
   const [query, setQuery] = useState("");
-  const overlayContainer = useOverlayContainer();
   const selected = useMemo(() => p.selectedNodeIds.map((id) => p.nodes.find((node) => node.ID === id)).filter((node): node is Node => Boolean(node)), [p.nodes, p.selectedNodeIds]);
   const available = useMemo(() => p.nodes.filter((node) => !node.Disabled && `${node.Name} ${node.Link}`.toLowerCase().includes(query.trim().toLowerCase())), [p.nodes, query]);
   const addAvailable = () => p.setSelectedNodeIds((ids) => [...ids, ...available.map((node) => node.ID).filter((id) => !ids.includes(id))]);
   const reorderSelected = (id: number, targetId: number) => p.setSelectedNodeIds((ids) => { const from = ids.indexOf(id); const to = ids.indexOf(targetId); if (from < 0 || to < 0) return ids; const next = [...ids]; next.splice(from, 1); next.splice(to, 0, id); return next; });
   if (!p.open) return null;
-  const dialog = <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-slate-950/55 p-3 dark:bg-black/70">
+  return <SubscriptionDialogFrame title="节点订阅" onClose={p.onClose}>
     <section className="my-auto w-full max-w-5xl overflow-hidden rounded-[22px] border border-border bg-card shadow-2xl">
       <header className="flex items-start justify-between border-b border-border px-7 py-6">
         <div><div className="flex items-center gap-3"><span className="grid size-10 place-items-center rounded-xl bg-primary/15 text-primary"><ClipboardList className="size-5" /></span><h2 className="text-2xl font-bold">{p.title || "新建节点订阅"}</h2><Badge variant="outline" className="border-primary/40 bg-primary/10 text-primary">Node Subscription</Badge></div><p className="mt-2 text-sm text-muted-foreground">选择需要公开的节点，系统将生成独立的节点订阅链接。</p></div>
@@ -64,6 +62,5 @@ export function NodeSubscriptionDialog(p: Props) {
       </main>
       <footer className="flex justify-between border-t border-border bg-muted/15 px-7 py-5"><Button variant="secondary" onClick={p.onClose}>取消</Button><Button disabled={!p.name.trim() || !selected.length || p.saving} onClick={p.onSave}>{p.saving ? "保存中…" : <><Check className="mr-1 size-4" />{p.title ? "保存节点订阅" : "生成节点订阅"}</>}</Button></footer>
     </section>
-  </div>;
-  return overlayContainer ? createPortal(dialog, overlayContainer) : dialog;
+  </SubscriptionDialogFrame>;
 }

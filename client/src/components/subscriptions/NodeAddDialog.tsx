@@ -1,7 +1,6 @@
-import { createPortal } from "react-dom";
+import { SubscriptionDialogFrame } from "./SubscriptionDialogFrame";
 import type { Dispatch, SetStateAction } from "react";
 import { Boxes, Check, ClipboardPaste, Copy, Info, Link2, Network, Plus, X } from "lucide-react";
-import { useOverlayContainer } from "@/components/ui/overlay-root";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -26,7 +25,6 @@ type Props = {
 function Toggle({ on }: { on: boolean }) { return <span className={`block size-5 rounded-full bg-white transition ${on ? "translate-x-5" : ""}`} />; }
 
 export function NodeAddDialog(p: Props) {
-  const overlay = useOverlayContainer();
   if (!p.open) return null;
   const protocol = p.link.match(/^([a-z0-9+-]+):\/\//i)?.[1]?.toUpperCase() || "Node URI";
   const selectedIp = p.ips.find((ip) => String(ip.ID) === p.replaceId);
@@ -39,7 +37,7 @@ export function NodeAddDialog(p: Props) {
   const copyPreview = async () => { try { await navigator.clipboard.writeText(firstLink); } catch { /* clipboard may be unavailable */ } };
   const toggleGroup = (group: string) => p.setSelectedGroups((current) => current.includes(group) ? current.filter((item) => item !== group) : [...current, group]);
   const toggleSubscription = (id: number) => p.setSelectedSubscriptions((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
-  const dialog = <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-slate-950/55 p-3 dark:bg-black/70">
+  return <SubscriptionDialogFrame title="节点配置" onClose={p.onClose}>
     <section className="my-auto w-full max-w-5xl overflow-hidden rounded-[22px] border border-border bg-card shadow-2xl">
       <header className="flex items-start justify-between border-b border-border px-7 py-6">
         <div><div className="flex items-center gap-3"><span className="grid size-10 place-items-center rounded-xl bg-primary/15 text-primary"><Plus /></span><h2 className="text-2xl font-bold">{p.title || "添加节点"}</h2><Badge variant="outline" className="border-primary/35 text-primary">Node Importer</Badge><Badge className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">● {p.title ? "正在编辑 1 个节点" : `将创建 ${p.link.split(/\n|,/).filter(Boolean).length || 1} 个节点`}</Badge></div><p className="mt-2 text-sm text-muted-foreground">支持主流节点链接；可从入口 IP 库精确替换服务器地址，端口、认证、传输参数与备注均保持不变。</p></div><Button variant="ghost" size="icon" onClick={p.onClose}><X /></Button>
@@ -57,6 +55,5 @@ export function NodeAddDialog(p: Props) {
       </main>
       <footer className="flex items-center justify-between border-t bg-muted/15 px-7 py-5"><span className="text-sm text-muted-foreground">● 已解析有效节点：{protocol}</span><div className="flex gap-3"><Button variant="secondary" onClick={p.onClose}>取消</Button><Button disabled={!p.link.trim() || p.saving} onClick={p.onSave}>{p.saving ? "保存中…" : <><Check className="mr-1 size-4" />{p.title ? "保存节点修改" : "确认添加节点"}</>}</Button></div></footer>
     </section>
-  </div>;
-  return overlay ? createPortal(dialog, overlay) : dialog;
+  </SubscriptionDialogFrame>;
 }
