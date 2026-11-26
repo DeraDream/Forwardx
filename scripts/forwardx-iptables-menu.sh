@@ -166,25 +166,125 @@ upgrade_local() {
   echo "当前轻量版：v$version"
 }
 
+# GitHub's /releases/latest is the panel release, not the standalone Agent.
+# Only published iptables-only releases containing both the current-arch
+# archive and its SHA256SUMS are eligible for online upgrades.
+latest_online_version() {
+  local arch="$1" page response candidate
+  command -v curl >/dev/null || { echo '在线升级需要 curl' >&2; return 1; }
+  for page in $(seq 1 10); do
+    response="$(curl -fsSL --retry 2 --connect-timeout 10 --max-time 30 \
+      -H 'Accept: application/vnd.github+json' -H 'User-Agent: ForwardX-iptables-only' \
+      "https://api.github.com/repos/DeraDream/Forwardx/releases?per_page=100&page=$page")" || return 1
+    candidate="$(printf '%s' "$response" | python3 -c '
+import json, re, sys
+releases = json.load(sys.stdin)
+if not isinstance(releases, list): raise SystemExit("GitHub 发布列表不可用")
+arch = sys.argv[1]
+versions = []
+for release in releases:
+    tag = release.get("tag_name", "")
+    match = re.fullmatch(r"iptables-only-v(\d+)\.(\d+)\.(\d+)", tag)
+    if not match or release.get("draft") or release.get("prerelease"): continue
+    names = {asset.get("name") for asset in release.get("assets", [])}
+    version = ".".join(match.groups())
+    if f"forwardx-agent-iptables-only-v{version}-linux-{arch}.tar.gz" in names and f"iptables-only-v{version}-SHA256SUMS" in names:
+        versions.append((tuple(map(int, match.groups())), version))
+if versions: print(max(versions)[1])
+' "$arch")" || return 1
+    if [ -n "$candidate" ]; then printf '%s\n' "$candidate"; return 0; fi
+    # An empty page means all published releases have been examined.
+    [ "$response" = '[]' ] && break
+  done
+  echo '未找到含有本机架构及校验文件的轻量 Agent 发布包' >&2
+  return 1
+}
+upgrade_online() {
+  local arch current version package base directory archive checksum expected stage choice
+  case "$(uname -m)" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; *) echo '不支持的架构' >&2; return 1 ;; esac
+  current="$(tr -d '\r\n' < "$VERSION_FILE" 2>/dev/null)" || { echo '本地版本未知，拒绝自动升级；请使用菜单 1' >&2; return 1; }
+  [[ "$current" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo '本地版本无效，拒绝自动升级' >&2; return 1; }
+  echo '正在查询 GitHub 上的轻量 Agent 发布版本…'
+  version="$(latest_online_version "$arch")" || return 1
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  if ! python3 - "$current" "$version" <<'PY'
+import sys
+parse = lambda s: tuple(map(int, s.split('.')))
+sys.exit(0 if parse(sys.argv[2]) > parse(sys.argv[1]) else 1)
+PY
+  then echo "已是最新或更高版本：本地 v$current，GitHub v$version"; return 0; fi
+  echo "发现更新：v$current → v$version。将下载并校验安装包。"
+  read -r -p '确认在线升级？[y/N]: ' choice || return 1
+  [[ "$choice" =~ ^[yY]$ ]] || { echo '已取消'; return 0; }
+  package="forwardx-agent-iptables-only-v${version}-linux-${arch}.tar.gz"
+  base="https://github.com/DeraDream/Forwardx/releases/download/iptables-only-v${version}"
+  directory=/root/forwardx-agent-downloads
+  install -d -m 0700 "$directory"
+  archive="$(mktemp "$directory/.package.XXXXXXXX")"
+  checksum="$(mktemp "$directory/.checksum.XXXXXXXX")"
+  if ! curl -fL --retry 3 --connect-timeout 10 --max-time 180 -o "$archive" "$base/$package" ||
+     ! curl -fL --retry 3 --connect-timeout 10 --max-time 30 -o "$checksum" "$base/iptables-only-v${version}-SHA256SUMS"; then
+    rm -f "$archive" "$checksum"; return 1
+  fi
+  expected="$(python3 - "$checksum" "$package" <<'PY'
+import re, sys
+matches = []
+for line in open(sys.argv[1]):
+    parts = line.strip().split()
+    if len(parts) == 2 and parts[1] == sys.argv[2] and re.fullmatch(r"[0-9a-fA-F]{64}", parts[0]):
+        matches.append(parts[0])
+if len(matches) != 1: raise SystemExit(1)
+print(matches[0])
+PY
+  )" || { echo '发布包校验文件无效' >&2; rm -f "$archive" "$checksum"; return 1; }
+  if ! printf '%s  %s\n' "$expected" "$archive" | sha256sum -c -; then
+    echo '安装包校验失败，拒绝更新' >&2; rm -f "$archive" "$checksum"; return 1
+  fi
+  mv -f "$archive" "$directory/$package"
+  mv -f "$checksum" "$directory/iptables-only-v${version}-SHA256SUMS"
+  stage="$(mktemp -d)"
+  if ! tar -xzf "$directory/$package" -C "$stage" --no-same-owner --no-same-permissions forwardx-agent VERSION forwardx-menu ||
+     [ -L "$stage/forwardx-agent" ] || [ ! -f "$stage/forwardx-agent" ] ||
+     [ -L "$stage/forwardx-menu" ] || [ ! -f "$stage/forwardx-menu" ] ||
+     [ -L "$stage/VERSION" ] || [ "$(tr -d '\r\n' < "$stage/VERSION" 2>/dev/null)" != "$version" ]; then
+    echo '安装包损坏或版本不匹配，拒绝更新' >&2; rm -rf "$stage"; return 1
+  fi
+  backup_state
+  if ! install -m 0755 "$stage/forwardx-agent" "$BIN.new" || ! mv -f "$BIN.new" "$BIN" ||
+     ! install -m 0755 "$stage/forwardx-menu" "$MENU.new" || ! mv -f "$MENU.new" "$MENU"; then
+    echo '安装文件失败，正在恢复旧版本' >&2
+    rm -rf "$stage"
+    restore_state
+    rm -rf "$tmp"
+    return 1
+  fi
+  rm -rf "$stage"
+  if ! restart_or_rollback; then return 1; fi
+  printf '%s\n' "$version" > "$VERSION_FILE"
+  echo "当前轻量版：v$version；安装包保存在 $directory/$package"
+}
+
 while true; do
   echo
   echo '==== ForwardX 轻量 Agent ===='
   echo '1. 从本地目录升级版本（默认 /root）'
-  echo '2. 修改 Token'
-  echo '3. 修改代理地址'
-  echo '4. 修改面板地址'
-  echo '5. 修改本机公网 IP'
-  echo '6. 查看服务状态'
-  echo '7. 退出脚本'
+  echo '2. 从 GitHub 在线升级轻量 Agent'
+  echo '3. 修改 Token'
+  echo '4. 修改代理地址'
+  echo '5. 修改面板地址'
+  echo '6. 修改本机公网 IP'
+  echo '7. 查看服务状态'
+  echo '8. 退出脚本'
   read -r -p '请选择: ' choice || exit 0
   case "$choice" in
     1) upgrade_local || echo '升级失败，旧版本/配置已保留' >&2 ;;
-    2) change_one token || echo '修改失败' >&2 ;;
-    3) change_one proxy || echo '修改失败' >&2 ;;
-    4) change_one panel || echo '修改失败' >&2 ;;
-    5) change_one ip || echo '修改失败' >&2 ;;
-    6) echo "轻量版：v$(cat "$VERSION_FILE" 2>/dev/null || echo 未知)"; systemctl status "$SERVICE" --no-pager || true ;;
-    7) exit 0 ;;
+    2) upgrade_online || echo '在线升级失败，旧版本/配置已保留' >&2 ;;
+    3) change_one token || echo '修改失败' >&2 ;;
+    4) change_one proxy || echo '修改失败' >&2 ;;
+    5) change_one panel || echo '修改失败' >&2 ;;
+    6) change_one ip || echo '修改失败' >&2 ;;
+    7) echo "轻量版：v$(cat "$VERSION_FILE" 2>/dev/null || echo 未知)"; systemctl status "$SERVICE" --no-pager || true ;;
+    8) exit 0 ;;
     *) echo '无效选项' ;;
   esac
 done
