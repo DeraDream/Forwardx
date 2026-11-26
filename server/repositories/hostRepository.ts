@@ -6,6 +6,8 @@ import {
   forwardRules,
   hostGroupMembers,
   hostGroups,
+  landingGroupMembers,
+  landingGroupProbeLatest,
   hostMetrics,
   hostProbeServiceStats,
   hosts,
@@ -633,6 +635,8 @@ export async function deleteHost(id: number) {
   await db.delete(userHostPermissions).where(eq(userHostPermissions.hostId, id));
   await db.delete(subscriptionPlanHosts).where(eq(subscriptionPlanHosts.hostId, id));
   await db.delete(hostGroupMembers).where(eq(hostGroupMembers.hostId, id));
+  await db.delete(landingGroupMembers).where(eq(landingGroupMembers.hostId, id));
+  await db.delete(landingGroupProbeLatest).where(eq(landingGroupProbeLatest.sourceHostId, id));
   await db.delete(hostMetrics).where(eq(hostMetrics.hostId, id));
   await db.delete(hostProbeServiceStats).where(eq(hostProbeServiceStats.hostId, id));
   await db.delete(hostTrafficCounters).where(eq(hostTrafficCounters.hostId, id));

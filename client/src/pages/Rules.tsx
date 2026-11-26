@@ -377,6 +377,7 @@ type RuleFormData = {
   targetPort: number;
   targetRuleId: number | null;
   targetLandingServiceId: number | null;
+  targetLandingGroupId: number | null;
   copySsHostMode: "landing" | "entry";
   telegramErrorNotifyEnabled: boolean;
   blockHttp: boolean;
@@ -442,6 +443,7 @@ const defaultForm: RuleFormData = {
   targetPort: 0,
   targetRuleId: null,
   targetLandingServiceId: null,
+  targetLandingGroupId: null,
   copySsHostMode: "landing",
   telegramErrorNotifyEnabled: false,
   blockHttp: false,
@@ -3291,6 +3293,7 @@ function RulesContent() {
     placeholderData: (previousData: any) => previousData,
   });
   // Keep the landing tab count available even before its panel is opened.
+  const landingGroupsQuery = trpc.landing.groups.useQuery();
   const landingServicesQuery = trpc.landing.list.useQuery(undefined, {
     enabled: true,
     refetchInterval: pollingInterval("normal"),
@@ -3805,6 +3808,7 @@ function RulesContent() {
       targetPort: rule.targetPort,
       targetRuleId: rule.targetRuleId || null,
       targetLandingServiceId: rule.targetLandingServiceId || null,
+      targetLandingGroupId: rule.targetLandingGroupId || null,
       copySsHostMode: rule.copySsHostMode === "entry" ? "entry" : "landing",
       telegramErrorNotifyEnabled: !!rule.telegramErrorNotifyEnabled,
       blockHttp: false,
@@ -5324,6 +5328,7 @@ function RulesContent() {
         targetPort: form.targetPort,
         targetRuleId: form.targetRuleId,
         targetLandingServiceId: form.targetLandingServiceId,
+        targetLandingGroupId: form.routeMode === "local" && form.targetLandingServiceId ? form.targetLandingGroupId : null,
         copySsHostMode: form.copySsHostMode,
         telegramErrorNotifyEnabled: form.telegramErrorNotifyEnabled,
         ...failoverPayload,
@@ -8224,12 +8229,13 @@ function RulesContent() {
     const services = landingServicesQuery.data || await utils.landing.list.fetch();
     const service = services.find((item: any) => Number(item.id) === Number(resolved.serviceId));
     const group = rule.forwardGroupId ? forwardGroupById.get(Number(rule.forwardGroupId)) : null;
-    if (rule.copySsHostMode === "entry" && rule.forwardGroupId && !group) return toast.error("入口组尚未加载，请稍后重试");
+    const useEntryAddress = !!rule.targetLandingGroupId || rule.copySsHostMode === "entry";
+    if (useEntryAddress && rule.forwardGroupId && !group) return toast.error("入口组尚未加载，请稍后重试");
     const entryAddress = group?.entryGroupId
       ? entryDomainForForwardGroup(group)
       : getRuleTransferDisplay(rule).entryAddresses.find((entry) => entry.copyable)?.value;
-    if (rule.copySsHostMode === "entry" && !entryAddress) return toast.error("规则入口地址不可用，请检查入口组域名或入口主机");
-    const link = service ? buildFinalLandingSsUri(service, rule.copySsHostMode === "entry" ? "entry" : "landing", entryAddress) : "";
+    if (useEntryAddress && !entryAddress) return toast.error("规则入口地址不可用，请检查入口组域名或入口主机");
+    const link = service ? buildFinalLandingSsUri(service, useEntryAddress ? "entry" : "landing", entryAddress) : "";
     if (!link) return toast.error("最终 SS 配置不可用");
     const copied = await copyTextToClipboard(link);
     toast[copied ? "success" : "error"](copied ? "最终 SS 链接已复制" : "复制失败，请手动复制");
@@ -10783,6 +10789,7 @@ function RulesContent() {
                           ...prev,
                           targetRuleId: result?.id || null,
                           targetLandingServiceId: landing?.id || null,
+                          targetLandingGroupId: null,
                           targetIp: result
                             ? String(result.targetIp || "")
                             : landing
@@ -10999,14 +11006,25 @@ function RulesContent() {
                     <div className="space-y-2">
                       <Label>落地服务（地址与端口由服务自动解析）</Label>
                       <Select
-                        value={String(form.targetLandingServiceId)}
+                        value={form.targetLandingGroupId ? `group:${form.targetLandingGroupId}` : String(form.targetLandingServiceId)}
                         onValueChange={(value) => {
+                          if (value.startsWith("group:")) {
+                            if (editingId) return toast.error("编辑规则的落地组绑定请在链路管理中操作");
+                            const groupId = Number(value.slice(6));
+                            const group = (landingGroupsQuery.data || []).find((item: any) => Number(item.id) === groupId);
+                            const members = group?.hostIds.map((hostId: number) => availableLandingServices.find((item: any) => Number(item.landingGroupId) === groupId && Number(item.hostId) === hostId)).filter(Boolean) || [];
+                            const service = members.find((item: any) => Number(item.id) === Number(group?.activeServiceId) && item.status === "running") || members.find((item: any) => item.status === "running") || members[0];
+                            if (!service) return toast.error("落地组尚未部署 SS");
+                            setForm(prev => ({ ...prev, targetLandingGroupId: groupId, targetLandingServiceId: Number(service.id), targetRuleId: null, targetIp: String(service.endpoint || ""), targetPort: Number(service.port), sourcePort: Number(service.port) }));
+                            return;
+                          }
                           const service = availableLandingServices.find(
                             (item: any) => Number(item.id) === Number(value),
                           );
                           setForm((prev) => ({
                             ...prev,
                             targetLandingServiceId: Number(value),
+                            targetLandingGroupId: null,
                             targetRuleId: null,
                             targetIp: String(
                               service?.endpoint ||
@@ -11023,6 +11041,7 @@ function RulesContent() {
                           <SelectValue placeholder="请选择落地服务" />
                         </SelectTrigger>
                         <SelectContent>
+                          {form.routeMode === "local" && (landingGroupsQuery.data || []).filter((group: any) => Number(group.userId) === Number(user?.id) && group.hostIds.length >= 2 && !group.hostIds.includes(Number(form.hostId || 0)) && group.hostIds.every((id: number) => availableLandingServices.some((service: any) => Number(service.landingGroupId) === Number(group.id) && Number(service.hostId) === id))).map((group: any) => <SelectItem key={`group:${group.id}`} value={`group:${group.id}`}>主备落地组 · {group.name}（{group.hostIds.length} 台）</SelectItem>)}
                           {availableLandingServices.map((service: any) => (
                             <SelectItem
                               key={service.id}
@@ -11039,7 +11058,7 @@ function RulesContent() {
                         </SelectContent>
                       </Select>
                       <p className="text-xs text-muted-foreground">
-                        规则会始终转发到该落地 VPS 的 SS 监听端口。
+                        {form.targetLandingGroupId ? "主备落地组按 Agent 在线、SS 运行和入口到各 SS 端口的 TCP 连通性切换：故障持续 60 秒切换，恢复稳定 120 秒切回；已有连接不保证无感迁移。" : "规则会始终转发到该落地 VPS 的 SS 监听端口。"}
                       </p>
                     </div>
                   ) : (
@@ -11059,14 +11078,14 @@ function RulesContent() {
                   {editingId && (form.routeMode === "local" || form.routeMode === "chain") && (
                     <div className="space-y-2 sm:col-span-2">
                       <Label>复制最终 SS 链接的地址</Label>
-                      <Select value={form.copySsHostMode} onValueChange={(value: "landing" | "entry") => setForm((prev) => ({ ...prev, copySsHostMode: value }))}>
+                      <Select value={form.targetLandingGroupId ? "entry" : form.copySsHostMode} disabled={!!form.targetLandingGroupId} onValueChange={(value: "landing" | "entry") => setForm((prev) => ({ ...prev, copySsHostMode: value }))}>
                         <SelectTrigger><SelectValue /></SelectTrigger>
                         <SelectContent>
                           <SelectItem value="landing">落地 SS 服务地址（默认）</SelectItem>
                           <SelectItem value="entry">当前规则入口 IP／入口组域名</SelectItem>
                         </SelectContent>
                       </Select>
-                      <p className="text-xs text-muted-foreground">仅影响操作栏复制出的最终 SS 链接地址，不修改实际转发目标或 SS 配置。</p>
+                      <p className="text-xs text-muted-foreground">{form.targetLandingGroupId ? "落地组主备的 SS 链接必须使用规则入口地址，直连落地 SS 无法故障切换。" : "仅影响操作栏复制出的最终 SS 链接地址，不修改实际转发目标或 SS 配置。"}</p>
                     </div>
                   )}
                   {!form.targetRuleId && !form.targetLandingServiceId && (

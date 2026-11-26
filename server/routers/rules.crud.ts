@@ -26,6 +26,7 @@ import { trafficBillingUserLockKey, withKeyedTaskLock } from "../keyedTaskLock";
 import { mapWithConcurrency } from "../asyncPool";
 import { reserveRuleCreateQuota, type RuleQuotaReservation } from "../ruleQuotaReservations";
 import { assertPortNotSystemReserved } from "../systemReservedPorts";
+import { resolveLandingGroupActiveService } from "../landingGroupTarget";
 
 const targetHostSchema = z.string().min(1).max(253).refine(
   (v) => /^[a-zA-Z0-9]([a-zA-Z0-9\-_.]*[a-zA-Z0-9])?$|^[a-fA-F0-9:.]+$/.test(v.trim()),
@@ -939,6 +940,13 @@ export async function createDirectForwardRuleForActor(
   }
   const host = await db.getHostById(hostId);
   if (!host) throw new Error("主机不存在");
+  if (input.targetLandingGroupId) {
+    if (tunnelId || input.forwardGroupId || input.targetRuleId || input.failoverEnabled) throw new Error("落地组主备仅支持独立直达规则，不能与其他主备或转发链叠加");
+    const active = await resolveLandingGroupActiveService(Number(input.targetLandingGroupId), actor.id);
+    if (active.group.hostIds.includes(hostId)) throw new Error("规则入口不能与落地组成员使用同一台主机，避免自转发回环");
+    if (input.targetLandingServiceId && Number(input.targetLandingServiceId) !== Number(active.service.id)) throw new Error("落地组主用 SS 已变化，请重新选择");
+    input = { ...input, targetLandingServiceId: Number(active.service.id) };
+  }
   const savedResult = await resolveSavedForwardResult(actor, input.targetRuleId);
   const landingTarget = await resolveLandingServiceTarget(actor, input.targetLandingServiceId);
   if (savedResult && landingTarget) throw new Error("只能选择一种引用落地目标");
@@ -1071,7 +1079,9 @@ export async function createDirectForwardRuleForActor(
       targetIp: normalizeRuleTargetIp(input.targetIp, { tunnelId }),
       targetRuleId: input.targetRuleId || null,
       targetLandingServiceId: input.targetLandingServiceId || null,
-      copySsHostMode: input.copySsHostMode || "landing",
+      targetLandingGroupId: input.targetLandingGroupId || null,
+      // A direct landing SS link bypasses the forwarding rule and cannot fail over.
+      copySsHostMode: input.targetLandingGroupId ? "entry" : input.copySsHostMode || "landing",
       gostMode: "direct",
       gostRelayHost: null,
       gostRelayPort: null,
@@ -1122,6 +1132,7 @@ export const crudRulesRouter = router({
       targetPort: z.number().min(1).max(65535),
       targetRuleId: z.number().int().positive().nullable().optional(),
       targetLandingServiceId: z.number().int().positive().nullable().optional(),
+      targetLandingGroupId: z.number().int().positive().nullable().optional(),
       copySsHostMode: z.enum(["landing", "entry"]).optional().default("landing"),
       isEnabled: z.boolean().optional().default(true),
       telegramErrorNotifyEnabled: z.boolean().optional().default(false),
@@ -1134,7 +1145,8 @@ export const crudRulesRouter = router({
     }))
     .mutation(async ({ input, ctx }) => {
       await requireRuleTelegramNotifyReady(input.telegramErrorNotifyEnabled);
-      if (input.targetLandingServiceId) {
+      if (input.targetLandingGroupId && (input.forwardGroupId || input.tunnelId || input.targetRuleId || input.failoverEnabled)) throw new Error("落地组主备仅支持独立直达规则");
+      if (input.targetLandingServiceId && !input.targetLandingGroupId) {
         const landingTarget = await resolveLandingServiceTarget(ctx.user, input.targetLandingServiceId);
         if (landingTarget) Object.assign(input, {
           targetLandingServiceId: landingTarget.id,
@@ -1411,6 +1423,7 @@ export const crudRulesRouter = router({
       const rule = await db.getForwardRuleById(input.id);
       if (!rule) throw new Error("规则不存在");
       if (ctx.user.role !== "admin" && rule.userId !== ctx.user.id) throw new Error("无权操作此规则");
+      if ((rule as any).targetLandingGroupId && input.forwardGroupId) throw new Error("转换为转发组规则前请先解绑落地组主备");
       if (input.targetRuleId && (rule as any).isForwardGroupTemplate
         && await isChainBackedForwardGroup((rule as any).forwardGroupId)) {
         throw new Error("引用已完成转发仅支持普通端口转发，不能作为转发链的出口");
@@ -2100,6 +2113,14 @@ export const crudRulesRouter = router({
       delete (data as any).blockTls;
       (data as any).hostId = nextHostIdForRule;
       if (input.targetIp !== undefined) (data as any).targetIp = normalizeRuleTargetIp(input.targetIp, { tunnelId: nextTunnelIdForRule });
+      if (Number((rule as any).targetLandingGroupId || 0) > 0 && (routeChanged
+        || (input.targetLandingServiceId !== undefined && Number(input.targetLandingServiceId || 0) !== Number((rule as any).targetLandingServiceId || 0))
+        || (input.targetRuleId !== undefined && Number(input.targetRuleId || 0) !== Number((rule as any).targetRuleId || 0))
+        || (input.targetIp !== undefined && String((data as any).targetIp) !== String((rule as any).targetIp))
+        || (input.targetPort !== undefined && Number(input.targetPort) !== Number((rule as any).targetPort)))) {
+        (data as any).targetLandingGroupId = null;
+      }
+      if ((rule as any).targetLandingGroupId && (data as any).targetLandingGroupId !== null) (data as any).copySsHostMode = "entry";
       if (
         input.failoverEnabled !== undefined ||
         input.failoverStrategy !== undefined ||

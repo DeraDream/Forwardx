@@ -120,6 +120,9 @@ import { recordAuthenticatedAgentActivity } from "./agentActivity";
 import { takeLandingPortChecks } from "./landingPortChecks";
 import { getFullChainRuntimeTasks, getFullChainNodes } from "./repositories/fullChainRepository";
 import { applyFullChainRuleStatus } from "./fullChainRuntime";
+import { getLandingGroup } from "./repositories/landingGroupRepository";
+import { makePendingSwitch, readPendingSwitch, type PendingLandingSwitch } from "./landingSwitchPending";
+import { landingGroupProbePlansForHost } from "./landingGroupProbes";
 
 // DNS 解析缓存：ruleId → 主目标上次解析到的 IPv4 地址。
 // 备用出站策略里的域名由 Agent 的 TCP 拨号和健康检查动态解析。
@@ -2362,14 +2365,32 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       console.log(`[DNS] rule=${rule.id} target changed: ${oldIp} → ${ruleResolvedIp}, re-applying`);
     }
 
-    const chainTargetsByRuleId = new Map<number, { targetIp: string; targetPort: number; originalTargetIp?: string }>();
+    const landingSwitches = new Map<number, PendingLandingSwitch>();
+    const chainTargetsByRuleId = new Map<number, { targetIp: string; targetPort: number; originalTargetIp?: string; landingServiceId?: number }>();
     await mapWithConcurrency(agentHostRules as any[], 16, async (rule: any) => {
-      const chainTarget = await resolveForwardChainTarget(rule);
+      const pending = readPendingSwitch(rule);
+      if (pending && runtimeBool(rule.isEnabled) && !runtimeBool(rule.pendingDelete)) {
+        landingSwitches.set(Number(rule.id), pending);
+        rule.isRunning = false;
+        return; // Complete this handoff before starting another one.
+      }
+      let chainTarget: { targetIp: string; targetPort: number; originalTargetIp?: string; landingServiceId?: number } | null = await resolveForwardChainTarget(rule);
+      if (!chainTarget && Number(rule.targetLandingGroupId) > 0 && !runtimeBool(rule.pendingDelete)) {
+        const group = await getLandingGroup(Number(rule.targetLandingGroupId));
+        const service = group?.activeServiceId ? await db.getLandingServiceById(Number(group.activeServiceId), true) as any : null;
+        if (service && group?.hostIds.includes(Number(service.hostId)) && Number(service.landingGroupId) === Number(group.id) && Number(group.userId) === Number(rule.userId) && service.isEnabled && service.status === "running") {
+          const address = String(service.endpoint || "").trim();
+          if (address) chainTarget = { targetIp: address, targetPort: Number(service.port), originalTargetIp: address, landingServiceId: Number(service.id) };
+        }
+      }
       if (!chainTarget) return;
       const oldTargetIp = String(rule.targetIp || "").trim();
       const oldTargetPort = Number(rule.targetPort) || 0;
       chainTargetsByRuleId.set(Number(rule.id), chainTarget);
-      if (oldTargetIp === chainTarget.targetIp && oldTargetPort === chainTarget.targetPort) return;
+      if (oldTargetIp === chainTarget.targetIp && oldTargetPort === chainTarget.targetPort && (!chainTarget.landingServiceId || Number(rule.targetLandingServiceId) === chainTarget.landingServiceId)) return;
+      const transition = chainTarget.landingServiceId && runtimeBool(rule.isEnabled)
+        ? makePendingSwitch(rule, oldTargetIp, oldTargetPort, chainTarget.targetIp, chainTarget.targetPort, responseIssuedAt) : null;
+      if (transition) landingSwitches.set(Number(rule.id), transition);
       if (runtimeBool(rule.isEnabled) && runtimeBool(rule.isRunning)) {
         actions.push({
           ruleId: rule.id,
@@ -2387,18 +2408,21 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       rule.targetIp = chainTarget.targetIp;
       rule.targetPort = chainTarget.targetPort;
       (rule as any)._originalTargetIp = chainTarget.originalTargetIp || chainTarget.targetIp;
+      if (chainTarget.landingServiceId) rule.targetLandingServiceId = chainTarget.landingServiceId;
       await db.updateForwardRule(Number(rule.id), {
         targetIp: chainTarget.originalTargetIp || chainTarget.targetIp,
         targetPort: chainTarget.targetPort,
+        ...(chainTarget.landingServiceId ? { targetLandingServiceId: chainTarget.landingServiceId, landingSwitchPending: transition ? JSON.stringify(transition) : null } : {}),
         isRunning: false,
       } as any);
-      appendPanelLog("info", `[ForwardChain] rule=${rule.id} target=${chainTarget.targetIp}:${chainTarget.targetPort}${chainTarget.originalTargetIp && chainTarget.originalTargetIp !== chainTarget.targetIp ? ` resolvedFrom=${chainTarget.originalTargetIp}` : ""} source=chain-config`);
+      appendPanelLog("info", `[${chainTarget.landingServiceId ? "LandingGroup" : "ForwardChain"}] rule=${rule.id} target=${chainTarget.targetIp}:${chainTarget.targetPort}${chainTarget.originalTargetIp && chainTarget.originalTargetIp !== chainTarget.targetIp ? ` resolvedFrom=${chainTarget.originalTargetIp}` : ""} source=${chainTarget.landingServiceId ? "landing-group" : "chain-config"}`);
     });
     for (const rule of rules as any[]) {
       const chainTarget = chainTargetsByRuleId.get(Number(rule.id));
       if (!chainTarget) continue;
       rule.targetIp = chainTarget.targetIp;
       rule.targetPort = chainTarget.targetPort;
+      if (chainTarget.landingServiceId) rule.targetLandingServiceId = chainTarget.landingServiceId;
       (rule as any)._originalTargetIp = chainTarget.originalTargetIp || chainTarget.targetIp;
       if ((agentHostRules as any[]).some((item: any) => Number(item.id) === Number(rule.id) && !runtimeBool(item.isRunning))) {
         rule.isRunning = false;
@@ -6184,6 +6208,9 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         recoverSeconds: Math.max(10, Number(probe.recoverSeconds || 120)),
       });
     }
+    for (const probe of await landingGroupProbePlansForHost(Number(host.id), agentAllRules as any[])) {
+      forwardGroupProbeMap.set(probe.probeKey, probe);
+    }
     const forwardGroupProbes = Array.from(forwardGroupProbeMap.values());
     const ruleLatencyProbes: any[] = (agentAllRules as any[])
       .filter((rule: any) => {
@@ -6647,6 +6674,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         && runtimeBool(rule.isEnabled)
         && !runtimeBool(rule.pendingDelete)
         && !runtimeBool(rule.isRunning)
+        && !landingSwitches.has(Number(rule.id)) // Listener presence alone cannot acknowledge old-target cleanup.
         && !rule.tunnelId
         && Number(rule.sourcePort || 0) > 0
         && localRuleMatches(rule, String(rule.forwardType || ""), Number(rule.sourcePort))
@@ -6664,6 +6692,18 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       }
     }
 
+    // A remove on the same listener port is deliberately filtered when an
+    // apply follows. Keep the old target cleanup attached to the new apply,
+    // otherwise the former TCP/UDP forwarding rules can survive a switch.
+    for (const action of actions) {
+      if (action?.op !== "apply") continue;
+      const pending = landingSwitches.get(Number(action.ruleId));
+      if (!pending || action.targetIp !== pending.to || Number(action.targetPort) !== pending.toPort) continue;
+      action.preCommands = [...buildForwardTargetCleanup({ ...action, id: action.ruleId }, pending.from, pending.port), ...(action.preCommands || [])];
+      action.issuedAt = pending.issuedAt;
+      action.reportStatus = true;
+      action.knownRunning = false;
+    }
     const effectiveActions = dropStalePortRemoveActions(actions, protectedRuleRemoveActionKeys);
     const actionBatchIssuedAt = resolveActionBatchIssuedAt(Number(host.id), effectiveActions, responseIssuedAt);
     const ruleByIdForDesired = new Map((rules as any[]).map((rule: any) => [Number(rule.id), rule]));

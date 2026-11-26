@@ -710,7 +710,10 @@ const IMPORT_TABLE_ORDER = [
   "users",
   "hosts",
   "landing_hosts",
+  "landing_groups",
+  "landing_group_members",
   "landing_services",
+  "landing_group_probe_latest",
   "landing_service_traffic_counters",
   "landing_service_traffic_stats",
   "landing_service_latency_stats",
@@ -1164,11 +1167,31 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
       row.userId = mapRequiredId(maps, "users", source.userId);
       return { row, existingWhere: { hostId: row.hostId } };
 
+    case "landing_groups":
+      row.userId = mapRequiredId(maps, "users", source.userId);
+      row.activeServiceId = null;
+      row.activeUnhealthySince = null;
+      row.primaryHealthySince = null;
+      row.recoveryServiceId = null;
+      return { row };
+
+    case "landing_group_members":
+      row.groupId = mapRequiredId(maps, "landing_groups", source.groupId);
+      row.hostId = mapRequiredId(maps, "hosts", source.hostId);
+      return { row, existingWhere: { groupId: row.groupId, hostId: row.hostId } };
+
     case "landing_services":
+      row.landingGroupId = mapOptionalId(maps, "landing_groups", source.landingGroupId);
       row.hostId = mapRequiredId(maps, "hosts", source.hostId);
       row.userId = mapRequiredId(maps, "users", source.userId);
       await assertImportedListenPort(row.hostId, source.port);
       return { row };
+
+    case "landing_group_probe_latest":
+      row.groupId = mapRequiredId(maps, "landing_groups", source.groupId);
+      row.serviceId = mapRequiredId(maps, "landing_services", source.serviceId);
+      row.sourceHostId = mapRequiredId(maps, "hosts", source.sourceHostId);
+      return { row, existingWhere: { groupId: row.groupId, serviceId: row.serviceId, sourceHostId: row.sourceHostId } };
 
     case "landing_service_traffic_counters":
       row.serviceId = mapRequiredId(maps, "landing_services", source.serviceId);
@@ -1256,6 +1279,8 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
       await assertImportedListenPort(row.hostId, source.sourcePort);
       row.tunnelId = mapOptionalId(maps, "tunnels", source.tunnelId);
       row.targetLandingServiceId = mapOptionalId(maps, "landing_services", source.targetLandingServiceId);
+      row.targetLandingGroupId = mapOptionalId(maps, "landing_groups", source.targetLandingGroupId);
+      row.landingSwitchPending = null; // An in-flight Agent action belongs to the source installation.
       row.forwardGroupId = mapOptionalId(maps, "forward_groups", source.forwardGroupId);
       row.forwardGroupRuleId = null;
       row.forwardGroupMemberId = mapOptionalId(maps, "forward_group_members", source.forwardGroupMemberId);

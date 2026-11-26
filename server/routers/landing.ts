@@ -7,6 +7,11 @@ import { reserveSpecificHostPort } from "../portReservations";
 import { getLandingPortCheck, requestLandingPortCheck } from "../landingPortChecks";
 import { assertPortNotSystemReserved, getSystemReservedPort } from "../systemReservedPorts";
 import { supportsManagedLandingSS } from "../landingHostEligibility";
+import { getLandingGroup, listLandingGroups, removeLandingGroup, saveLandingGroup } from "../repositories/landingGroupRepository";
+import { resolveLandingGroupActiveService } from "../landingGroupTarget";
+import { landingGroupPathHealthAt } from "../landingGroupProbes";
+import { getDb } from "../dbRuntime";
+import { forwardRules, landingServices, landingGroupProbeLatest } from "../../drizzle/schema";
 
 const METHODS = [
   "aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305",
@@ -58,11 +63,82 @@ async function activeLandingServiceReferences(serviceId: number) {
   // A rule which is already pending removal no longer has a usable runtime
   // reference.  It must not keep a landing service stuck in the UI while its
   // own Agent cleanup is finishing.
-  const rules = await db.getForwardRules();
-  return rules.filter((rule: any) => Number(rule.targetLandingServiceId || 0) === serviceId && !rule.pendingDelete);
+  const [rules, service] = await Promise.all([db.getForwardRules(), db.getLandingServiceById(serviceId, true)]);
+  return rules.filter((rule: any) => !rule.pendingDelete && (
+    Number(rule.targetLandingServiceId || 0) === serviceId
+    || (Number((service as any)?.landingGroupId || 0) > 0 && Number(rule.targetLandingGroupId || 0) === Number((service as any).landingGroupId))
+  ));
 }
 
+const landingGroupInput = z.object({
+  id: z.number().int().positive().optional(),
+  name: z.string().trim().min(1).max(128),
+  hostIds: z.array(z.number().int().positive()).min(1).max(10),
+});
+
 export const landingRouter = router({
+  groups: protectedProcedure.query(async ({ ctx }) => {
+    const groups = await listLandingGroups(isAdmin(ctx.user) ? undefined : Number(ctx.user.id));
+    if (!groups.length) return [];
+    const database = await getDb();
+    if (!database) return groups.map((group: any) => ({ ...group, memberHealth: [] }));
+    const [services, rules, probes] = await Promise.all([
+      database.select({ id: landingServices.id, hostId: landingServices.hostId, landingGroupId: landingServices.landingGroupId, endpoint: landingServices.endpoint, port: landingServices.port, status: landingServices.status }).from(landingServices),
+      database.select({ hostId: forwardRules.hostId, targetLandingGroupId: forwardRules.targetLandingGroupId, isEnabled: forwardRules.isEnabled, pendingDelete: forwardRules.pendingDelete }).from(forwardRules),
+      database.select().from(landingGroupProbeLatest),
+    ]);
+    return groups.map((group: any) => {
+      const sources: number[] = Array.from(new Set(rules.filter((rule: any) => Number(rule.targetLandingGroupId) === group.id && rule.isEnabled && !rule.pendingDelete).map((rule: any) => Number(rule.hostId))));
+      const memberHealth = group.hostIds.map((hostId: number) => {
+        const service = services.find((item: any) => item.landingGroupId === group.id && item.hostId === hostId);
+        const path = service && sources.length ? landingGroupPathHealthAt(probes.filter((probe: any) => probe.groupId === group.id), service, sources) : null;
+        return { hostId, serviceId: service?.id || null, serviceStatus: service?.status || "missing", pathHealth: !sources.length ? "unbound" : path === true ? "reachable" : path === false ? "blocked" : "pending" };
+      });
+      return { ...group, memberHealth };
+    });
+  }),
+  saveGroup: protectedProcedure.input(landingGroupInput).mutation(async ({ input, ctx }) => {
+    if (new Set(input.hostIds).size !== input.hostIds.length) throw new Error("落地组成员不可重复");
+    const existing = input.id ? await getLandingGroup(input.id) : null;
+    if (input.id && (!existing || (!isAdmin(ctx.user) && existing.userId !== Number(ctx.user.id)))) throw new Error("无权编辑该落地组");
+    if (existing && existing.hostIds.some((id: number) => !input.hostIds.includes(id))) {
+      const services = await db.getLandingServices(existing.userId, true);
+      if (services.some((service: any) => Number(service.landingGroupId) === existing.id && !input.hostIds.includes(Number(service.hostId)))) {
+        throw new Error("移除成员前请先处理其落地组 SS 服务");
+      }
+    }
+    for (const hostId of input.hostIds) {
+      const host = await requireEligibleHost(ctx.user, hostId);
+      if (Number(host.userId) !== Number(existing?.userId || ctx.user.id)) throw new Error("落地组只能包含同一用户的主机");
+    }
+    return { id: await saveLandingGroup({ id: input.id, name: input.name, userId: Number(existing?.userId || ctx.user.id), hostIds: input.hostIds }) };
+  }),
+  removeGroup: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ input, ctx }) => {
+    const group = await getLandingGroup(input.id);
+    if (!group || (!isAdmin(ctx.user) && group.userId !== Number(ctx.user.id))) throw new Error("无权删除该落地组");
+    await removeLandingGroup(input.id);
+    return { success: true };
+  }),
+  bindGroupRule: protectedProcedure.input(z.object({ groupId: z.number().int().positive(), ruleId: z.number().int().positive() })).mutation(async ({ input, ctx }) => {
+    const group = await getLandingGroup(input.groupId);
+    const rule = await db.getForwardRuleById(input.ruleId) as any;
+    if (!group || !rule || (!isAdmin(ctx.user) && (group.userId !== Number(ctx.user.id) || Number(rule.userId) !== Number(ctx.user.id)))) throw new Error("无权绑定落地组或转发规则");
+    if (group.userId !== Number(rule.userId)) throw new Error("落地组与规则必须属于同一用户");
+    if (group.hostIds.includes(Number(rule.hostId))) throw new Error("规则入口不能与落地组成员使用同一台主机，避免自转发回环");
+    if (rule.pendingDelete || rule.forwardGroupId || rule.isForwardGroupTemplate || rule.tunnelId || rule.targetRuleId || rule.failoverEnabled) throw new Error("当前仅支持未启用其他主备模式的独立直达转发规则绑定落地组");
+    if (rule.targetLandingGroupId && Number(rule.targetLandingGroupId) !== group.id) throw new Error("请先解绑原落地组");
+    const { service } = await resolveLandingGroupActiveService(group.id, group.userId);
+    await db.updateForwardRule(input.ruleId, { targetLandingGroupId: group.id, copySsHostMode: "entry" });
+    pushAgentRefresh(Number(rule.hostId), "landing-group-bind", { urgent: true });
+    return { activeServiceId: Number(service.id) };
+  }),
+  unbindGroupRule: protectedProcedure.input(z.object({ ruleId: z.number().int().positive() })).mutation(async ({ input, ctx }) => {
+    const rule = await db.getForwardRuleById(input.ruleId) as any;
+    if (!rule || (!isAdmin(ctx.user) && Number(rule.userId) !== Number(ctx.user.id))) throw new Error("无权修改此规则");
+    await db.updateForwardRule(input.ruleId, { targetLandingGroupId: null });
+    // The rule retains its last selected SS and target after unbinding.
+    return { success: true };
+  }),
   deployableHosts: protectedProcedure.query(async ({ ctx }) => {
     const ownerId = isAdmin(ctx.user) ? undefined : Number(ctx.user.id);
     const [hosts, markers] = await Promise.all([db.getHosts(ownerId), db.getLandingHosts(ownerId)]);
@@ -232,6 +308,46 @@ export const landingRouter = router({
     return { id, status: external ? "external" : "pending", external };
     } finally { reservation?.release(); }
   }),
+  deployGroup: protectedProcedure.input(z.object({
+    groupId: z.number().int().positive(), name: z.string().trim().min(1).max(80),
+    protocol: z.enum(["ss", "ss2022"]), method: z.enum(METHODS), password: z.string().trim().min(8).max(256),
+    port: z.number().int().min(1).max(65535),
+    latencyTargetHost: z.string().trim().min(1).max(255).default(DEFAULT_LANDING_LATENCY_TARGET),
+    latencyTargetPort: z.number().int().min(1).max(65535).default(443),
+  })).mutation(async ({ input, ctx }) => {
+    const group = await getLandingGroup(input.groupId);
+    if (!group || (!isAdmin(ctx.user) && group.userId !== Number(ctx.user.id))) throw new Error("无权使用该落地组");
+    if (input.protocol === "ss2022" !== input.method.startsWith("2022-")) throw new Error("协议和加密方式不匹配");
+    const results: Array<{ hostId: number; status: "created" | "existing" | "failed"; serviceId?: number; message?: string }> = [];
+    for (const hostId of group.hostIds) {
+      try {
+        const host = await requireEligibleHost(ctx.user, hostId);
+        if (Number(host.userId) !== group.userId) throw new Error("组内主机所属用户不一致");
+        const existing = (await db.getLandingServicesForHost(hostId, true, true) as any[]).find(service => Number(service.landingGroupId) === group.id);
+        if (existing) {
+          if (existing.protocol !== input.protocol || existing.method !== input.method || existing.password !== input.password || Number(existing.port) !== input.port) {
+            throw new Error("该成员已有落地组 SS，但配置与本次批量部署不一致；不会覆盖");
+          }
+          results.push({ hostId, status: "existing", serviceId: Number(existing.id), message: `已有落地组 SS（${existing.status}）` });
+          continue;
+        }
+        const endpoint = exitEndpoint(host);
+        if (!endpoint) throw new Error("主机缺少公网 IP");
+        // Reuse the single-host creation path for ownership, port reservations,
+        // method validation and Agent dispatch. Failures never overwrite a service.
+        const created = await landingRouter.createCaller(ctx).create({
+          hostId, name: input.name, protocol: input.protocol, method: input.method,
+          password: input.password, port: input.port, endpoint,
+          latencyTargetHost: input.latencyTargetHost, latencyTargetPort: input.latencyTargetPort,
+        });
+        await db.updateLandingService(created.id, { landingGroupId: group.id });
+        results.push({ hostId, status: "created", serviceId: created.id });
+      } catch (error) {
+        results.push({ hostId, status: "failed", message: error instanceof Error ? error.message : "部署失败" });
+      }
+    }
+    return { results };
+  }),
   update: protectedProcedure.input(z.object({
     id: z.number().int().positive(), name: z.string().trim().min(1).max(80), protocol: z.enum(["ss", "ss2022"]), method: z.enum(METHODS), password: z.string().trim().min(8).max(256), port: z.number().int().min(1).max(65535), endpoint: z.string().trim().min(1).max(255), latencyTargetHost: z.string().trim().min(1).max(255), latencyTargetPort: z.number().int().min(1).max(65535),
   })).mutation(async ({ input, ctx }) => {
@@ -239,6 +355,9 @@ export const landingRouter = router({
     if (!service) throw new Error("落地服务不存在");
     if (!isAdmin(ctx.user) && Number(service.userId) !== Number(ctx.user.id)) throw new Error("无权编辑该服务");
     if (service.status === "removing") throw new Error("落地服务正在删除，请等待清理完成");
+    if (service.landingGroupId && (input.port !== Number(service.port) || input.protocol !== service.protocol || input.method !== service.method || input.password !== service.password || input.endpoint !== service.endpoint)) {
+      throw new Error("落地组 SS 的地址、端口及认证配置不能单独修改成员；请先解绑主备");
+    }
     const wants2022 = input.protocol === "ss2022";
     if (wants2022 !== input.method.startsWith("2022-")) throw new Error("SS2022 必须使用 2022 加密方式，普通 SS 不能使用 2022 加密方式");
     if (!service.isExternal) {

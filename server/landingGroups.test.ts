@@ -1,0 +1,102 @@
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+
+test("landing groups save only membership and batch SS without overwriting existing services", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-landing-groups-"));
+  try {
+    const script = String.raw`
+      import assert from "node:assert/strict";
+      import path from "node:path";
+      import { pathToFileURL } from "node:url";
+      const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
+      const runtime = await import(url("server/dbRuntime.ts"));
+      const schema = await import(url("server/dbSchema.ts"));
+      const { landingRouter } = await import(url("server/routers/landing.ts"));
+      const db = await import(url("server/db.ts"));
+      const { runLandingGroupFailoverSweep } = await import(url("server/landingGroupFailover.ts"));
+      const { recordLandingGroupProbe, landingGroupProbeKey, landingGroupProbePlansForHost } = await import(url("server/landingGroupProbes.ts"));
+      const { rulesRouter } = await import(url("server/routers/rules.ts"));
+      try {
+        await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
+        await schema.ensureDatabaseSchema();
+        for (const [id, role] of [[1, "user"], [2, "user"]]) await runtime.executeRaw('INSERT INTO "users" ("id", "username", "password", "role") VALUES (?, ?, ?, ?)', [id, "user-" + id, "x", role]);
+        for (const [id, owner, version] of [[11, 1, "2.4.139"], [12, 1, "2.4.139"], [13, 1, "2.4.139-iptables-only.1.0.2"], [14, 2, "2.4.139"], [15, 1, "2.4.139"]]) await runtime.executeRaw('INSERT INTO "hosts" ("id", "name", "ip", "ipv4", "userId", "agentVersion") VALUES (?, ?, ?, ?, ?, ?)', [id, "host-" + id, "198.51.100." + id, "198.51.100." + id, owner, version]);
+        const caller = (id) => landingRouter.createCaller({ req: { headers: {} }, res: { clearCookie() {} }, user: { id, username: "user-" + id, role: "user", accountEnabled: true }, authSession: null, authFailureReason: null });
+        const owner = caller(1);
+        await assert.rejects(() => owner.saveGroup({ name: "bad", hostIds: [11, 13] }), /标准 Agent/);
+        await assert.rejects(() => owner.saveGroup({ name: "bad", hostIds: [11, 14] }), /无权/);
+        await assert.rejects(() => owner.saveGroup({ name: "bad", hostIds: [11, 11] }), /不可重复/);
+        const group = await owner.saveGroup({ name: "group", hostIds: [12, 11] });
+        assert.deepEqual((await owner.groups())[0].hostIds, [12, 11]);
+        assert.deepEqual(await owner.list(), [], "saving a group must not deploy SS");
+        assert.deepEqual(await caller(2).groups(), []);
+        await assert.rejects(() => caller(2).deployGroup({ groupId: group.id, name: "SS", protocol: "ss", method: "aes-256-gcm", password: "12345678", port: 32123 }), /无权/);
+        const input = { groupId: group.id, name: "SS", protocol: "ss", method: "aes-256-gcm", password: "12345678", port: 32123 };
+        const deployed = await owner.deployGroup(input);
+        assert.deepEqual(deployed.results.map(item => item.status), ["created", "created"]);
+        const services = await owner.list();
+        assert.deepEqual(services.map(service => service.landingGroupId), [group.id, group.id]);
+        assert.deepEqual(services.map(service => service.endpoint).sort(), ["198.51.100.11", "198.51.100.12"]);
+        assert.deepEqual((await owner.deployGroup(input)).results.map(item => item.status), ["existing", "existing"]);
+        assert.deepEqual((await owner.deployGroup({ ...input, password: "different-password" })).results.map(item => item.status), ["failed", "failed"], "a retry must not silently reuse different credentials");
+        const another = await owner.saveGroup({ name: "partial", hostIds: [11, 12] });
+        await owner.create({ hostId: 12, name: "occupied", protocol: "ss", method: "aes-256-gcm", password: "12345678", port: 32124, endpoint: "198.51.100.12" });
+        const partial = await owner.deployGroup({ ...input, groupId: another.id, port: 32124 });
+        assert.deepEqual(partial.results.map(item => item.status), ["created", "failed"], "one occupied host cannot block another host");
+        for (const service of services) await db.updateLandingService(service.id, { status: "running" });
+        for (const hostId of [11, 12]) await runtime.executeRaw('UPDATE "hosts" SET "isOnline" = 1, "lastHeartbeat" = ? WHERE "id" = ?', [Math.floor(Date.now() / 1000), hostId]);
+        const loopRuleId = await db.createForwardRule({ userId: 1, hostId: 11, name: "loop-rule", forwardType: "iptables", protocol: "both", sourcePort: 31001, targetIp: "198.51.100.12", targetPort: 32123, isEnabled: true });
+        await assert.rejects(() => owner.bindGroupRule({ groupId: group.id, ruleId: loopRuleId }), /自转发回环/);
+        const ruleId = await db.createForwardRule({ userId: 1, hostId: 15, name: "group-rule", forwardType: "iptables", protocol: "both", sourcePort: 31000, targetIp: "198.51.100.12", targetPort: 32123, isEnabled: true });
+        const bound = await owner.bindGroupRule({ groupId: group.id, ruleId });
+        assert.ok(bound.activeServiceId > 0);
+        assert.equal((await db.getForwardRuleById(ruleId)).targetLandingGroupId, group.id);
+        assert.equal((await db.getForwardRuleById(ruleId)).copySsHostMode, "entry", "group SS links must use the forwarding entry");
+        await assert.rejects(() => owner.remove({ id: services.find(service => service.id !== bound.activeServiceId).id }), /仍被/, "standby SS remains protected while the group is in use");
+        await assert.rejects(() => caller(2).unbindGroupRule({ ruleId }), /无权/);
+        const planned = await landingGroupProbePlansForHost(15, [await db.getForwardRuleById(ruleId)]);
+        assert.equal(planned.length, 2, "the entry Agent probes each landing SS endpoint");
+        for (const service of services) {
+          const report = { groupId: group.id, memberId: service.id, probeType: "landing", method: "tcp", targetIp: service.endpoint, targetPort: service.port, probeKey: landingGroupProbeKey(group.id, service.id, 15, service.endpoint, service.port), isTimeout: service.id === bound.activeServiceId };
+          assert.equal(await recordLandingGroupProbe(15, report), true);
+          assert.equal(await recordLandingGroupProbe(14, report), false, "another host cannot forge the entry Agent's probe result");
+          assert.equal(await recordLandingGroupProbe(15, { ...report, targetPort: service.port + 1 }), false, "a mismatched listener is not a valid SS health probe");
+          assert.equal(await recordLandingGroupProbe(15, { ...report, probeKey: "forged" }), false);
+        }
+        const healthBeforeSwitch = (await owner.groups())[0].memberHealth;
+        assert.deepEqual(healthBeforeSwitch.map(item => item.pathHealth), ["blocked", "reachable"]);
+        const tick = Date.now();
+        await runLandingGroupFailoverSweep(tick);
+        assert.equal((await owner.groups())[0].activeServiceId, bound.activeServiceId);
+        await runLandingGroupFailoverSweep(tick + 61_000);
+        assert.notEqual((await owner.groups())[0].activeServiceId, bound.activeServiceId);
+        assert.equal((await db.getForwardRuleById(ruleId)).targetIp, "198.51.100.12", "the scheduler does not bypass the Agent cleanup when switching");
+        const primaryService = services.find(service => service.id === bound.activeServiceId);
+        await recordLandingGroupProbe(15, { groupId: group.id, memberId: primaryService.id, probeType: "landing", method: "tcp", targetIp: primaryService.endpoint, targetPort: primaryService.port, probeKey: landingGroupProbeKey(group.id, primaryService.id, 15, primaryService.endpoint, primaryService.port), isTimeout: false });
+        await runtime.executeRaw('UPDATE "landing_group_probe_latest" SET "checkedAt" = ?', [Math.floor((tick + 62_000) / 1000)]);
+        await runLandingGroupFailoverSweep(tick + 62_000);
+        await runtime.executeRaw('UPDATE "landing_group_probe_latest" SET "checkedAt" = ?', [Math.floor((tick + 183_000) / 1000)]);
+        await runLandingGroupFailoverSweep(tick + 183_000);
+        assert.equal((await owner.groups())[0].activeServiceId, bound.activeServiceId);
+        await owner.unbindGroupRule({ ruleId });
+        assert.equal((await db.getForwardRuleById(ruleId)).targetLandingGroupId, null);
+        const ruleCaller = rulesRouter.createCaller({ req: { headers: {} }, res: { clearCookie() {} }, user: { id: 1, username: "user-1", role: "admin", accountEnabled: true }, authSession: null, authFailureReason: null });
+        const fromGroup = await ruleCaller.create({ hostId: 15, name: "via-group", forwardType: "iptables", protocol: "both", sourcePort: 31002, targetIp: "198.51.100.12", targetPort: 32123, targetLandingServiceId: bound.activeServiceId, targetLandingGroupId: group.id });
+        assert.equal((await db.getForwardRuleById(fromGroup.id)).targetLandingGroupId, group.id);
+        assert.equal((await db.getForwardRuleById(fromGroup.id)).copySsHostMode, "entry");
+        await ruleCaller.update({ id: fromGroup.id, name: "renamed-via-group" });
+        assert.equal((await db.getForwardRuleById(fromGroup.id)).targetLandingGroupId, group.id, "renaming must retain automatic failover");
+        await ruleCaller.update({ id: fromGroup.id, targetLandingServiceId: services.find(service => service.id !== bound.activeServiceId).id });
+        assert.equal((await db.getForwardRuleById(fromGroup.id)).targetLandingGroupId, null, "manual retargeting detaches automatic failover");
+        await assert.rejects(() => owner.saveGroup({ id: group.id, name: "group", hostIds: [11] }), /先处理/);
+        await assert.rejects(() => owner.removeGroup({ id: group.id }), /仍有关联 SS/);
+      } finally { await runtime.closeDatabase(); }
+    `;
+    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", script], { cwd: process.cwd(), env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "landing.db") }, encoding: "utf8" });
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});

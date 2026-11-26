@@ -26,6 +26,7 @@ import { billingMonthlyBoundary, billingStartOfCalendarDay } from "@shared/billi
 import { expireStalePendingOrders, recoverStaleProcessingPaymentOrders } from "./payment";
 import { applyFullChainLatencyTestResult, startFullChainLatencyCheck } from "./fullChainRuntime";
 import { clearExpiredPanelUpgradeLog } from "./panelUpgradeLog";
+import { runLandingGroupFailoverSweep } from "./landingGroupFailover";
 
 type TimedOutForwardTest = {
   id: number;
@@ -675,6 +676,7 @@ export function startScheduler() {
   const hostStatusSweep = createNonOverlappingScheduledTask("host status sweep", async () => {
     await runHostStatusSweep();
   });
+  const landingGroupSweep = createNonOverlappingScheduledTask("landing group failover", runLandingGroupFailoverSweep);
   const reminderSweep = createNonOverlappingScheduledTask("email and Telegram reminders", async () => {
     await runEmailReminders();
     await runTelegramReminders();
@@ -713,6 +715,7 @@ export function startScheduler() {
   };
 
   repeatAfter(hostStatusSweep, 30 * 1000, 5_000);
+  repeatAfter(landingGroupSweep, 10 * 1000, 8_000);
   startSelfTestSweepTimer(async () => { await selfTestTimeoutSweep(); });
   void recoverPendingSelfTestSweep();
   // Agent probe reports and host state transitions trigger failover work.

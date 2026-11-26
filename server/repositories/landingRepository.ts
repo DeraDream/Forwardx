@@ -1,5 +1,5 @@
 import { and, asc, eq } from "drizzle-orm";
-import { landingHosts, landingServices } from "../../drizzle/schema";
+import { landingHosts, landingServices, landingGroupProbeLatest } from "../../drizzle/schema";
 import { executeRaw, getDatabaseKind, getDb, insertAndGetId, nowDate, queryRaw } from "../dbRuntime";
 import { epochSeconds, quoteIdentifier } from "../dbCompat";
 
@@ -114,6 +114,7 @@ export async function updateLandingService(id: number, patch: any) {
 export async function deleteLandingService(id: number) {
   const db = await getDb();
   if (!db) return;
+  await db.delete(landingGroupProbeLatest).where(eq(landingGroupProbeLatest.serviceId, id));
   await db.delete(landingServices).where(eq(landingServices.id, id));
 }
 

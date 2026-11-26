@@ -15,6 +15,7 @@ import { withKeyedTaskLock } from "./keyedTaskLock";
 import { agentStatusOrderGuard, agentStatusOrderingKey } from "./agentStatusOrdering";
 import { pruneMapEntries, setBoundedMapValue } from "./boundedCache";
 import { completeLandingPortCheck } from "./landingPortChecks";
+import { readPendingSwitch } from "./landingSwitchPending";
 import { applyFullChainLandingStatus, applyFullChainRuleStatus, applyFullChainRuntimeStatus } from "./fullChainRuntime";
 
 function isForwardXTunnel(tunnel: any) {
@@ -371,6 +372,17 @@ async function applyAgentRuleStatus(host: any, payload: any): Promise<AgentStatu
     return { status: 200, body: { success: true, ignored: true, stale: true } };
   }
 
+  const pendingSwitch = readPendingSwitch(rule as any);
+  if (pendingSwitch && (rule as any).isEnabled && !(rule as any).pendingDelete) {
+    if (Number(host.id) !== Number(rule.hostId) || Number(payload?.issuedAt) !== pendingSwitch.issuedAt || payload?.actionOp !== "apply") {
+      return { status: 200, body: { success: true, ignored: true, stale: true } };
+    }
+    if (isRunning && payload?.actionSucceeded === true) {
+      await db.acknowledgeLandingSwitch(ruleId, (rule as any).landingSwitchPending);
+      return { status: 200, body: { success: true } };
+    }
+    if (isRunning) return { status: 200, body: { success: true, ignored: true } }; // No positive action confirmation.
+  }
   const wasRunning = !!(rule as any).isRunning;
   await db.updateRuleRunningStatus(ruleId, !!isRunning, !isRunning && payload?.actionSucceeded === true && payload?.actionOp === "remove");
   await applyFullChainRuleStatus(ruleId, !!isRunning, message);

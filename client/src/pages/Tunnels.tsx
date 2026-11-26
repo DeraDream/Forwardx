@@ -133,6 +133,7 @@ import {
 import MultiHopEditor from "@/components/MultiHopEditor";
 import { ForwardGroupsContent } from "@/pages/ForwardGroups";
 import { LandingHostCreateForm, LandingHostManagement } from "@/components/LandingManagement";
+import { LandingGroups } from "@/components/LandingGroups";
 
 const loadReactGlobe = () => import("react-globe.gl");
 const ReactGlobe = lazy(loadReactGlobe) as typeof import("react-globe.gl").default;
@@ -817,7 +818,7 @@ const TUNNEL_SECTION_ITEMS = [
   { value: "groups", label: "转发组", icon: ShieldCheck },
   { value: "entries", label: "入口组", icon: LogIn },
   { value: "exits", label: "出口组", icon: LogOut },
-  { value: "landing", label: "落地机", icon: Server },
+  { value: "landing", label: "落地组 / 落地机", icon: Server },
 ] as const satisfies readonly SlidingTabItem<TunnelSection>[];
 
 const TUNNEL_SECTION_STORAGE_KEY = "forwardx.tunnels.section";
@@ -4575,6 +4576,7 @@ function TunnelsContent() {
         </TabsContent>
         <TabsContent value="landing" className="space-y-4">
           <TunnelSectionTransition transitionKey={`landing-host-markers-${groupViewMode}`}>
+            <LandingGroups />
             <LandingHostManagement viewMode={groupViewMode} />
           </TunnelSectionTransition>
         </TabsContent>

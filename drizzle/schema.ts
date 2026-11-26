@@ -341,6 +341,35 @@ export const landingHosts = table("landing_hosts", {
 });
 export type LandingHost = typeof landingHosts.$inferSelect;
 
+// A landing group records ordered membership only. Saving it never starts SS.
+export const landingGroups = table("landing_groups", {
+  id: serial("id"),
+  name: text("name").notNull(),
+  userId: int("userId").notNull(),
+  activeServiceId: int("activeServiceId"),
+  activeUnhealthySince: epoch("activeUnhealthySince"),
+  primaryHealthySince: epoch("primaryHealthySince"),
+  recoveryServiceId: int("recoveryServiceId"),
+  createdAt: epoch("createdAt").notNull().default(nowDefault()),
+  updatedAt: epoch("updatedAt").notNull().default(nowDefault()),
+});
+export const landingGroupMembers = table("landing_group_members", {
+  id: serial("id"),
+  groupId: int("groupId").notNull(),
+  hostId: int("hostId").notNull(),
+  priority: int("priority").notNull().default(0),
+});
+export const landingGroupProbeLatest = table("landing_group_probe_latest", {
+  id: serial("id"),
+  groupId: int("groupId").notNull(),
+  serviceId: int("serviceId").notNull(),
+  sourceHostId: int("sourceHostId").notNull(),
+  targetIp: text("targetIp").notNull(),
+  targetPort: int("targetPort").notNull(),
+  isTimeout: boolean("isTimeout").notNull(),
+  checkedAt: epoch("checkedAt").notNull(),
+});
+
 // Multiple Shadowsocks services may belong to one marked host.  `password`
 // is never returned by the public list API; it is retained for the Agent
 // desired-state reconciliation and for displaying the connection URI to the
@@ -350,6 +379,7 @@ export const landingServices = table("landing_services", {
   hostId: int("hostId").notNull(),
   userId: int("userId").notNull(),
   name: text("name").notNull(),
+  landingGroupId: int("landingGroupId"),
   protocol: varchar("protocol", { length: 16 }).notNull().default("ss"),
   method: varchar("method", { length: 96 }).notNull(),
   password: text("password").notNull(),
@@ -433,6 +463,8 @@ export const forwardRules = table("forward_rules", {
   targetRuleId: int("targetRuleId"),
   // Resolved IP/port of a managed landing Shadowsocks listener.
   targetLandingServiceId: int("targetLandingServiceId"),
+  targetLandingGroupId: int("targetLandingGroupId"),
+  landingSwitchPending: text("landingSwitchPending"),
   // Display-only preference for copying the final SS URI; never changes the runtime target.
   copySsHostMode: varchar("copySsHostMode", { length: 16 }).notNull().default("landing"),
   telegramErrorNotifyEnabled: boolean("telegramErrorNotifyEnabled").notNull().default(false),

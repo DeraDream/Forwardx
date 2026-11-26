@@ -72,8 +72,12 @@ function LandingProbeDialog({ service, open, onOpenChange }: { service: any | nu
 export function LandingCreateForm({ onCancel, onCreated }: { onCancel: () => void; onCreated: () => void }) {
   const utils = trpc.useUtils();
   const eligibleQuery = trpc.landing.deployableHosts.useQuery(undefined, { refetchInterval: 5000 });
+  const groupsQuery = trpc.landing.groups.useQuery();
   const eligible = eligibleQuery.data || [];
   const [hostId, setHostId] = useState(-1);
+  const groupId = hostId <= -1001 ? -1000 - hostId : 0;
+  const selectedGroup = (groupsQuery.data || []).find((group: { id: number }) => group.id === groupId);
+  const [groupResults, setGroupResults] = useState<Array<{ hostId: number; status: string; message?: string }>>([]);
   const [name, setName] = useState("");
   const [protocol, setProtocol] = useState<"ss" | "ss2022">("ss");
   const [method, setMethod] = useState(normalMethods[1]);
@@ -116,6 +120,16 @@ export function LandingCreateForm({ onCancel, onCreated }: { onCancel: () => voi
     },
     onError: (error) => toast.error(error.message),
   });
+  const deployGroup = trpc.landing.deployGroup.useMutation({
+    onSuccess: async ({ results }) => {
+      setGroupResults(results);
+      await utils.landing.list.invalidate();
+      const failed = results.filter(item => item.status === "failed").length;
+      if (failed) toast.error(`${results.length - failed} 台已创建或已存在，${failed} 台失败；请查看各主机结果`);
+      else { toast.success(`${results.length} 台落地组 SS 已创建或已存在`); onCreated(); }
+    },
+    onError: error => toast.error(error.message),
+  });
   const randomize = async () => {
     const next = await utils.landing.random.fetch();
     setPassword(next.password);
@@ -134,16 +148,18 @@ export function LandingCreateForm({ onCancel, onCreated }: { onCancel: () => voi
       setSsLinkStatus({ ok: false, message: error.message || "SS 链接解析失败" });
     }
   };
-  const save = () => hostId === -1 ? toast.error("请选择落地机或“不关联落地机”") : hostId === -2 && !ssLinkStatus?.ok ? toast.error("请粘贴并解析有效的 SS 链接") : create.mutate({ ...(hostId > 0 ? { hostId } : {}), name, protocol, method: method as any, password, port, endpoint: entryIp, latencyTargetHost, latencyTargetPort });
+  const save = () => hostId === -1 ? toast.error("请选择落地机、落地组或“不关联落地机”") : groupId ? deployGroup.mutate({ groupId, name, protocol, method: method as any, password, port, latencyTargetHost, latencyTargetPort }) : hostId === -2 && !ssLinkStatus?.ok ? toast.error("请粘贴并解析有效的 SS 链接") : create.mutate({ ...(hostId > 0 ? { hostId } : {}), name, protocol, method: method as any, password, port, endpoint: entryIp, latencyTargetHost, latencyTargetPort });
   const portClass = portCheck?.available === false ? "border-destructive pr-16" : portCheck?.available === true ? "border-emerald-500 pr-14" : "pr-16";
   return <>
     <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pb-5 pr-1">
       <div className="space-y-2 rounded-md border border-emerald-500/20 bg-emerald-500/5 p-2.5">
-        <Label>部署到主机（标准 Agent）</Label>
-        <select className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={hostId} onChange={event => { const next = Number(event.target.value); const host = eligible.find((item: any) => Number(item.hostId) === next)?.host; setHostId(next); setEntryIp(String(host?.exitIp || host?.ip || "")); setPortCheck(null); setSsLink(""); setSsLinkStatus(null); }}>
+        <Label>部署到主机或落地组（标准 Agent）</Label>
+        <select className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={hostId} onChange={event => { const next = Number(event.target.value); const host = eligible.find((item: any) => Number(item.hostId) === next)?.host; setHostId(next); setGroupResults([]); setEntryIp(String(host?.exitIp || host?.ip || "")); setPortCheck(null); setSsLink(""); setSsLinkStatus(null); }}>
           <option value="-1">请选择落地机</option><option value="-2">不关联落地机（手动填写外部 SS）</option>
           {eligible.map((item: any) => <option key={item.hostId} value={item.hostId} disabled={item.hostDisabled}>{item.host.name} · {item.host.ip}{item.hostDisabled ? "（SS 总开关已关闭）" : ""}</option>)}
+          {(groupsQuery.data || []).map((group: { id: number; name: string; hostIds: number[] }) => <option key={`group-${group.id}`} value={-1000 - group.id}>落地组 · {group.name}（{group.hostIds.length} 台）</option>)}
         </select>
+        {selectedGroup && <p className="text-xs text-muted-foreground">按组内优先级批量部署；成员共用端口与密码，每台使用自己的公网 IP。已有 SS 不会被覆盖；创建后在转发规则中选择此组才能启用主备。</p>}
         {selectedHost ? <p className="text-xs text-muted-foreground">1. {selectedHost.name}</p> : hostId === -2 ? <p className="text-xs text-muted-foreground">外部 SS 不会部署到任何落地机，但可被端口转发和转发链引用。</p> : null}
       </div>
       <div className="grid gap-3 sm:grid-cols-3">
@@ -152,11 +168,12 @@ export function LandingCreateForm({ onCancel, onCreated }: { onCancel: () => voi
         <div className="space-y-2"><Label>加密方式</Label><select className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={method} onChange={event => setMethod(event.target.value)}>{(protocol === "ss" ? normalMethods : methods2022).map(item => <option key={item}>{item}</option>)}</select></div>
       </div>
       <div className="grid gap-3 sm:grid-cols-[10rem_minmax(0,1fr)]"><div className="space-y-2"><Label>端口</Label><Input type="number" min={1} max={65535} value={port} className={portClass} onChange={event => { setPort(Number(event.target.value)); setPortCheck(null); }} onBlur={() => void checkPort()} /></div><div className="space-y-2"><Label>密码</Label><Input value={password} onChange={event => setPassword(event.target.value)} /></div></div>
-      <div className="space-y-2"><Label>入口 IP</Label><Input value={entryIp} placeholder={selectedHost?.exitIp || selectedHost?.ip || "例如：203.0.113.10"} onChange={event => setEntryIp(event.target.value)} /><p className="text-xs text-muted-foreground">{selectedHost ? "默认使用落地机公网出口 IP；有独立入口 IP 时填写它。" : "填写外部 SS 的公网 IP 或域名；引用此 SS 会连接该地址。"}</p></div>
+      {!groupId && <div className="space-y-2"><Label>入口 IP</Label><Input value={entryIp} placeholder={selectedHost?.exitIp || selectedHost?.ip || "例如：203.0.113.10"} onChange={event => setEntryIp(event.target.value)} /><p className="text-xs text-muted-foreground">{selectedHost ? "默认使用落地机公网出口 IP；有独立入口 IP 时填写它。" : "填写外部 SS 的公网 IP 或域名；引用此 SS 会连接该地址。"}</p></div>}
       <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_8rem]"><div className="space-y-2"><Label>延迟测试地址</Label><Input value={latencyTargetHost} onChange={event => setLatencyTargetHost(event.target.value)} /></div><div className="space-y-2"><Label>测试端口</Label><Input type="number" value={latencyTargetPort} onChange={event => setLatencyTargetPort(Number(event.target.value))} /></div></div>
-      {selectedHost ? <Button type="button" variant="outline" className="w-full" onClick={() => void randomize()}>随机生成密码和端口</Button> : hostId === -2 ? <div className="space-y-1"><Label>SS 链接</Label><Input value={ssLink} placeholder="粘贴 ss:// 链接后自动解析" onChange={event => parseSsLink(event.target.value)} />{ssLinkStatus && <p className={`text-xs ${ssLinkStatus.ok ? "text-sky-600" : "text-destructive"}`}>{ssLinkStatus.message}</p>}</div> : null}
+      {selectedHost || selectedGroup ? <Button type="button" variant="outline" className="w-full" onClick={() => void randomize()}>随机生成密码和端口</Button> : hostId === -2 ? <div className="space-y-1"><Label>SS 链接</Label><Input value={ssLink} placeholder="粘贴 ss:// 链接后自动解析" onChange={event => parseSsLink(event.target.value)} />{ssLinkStatus && <p className={`text-xs ${ssLinkStatus.ok ? "text-sky-600" : "text-destructive"}`}>{ssLinkStatus.message}</p>}</div> : null}
     </div>
-    <DialogFooter className="shrink-0 gap-2 border-t border-border/60 bg-background/95 pt-3"><Button variant="outline" onClick={onCancel}>取消</Button><Button onClick={save} disabled={create.isPending || !name.trim() || !password || !entryIp.trim() || port < 1 || port > 65535 || portCheck?.available === false || hostId === -2 && !ssLinkStatus?.ok}>{create.isPending ? "处理中..." : "创建"}</Button></DialogFooter>
+    {groupResults.length > 0 && <div className="max-h-32 overflow-y-auto text-xs">{groupResults.map(item => <div key={item.hostId}>{eligible.find(host => host.hostId === item.hostId)?.host.name || `主机 #${item.hostId}`}：{item.status === "created" ? "已提交部署" : item.status === "existing" ? "已有服务" : item.message || "创建失败"}</div>)}</div>}
+    <DialogFooter className="shrink-0 gap-2 border-t border-border/60 bg-background/95 pt-3"><Button variant="outline" onClick={onCancel}>取消</Button><Button onClick={save} disabled={create.isPending || deployGroup.isPending || !name.trim() || !password || (!groupId && !entryIp.trim()) || port < 1 || port > 65535 || portCheck?.available === false || hostId === -2 && !ssLinkStatus?.ok}>{create.isPending || deployGroup.isPending ? "处理中..." : groupId ? "批量创建" : "创建"}</Button></DialogFooter>
   </>;
   /*
   return <><div className="min-h-0 flex-1 space-y-3 overflow-y-auto pb-5 pr-1"><div className="space-y-2 rounded-md border border-emerald-500/20 bg-emerald-500/5 p-2.5"><div className="space-y-2"><Label>使用落地机</Label><select className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={hostId} onChange={(event) => { const nextHostId = Number(event.target.value); const host = eligible.find((item: any) => Number(item.hostId) === nextHostId)?.host; setHostId(nextHostId); setEntryIp(String(host?.exitIp || host?.ip || "")); setPortCheck(null); setSsLinkStatus(null); }}><option value="-1">请选择落地机</option><option value="-2">不关联落地机（手动填写外部 SS）</option>{eligible.map((item: any) => <option key={item.hostId} value={item.hostId}>{item.host.name} · {item.host.ip}</option>)}</select></div>{selectedHost ? <div className="flex items-center gap-1.5 text-xs text-muted-foreground"><span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />1. {selectedHost.name}</div> : hostId === -2 ? <p className="text-xs text-muted-foreground">外部 SS 不会部署到任何落地机，但可被端口转发和转发链引用。</p> : null}</div><div className="grid gap-3 sm:grid-cols-3"><div className="space-y-2"><Label>名称</Label><Input value={name} placeholder="例如：香港 SS" onChange={(event) => setName(event.target.value)} /></div><div className="space-y-2"><Label>类型</Label><select className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={protocol} onChange={(event) => { const next = event.target.value as "ss" | "ss2022"; setProtocol(next); setMethod(next === "ss" ? normalMethods[1] : methods2022[0]); }}><option value="ss">Shadowsocks</option><option value="ss2022">Shadowsocks 2022</option></select></div><div className="space-y-2"><Label>加密方式</Label><select className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={method} onChange={(event) => setMethod(event.target.value)}>{(protocol === "ss" ? normalMethods : methods2022).map((item) => <option key={item}>{item}</option>)}</select></div></div><div className="grid gap-3 sm:grid-cols-[10rem_minmax(0,1fr)]"><div className="space-y-2"><Label>端口</Label><div className="relative"><Input type="number" min={1} max={65535} value={port} className={portClass} onChange={(event) => { setPort(Number(event.target.value)); setPortCheck(null); }} onBlur={() => void checkPort()} />{portCheck && <span className={`absolute right-2.5 top-1/2 inline-flex -translate-y-1/2 items-center gap-1 text-[11px] font-medium ${portCheck.available === false ? "text-destructive" : portCheck.available === true ? "text-emerald-600" : "text-muted-foreground"}`}>{portCheck.available === false ? <XCircle className="h-3.5 w-3.5" /> : portCheck.available === true ? <CheckCircle2 className="h-3.5 w-3.5" /> : null}{portCheck.message}</span>}</div></div><div className="space-y-2"><Label>密码</Label><Input value={password} onChange={(event) => setPassword(event.target.value)} /></div></div><div className="space-y-2"><Label>入口 IP</Label><Input value={entryIp} placeholder={selectedHost?.exitIp || selectedHost?.ip || "例如：203.0.113.10"} onChange={(event) => setEntryIp(event.target.value)} /><p className="text-xs text-muted-foreground">{selectedHost ? "默认使用落地机公网出口 IP；有独立入口 IP 时填写它。" : "填写外部 SS 的公网 IP 或域名；引用此 SS 会连接该地址。"}</p></div><div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_8rem]"><div className="space-y-2"><Label>延迟测试地址</Label><Input value={latencyTargetHost} onChange={(event) => setLatencyTargetHost(event.target.value)} /></div><div className="space-y-2"><Label>测试端口</Label><Input type="number" value={latencyTargetPort} onChange={(event) => setLatencyTargetPort(Number(event.target.value)} /></div></div>{selectedHost ? <Button type="button" variant="outline" className="w-full" onClick={() => void randomize()}>随机生成密码和端口</Button> : hostId === -2 ? <div className="space-y-1"><Input value={ssLink} placeholder="粘贴 ss:// 链接后自动解析" onChange={(event) => parseSsLink(event.target.value)} />{ssLinkStatus && <p className={`text-xs ${ssLinkStatus.ok ? "text-sky-600" : "text-destructive"}`}>{ssLinkStatus.message}</p>}</div> : null}</div><DialogFooter className="shrink-0 gap-2 border-t border-border/60 bg-background/95 pt-3"><Button variant="outline" onClick={onCancel}>取消</Button><Button onClick={save} disabled={create.isPending || !name.trim() || !password || !entryIp.trim() || port < 1 || port > 65535 || portCheck?.available === false}>{create.isPending ? "处理中..." : "创建"}</Button></DialogFooter></>;

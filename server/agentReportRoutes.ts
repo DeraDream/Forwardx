@@ -31,6 +31,7 @@ import { getAgentHostIdentityFromRequest } from "./agentAuth";
 import { applyTrafficMultiplier, normalizeTrafficMultiplier } from "../shared/trafficMultiplier";
 import { mapWithConcurrency } from "./asyncPool";
 import { forwardGroupProbeTopologyKey, tunnelProbeTopologyKey } from "./probeTopology";
+import { recordLandingGroupProbe } from "./landingGroupProbes";
 import { trafficBillingUserLockKey, withKeyedTaskLock } from "./keyedTaskLock";
 import { isTunnelRelayFailover, tunnelRelayCandidates } from "../shared/tunnelRelay";
 import { exitGroupUsesMultipleExits } from "../shared/exitStrategy";
@@ -1139,6 +1140,11 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
       // timeout even if an Agent used an inconsistent legacy boolean.
       report.isTimeout = probeCounts.probeSuccesses <= 0;
     }
+    for (const report of parsedForwardGroupResults) if (report.probeType === "landing") {
+      // The Agent already reports a TCP dial result; keep healthy steady-state
+      // reports on the 60-second health gate instead of the 5-minute chart gate.
+      report.healthStatus = report.isTimeout ? "unhealthy" : "healthy";
+    }
     if (parsedResults.length === 0 && parsedTunnelResults.length === 0 && parsedForwardGroupResults.length === 0 && parsedServiceResults.length === 0 && parsedSegmentResults.length === 0) {
       res.status(400).json({ error: "results, tunnels, forwardGroups, services or segments array is required" });
       return;
@@ -1597,8 +1603,12 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
       `${Number(probe.groupId)}:${Number(probe.memberId)}`,
       probe,
     ]));
+    await mapWithConcurrency(forwardGroupResults.filter(report => report.probeType === "landing"), 12, async report => {
+      await recordLandingGroupProbe(Number(host.id), report);
+    });
     const forwardGroupResultsById = new Map<number, AgentForwardGroupLatencyResult[]>();
     for (const report of forwardGroupResults) {
+      if (report.probeType === "landing") continue;
       const groupId = Number(report.groupId || 0);
       if (groupId <= 0) continue;
       const rows = forwardGroupResultsById.get(groupId) || [];

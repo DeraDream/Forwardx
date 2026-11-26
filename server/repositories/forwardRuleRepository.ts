@@ -1222,6 +1222,14 @@ export async function toggleForwardRule(id: number, isEnabled: boolean) {
   }
 }
 
+// Clear only the exact handoff acknowledged by this Agent. A delayed report
+// must not clear a newer handoff if the rule changes during request handling.
+export async function acknowledgeLandingSwitch(id: number, pending: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  await db.update(forwardRules).set({ landingSwitchPending: null, isRunning: true, updatedAt: nowDate() }).where(and(eq(forwardRules.id, id), eq(forwardRules.landingSwitchPending, pending), eq(forwardRules.isEnabled, true), eq(forwardRules.pendingDelete, false)));
+}
+
 export async function updateRuleRunningStatus(id: number, isRunning: boolean, cleanupConfirmed = false) {
   const db = await getDb();
   if (!db) return;
