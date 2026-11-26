@@ -3,7 +3,7 @@ import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { handoffManualTestResult, hasQuerySnapshotAfter } from "@/lib/manualTestCache";
-import { getLinkTestDetailEndpointIds, LinkTestProbeView, parseLinkTestMessage } from "./LinkTestLatencySummary";
+import { entryBranchHighlightState, getLinkTestDetailEndpointIds, LinkTestProbeView, parseLinkTestMessage } from "./LinkTestLatencySummary";
 
 const plannedSegments = [{ from: "入口节点", to: "出口节点" }];
 
@@ -561,9 +561,10 @@ test("multi-entry chain converges once and shows independent entry totals", () =
   const html = renderToStaticMarkup(<LinkTestProbeView parsed={parsed} isSuccess isTesting={false} />);
   assert.equal(html.match(/入口节点/g)?.length, 2);
   assert.match(html, /grid-template-columns:repeat\(2, minmax\(0, 1fr\)\)/);
-  assert.equal(html.match(/inset-y-0 left-1\/2 w-px/g)?.length, 2, "each entry connector starts at its card center");
-  assert.match(html, /M 250 0 L 500 55/);
-  assert.match(html, /M 750 0 L 500 55/);
+  assert.match(html, /M 250 0 C 250 52, 500 40, 500 92/);
+  assert.match(html, /M 750 0 C 750 52, 500 40, 500 92/);
+  assert.equal(html.match(/data-entry-branch=/g)?.length, 2);
+  assert.doesNotMatch(html, /link-probe-flow/, "completed paths do not impersonate an active probe");
   assert.equal(html.match(/中转节点/g)?.length, 2);
   assert.equal(html.match(/落地节点/g)?.length, 1);
   assert.match(html, /Po0-999 路径/);
@@ -580,11 +581,36 @@ test("rule chain convergence keeps one terminal landing for three entrances", ()
   ] }));
   const html = renderToStaticMarkup(<LinkTestProbeView parsed={parsed} isSuccess isTesting={false} />);
   assert.equal(html.match(/入口节点/g)?.length, 3);
+  assert.equal(html.match(/data-entry-branch=/g)?.length, 3);
+  assert.match(html, /M 500 0 C 500 52, 500 40, 500 92/);
   assert.equal(html.match(/落地节点/g)?.length, 1);
   assert.match(html, /Po0-third 路径/);
   assert.match(html, /27 ms/);
   assert.match(html, /28 ms/);
   assert.match(html, /29 ms/);
+});
+
+test("hovering an entry isolates that branch while a single entry has no hover UI", () => {
+  assert.deepEqual(entryBranchHighlightState("po0-999", null), { active: false, dimmed: false });
+  assert.deepEqual(entryBranchHighlightState("po0-999", "po0-999"), { active: true, dimmed: false });
+  assert.deepEqual(entryBranchHighlightState("po0-1288", "po0-999"), { active: false, dimmed: true });
+  const single = parseLinkTestMessage(JSON.stringify({ details: [{ success: true, latencyMs: 8, routeLabel: "Po0-999 -> QHIX" }] }));
+  const html = renderToStaticMarkup(<LinkTestProbeView parsed={single} isSuccess isTesting={false} nodeMeta={{ "Po0-999": { address: "42.193.170.239" } }} />);
+  assert.doesNotMatch(html, /data-entry-branch/);
+  assert.match(html, /点击复制 IP：42\.193\.170\.239/);
+  assert.doesNotMatch(html, /link-probe-flow/);
+});
+
+test("in-progress real probe animates packets without inventing measured values", () => {
+  const html = renderToStaticMarkup(<LinkTestProbeView parsed={parseLinkTestMessage(null)} isSuccess={false} isTesting plannedSegments={[
+    { from: "Po0-999", to: "QHIX", fromHostId: 13, toHostId: 1 },
+    { from: "Po0-1288", to: "QHIX", fromHostId: 14, toHostId: 1 },
+    { from: "QHIX", to: "DataWave-HK", fromHostId: 1, toHostId: 2 },
+  ]} />);
+  assert.equal(html.match(/data-entry-branch=/g)?.length, 2);
+  assert.equal(html.match(/link-probe-flow/g)?.length, 3);
+  assert.match(html, /探测中/);
+  assert.doesNotMatch(html, /丢包率|抖动|高负载/);
 });
 
 test("parses the actual upstream TCP target for topology edge matching", () => {

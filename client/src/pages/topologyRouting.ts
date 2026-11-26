@@ -204,6 +204,20 @@ export function routeSmoothLayeredTopologyGraph(nodes: TopologyRoutingNode[], in
     outgoing.set(edge.from, [...(outgoing.get(edge.from) || []), edge]);
     incoming.set(edge.to, [...(incoming.get(edge.to) || []), edge]);
   }
+  // Match the vertical order of forwarded destinations to their actual relay
+  // sources. SG-only landings stay together above JP-only landings; a landing
+  // shared by both is placed between them. Direct landings remain at the end.
+  const parentY = (node: TopologyRoutingNode) => {
+    const parents = (incoming.get(node.id) || []).map((edge) => base.positions.get(edge.from)!)
+      .filter(Boolean);
+    return parents.length
+      ? parents.reduce((sum, box) => sum + box.y + box.height / 2, 0) / parents.length
+      : base.positions.get(node.id)!.y;
+  };
+  landingNodes.sort((a, b) => Number(directOnly.has(a.id)) - Number(directOnly.has(b.id))
+    || parentY(a) - parentY(b) || a.row - b.row || a.id.localeCompare(b.id));
+  const landingStart = anchor - Math.max(0, mainCount - 1) * step / 2;
+  landingNodes.forEach((node, index) => { base.positions.get(node.id)!.y = landingStart + index * step; });
   const centerY = (id: string) => { const box = base.positions.get(id)!; return box.y + box.height / 2; };
   for (const list of outgoing.values()) list.sort((a, b) => centerY(a.to) - centerY(b.to) || a.id.localeCompare(b.id));
   for (const list of incoming.values()) list.sort((a, b) => centerY(a.from) - centerY(b.from) || a.id.localeCompare(b.id));
@@ -268,12 +282,14 @@ export function routeSmoothLayeredTopologyGraph(nodes: TopologyRoutingNode[], in
       controlY2 = laneY;
       if (isDirectLanding) lowestLane = Math.max(lowestLane, laneY);
     }
+    const bendX = from.x + from.width + 100;
     edgeRoutes.set(edge.id, isDirectLanding && spansRelayLayer ? [
       start,
-      { x: from.x + from.width + 36, y: start.y + (controlY1 - start.y) * 0.52 },
-      { x: from.x + from.width + 100, y: controlY1 },
-      { x: end.x - 36, y: controlY2 },
-      { x: end.x - 20, y: end.y },
+      { x: start.x + 34, y: start.y + 14, curve: true },
+      { x: bendX - 42, y: controlY1, curve: true },
+      { x: bendX, y: controlY1, curve: true },
+      { x: bendX + Math.min(110, (end.x - bendX) * .3), y: controlY2, curve: true },
+      { x: end.x - 90, y: end.y, curve: true },
       end,
     ] : [
       start,
@@ -296,6 +312,10 @@ export function routeSmoothLayeredTopologyGraph(nodes: TopologyRoutingNode[], in
 }
 
 export function topologyRoutePath(points: TopologyPoint[]) {
+  if (points.length === 7 && points.slice(1, 6).every((point) => point.curve)) {
+    const [start, control1, control2, bend, control3, control4, end] = points;
+    return `M ${start.x} ${start.y} C ${control1.x} ${control1.y} ${control2.x} ${control2.y} ${bend.x} ${bend.y} C ${control3.x} ${control3.y} ${control4.x} ${control4.y} ${end.x} ${end.y}`;
+  }
   if (points.length === 4 && points[1]?.curve && points[2]?.curve) {
     return `M ${points[0].x} ${points[0].y} C ${points[1].x} ${points[1].y} ${points[2].x} ${points[2].y} ${points[3].x} ${points[3].y}`;
   }

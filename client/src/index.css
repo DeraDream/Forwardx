@@ -1476,3 +1476,17 @@
 .dark .host-table-frozen-right::before {
   background: linear-gradient(to left, rgb(0 0 0 / 24%), transparent);
 }
+
+@keyframes link-probe-packet-flow {
+  to { stroke-dashoffset: -24; }
+}
+
+/* Only a real in-progress probe gets animated packets; completed paths stay solid. */
+.link-probe-flow {
+  stroke-dasharray: 5 7;
+  animation: link-probe-packet-flow 0.7s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .link-probe-flow { animation: none; }
+}

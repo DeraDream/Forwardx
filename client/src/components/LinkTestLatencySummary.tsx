@@ -1,8 +1,10 @@
 import { LatencyRating } from "@/components/LatencyRating";
+import { copyTextToClipboard } from "@/lib/clipboard";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { countryCodeToEmoji, type LinkTestNodeMeta } from "@/lib/linkTestNodeMeta";
 import { cn } from "@/lib/utils";
-import { useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { toast } from "sonner";
 
 export type LinkTestDetail = {
   success: boolean;
@@ -678,6 +680,10 @@ export function getLinkTestTotalLatency(input: {
   return null;
 }
 
+export function entryBranchHighlightState(entryId: string, hoveredEntryId: string | null) {
+  return { active: hoveredEntryId === entryId, dimmed: hoveredEntryId !== null && hoveredEntryId !== entryId };
+}
+
 export function LinkTestProbeView({
   parsed,
   fallbackLatencyMs,
@@ -757,6 +763,12 @@ export function LinkTestProbeView({
   const isBranchView = branchSegments.length > 1;
   const convergedEntryView = !isBranchView ? getInitialConvergedEntryView(segments) : null;
   const isConvergedEntryView = !!convergedEntryView;
+  const [hoveredEntryId, setHoveredEntryId] = useState<string | null>(null);
+  const entryKey = (segment: ProbeSegment) => String(segment.fromHostId || segment.from);
+  const copyNodeAddress = async (address: string) => {
+    const copied = await copyTextToClipboard(address);
+    toast[copied ? "success" : "error"](copied ? "IP 已复制" : "复制失败，请手动复制");
+  };
   const branchLatencyValues = branchSegments
     .filter((segment) => segment.success && hasUsableLatencyValue(segment.latencyMs))
     .map((segment) => Number(segment.latencyMs));
@@ -859,14 +871,16 @@ export function LinkTestProbeView({
     const tooltipContent = lookupNodeTooltipContent(nodeTooltips, label, meta);
     const offline = meta?.online === false;
     const card = (
-      <div
+      <button
+        type="button"
+        disabled={!address}
+        onClick={() => void copyNodeAddress(address)}
         className={cn(
           "relative flex min-h-[58px] w-full items-center gap-3 overflow-hidden rounded-[10px] border px-3 py-2 text-left shadow-sm",
           timelineNodeTone(role),
-          tooltipContent ? "cursor-help focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50" : "",
+          address ? "cursor-copy hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50" : "cursor-default",
         )}
-        tabIndex={tooltipContent ? 0 : undefined}
-        title={!tooltipContent ? [label, address, region].filter(Boolean).join(" / ") || label : undefined}
+        title={!tooltipContent ? address ? `点击复制 IP：${address}` : label : undefined}
       >
         <span className="flex h-[18px] w-6 shrink-0 items-center justify-center">{renderFlag(meta)}</span>
         <span className="min-w-0 flex-1">
@@ -882,9 +896,9 @@ export function LinkTestProbeView({
             <span className="rounded-md border border-white/30 bg-red-600/90 px-2.5 py-1 shadow-sm">节点离线</span>
           </span>
         ) : null}
-      </div>
+      </button>
     );
-    if (!tooltipContent) return <div key={key}>{card}</div>;
+    if (!tooltipContent || !address) return <div key={key}>{card}</div>;
     return (
       <Tooltip key={key}>
         <TooltipTrigger asChild>{card}</TooltipTrigger>
@@ -897,24 +911,20 @@ export function LinkTestProbeView({
     const offline = segment.fromMeta?.online === false || segment.toMeta?.online === false;
     const blocked = !state.testing && !state.idle && !state.ok && /(?:阻断|blocked)/i.test(String(segment.message || ""));
     const label = offline ? "离线" : blocked ? "阻断" : state.label || (state.ok ? "--" : "失败");
+    const color = offline ? "#94a3b8" : blocked ? "#ef4444" : state.testing ? "#3b82f6" : state.idle ? "#f59e0b" : state.ok ? "#10b981" : "#ef4444";
     return (
-      <div key={key} className="relative ml-[23px] flex min-h-[52px] items-center pl-8">
+      <div key={key} className="relative flex h-14 items-center justify-center">
+        <svg viewBox="0 0 24 56" className="absolute left-1/2 top-0 h-14 w-6 -translate-x-1/2" aria-hidden="true">
+          <line x1="12" y1="0" x2="12" y2="56" stroke={color} strokeWidth="2.5" strokeOpacity={state.testing ? 0.25 : state.idle ? 0.45 : 0.8} strokeDasharray={state.idle || offline ? "5 5" : undefined} />
+          {state.testing && <line x1="12" y1="0" x2="12" y2="56" stroke={color} strokeWidth="2.5" className="link-probe-flow" />}
+        </svg>
         <span className={cn(
-          "absolute bottom-0 left-0 top-0 border-l-2",
-          offline ? "border-dashed border-slate-300" : blocked ? "border-red-500" : state.testing ? "border-blue-500" : state.idle ? "border-dashed border-amber-400" : state.ok ? "border-emerald-400" : "border-red-400",
-          state.testing ? "animate-pulse" : "",
-        )} />
-        {state.testing ? <span className="absolute left-[-4px] top-1/2 h-2.5 w-2.5 -translate-y-1/2 animate-pulse rounded-full bg-blue-500 shadow-[0_0_0_4px_rgba(59,130,246,.14)]" /> : null}
-        <div className="min-w-0">
-          <span className={cn(
-            "inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 font-mono text-[11px] font-semibold shadow-sm",
-            offline ? "border-slate-200 bg-slate-50 text-slate-500" : blocked ? "border-red-200 bg-red-50 text-red-600" : state.testing ? "border-blue-200 bg-blue-50 text-blue-600" : state.idle ? "border-amber-200 bg-amber-50 text-amber-700" : state.ok ? "border-emerald-200 bg-emerald-50 text-emerald-600" : "border-red-200 bg-red-50 text-red-600",
-          )}>
-            {state.testing ? <span className="h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" /> : null}
-            {label}
-          </span>
-          {!state.testing && !state.ok && segment.message ? <span className="ml-2 text-[10px] text-slate-400" title={segment.message}>{shortNodeLabel(segment.message, 42)}</span> : null}
-        </div>
+          "relative rounded-full border bg-background px-2.5 py-0.5 font-mono text-[11px] font-semibold shadow-sm",
+          offline ? "border-slate-200 text-slate-500" : blocked ? "border-red-200 text-red-600" : state.testing ? "border-blue-200 text-blue-600" : state.idle ? "border-amber-200 text-amber-700" : state.ok ? "border-emerald-200 text-emerald-600" : "border-red-200 text-red-600",
+        )}>
+          {label}
+        </span>
+        {!state.testing && !state.ok && segment.message ? <span className="absolute left-[calc(50%+45px)] max-w-[30%] truncate text-[10px] text-slate-400" title={segment.message}>{shortNodeLabel(segment.message, 42)}</span> : null}
       </div>
     );
   };
@@ -932,36 +942,48 @@ export function LinkTestProbeView({
           <div className="mb-2 text-xs font-semibold text-slate-500">入口分支</div>
           <div className="overflow-x-auto pb-1">
             <div style={{ minWidth: Math.max(0, convergedEntryView.entrySegments.length * 175) }}>
-              <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${convergedEntryView.entrySegments.length}, minmax(0, 1fr))` }}>
-                {convergedEntryView.entrySegments.map((segment, index) => (
-                  <div key={`entry-${segment.fromHostId || segment.from}-${index}`} className="min-w-0">
-                    <div className="rounded-lg border border-slate-200/80 p-2">
+              <div className="grid" style={{ gridTemplateColumns: `repeat(${convergedEntryView.entrySegments.length}, minmax(0, 1fr))` }}>
+                {convergedEntryView.entrySegments.map((segment, index) => {
+                  const { active, dimmed } = entryBranchHighlightState(entryKey(segment), hoveredEntryId);
+                  return <div key={`entry-${segment.fromHostId || segment.from}-${index}`} className="min-w-0 px-1.5" onMouseEnter={() => setHoveredEntryId(entryKey(segment))} onMouseLeave={() => setHoveredEntryId(null)}>
+                    <div className={cn("rounded-lg border border-slate-200/80 p-2 transition-all duration-200", active && "border-blue-400 ring-2 ring-blue-400/20", dimmed && "opacity-40")}>
                       {renderTimelineNode(segment.from, segment.fromMeta, "entry", `entry-from-${index}`)}
                     </div>
-                    <div className="relative flex h-14 items-center justify-center">
-                      <span className={cn("absolute inset-y-0 left-1/2 w-px -translate-x-1/2", getSegmentState(segment).lineClass)} />
-                      <span className={cn("relative rounded-md border bg-background px-2 py-0.5 font-mono text-[11px] font-semibold shadow-sm", getSegmentState(segment).badgeClass)}>
-                        {getSegmentState(segment).label}
-                      </span>
-                    </div>
-                  </div>
-                ))}
+                  </div>;
+                })}
               </div>
-              <svg viewBox="0 0 1000 56" preserveAspectRatio="none" className="h-14 w-full" aria-label={`各入口分别汇入 ${convergedEntryView.convergenceLabel}`}>
+              <div className="relative h-[92px]">
+                <svg viewBox="0 0 1000 92" preserveAspectRatio="none" className="h-full w-full" aria-label={`各入口分别汇入 ${convergedEntryView.convergenceLabel}`}>
+                  {convergedEntryView.entrySegments.map((segment, index) => {
+                    const state = getSegmentState(segment);
+                    const x = (index + .5) * 1000 / convergedEntryView.entrySegments.length;
+                    const d = `M ${x} 0 C ${x} 52, 500 40, 500 92`;
+                    const { active, dimmed } = entryBranchHighlightState(entryKey(segment), hoveredEntryId);
+                    const color = segment.fromMeta?.online === false || segment.toMeta?.online === false ? "#94a3b8" : state.testing ? "#3b82f6" : state.idle ? "#f59e0b" : state.ok ? "#10b981" : "#ef4444";
+                    return <g key={`merge-${index}`} data-entry-branch={entryKey(segment)} className="transition-opacity duration-200" opacity={dimmed ? .2 : 1}>
+                      {active && <path d={d} fill="none" stroke={color} strokeWidth="7" strokeOpacity=".2" vectorEffect="non-scaling-stroke" />}
+                      <path d={d} fill="none" stroke={color} strokeWidth={active ? 3 : 2} strokeOpacity={state.testing ? .25 : .75} vectorEffect="non-scaling-stroke" strokeDasharray={state.idle ? "5 5" : undefined} />
+                      {state.testing && <path d={d} fill="none" stroke={color} strokeWidth="2.5" className="link-probe-flow" vectorEffect="non-scaling-stroke" />}
+                    </g>;
+                  })}
+                  <circle cx="500" cy="91" r="4" fill="#10b981" stroke="white" strokeWidth="1.5" />
+                </svg>
                 {convergedEntryView.entrySegments.map((segment, index) => {
                   const state = getSegmentState(segment);
-                  return <path key={`merge-${index}`} d={`M ${(index + .5) * 1000 / convergedEntryView.entrySegments.length} 0 L 500 55`} fill="none" stroke={state.ok ? "#34d399" : state.testing ? "#3b82f6" : state.idle ? "#fbbf24" : "#f87171"} strokeWidth="2" vectorEffect="non-scaling-stroke" />;
+                  const offline = segment.fromMeta?.online === false || segment.toMeta?.online === false;
+                  const blocked = !state.testing && !state.idle && !state.ok && /(?:阻断|blocked)/i.test(String(segment.message || ""));
+                  return <span key={`branch-badge-${index}`} onMouseEnter={() => setHoveredEntryId(entryKey(segment))} onMouseLeave={() => setHoveredEntryId(null)} style={{ left: `${(index + .5) * 100 / convergedEntryView.entrySegments.length}%` }} className={cn("absolute top-5 -translate-x-1/2 rounded-full border bg-background px-2 py-0.5 font-mono text-[11px] font-semibold shadow-sm transition-opacity", state.badgeClass, hoveredEntryId && hoveredEntryId !== entryKey(segment) && "opacity-40")}>{offline ? "离线" : blocked ? "阻断" : state.label}</span>;
                 })}
-              </svg>
+              </div>
+              {renderTimelineNode(convergedEntryView.convergenceLabel, convergedEntryView.convergenceMeta, convergedEntryView.restSegments.length ? "relay" : "landing", "converged-node")}
+              {convergedEntryView.restSegments.map((segment, index) => (
+                <div key={`shared-${segment.from}-${segment.to}-${index}`}>
+                  {renderTimelineConnector(segment, `shared-connector-${index}`)}
+                  {renderTimelineNode(segment.to, segment.toMeta, index === convergedEntryView.restSegments.length - 1 ? "landing" : "relay", `shared-to-${index}`)}
+                </div>
+              ))}
             </div>
           </div>
-          {renderTimelineNode(convergedEntryView.convergenceLabel, convergedEntryView.convergenceMeta, convergedEntryView.restSegments.length ? "relay" : "landing", "converged-node")}
-          {convergedEntryView.restSegments.map((segment, index) => (
-            <div key={`shared-${segment.from}-${segment.to}-${index}`}>
-              {renderTimelineConnector(segment, `shared-connector-${index}`)}
-              {renderTimelineNode(segment.to, segment.toMeta, index === convergedEntryView.restSegments.length - 1 ? "landing" : "relay", `shared-to-${index}`)}
-            </div>
-          ))}
         </>
       ) : segments.map((segment, index) => {
         const previous = segments[index - 1];
@@ -1001,7 +1023,7 @@ export function LinkTestProbeView({
             const complete = entry.success && shared.every((segment) => segment.success)
               && [entry, ...shared].every((segment) => hasUsableLatencyValue(segment.latencyMs));
             const latency = complete ? [entry, ...shared].reduce((sum, segment) => sum + Number(segment.latencyMs), 0) : null;
-            return <div key={`entry-total-${entry.fromHostId || entry.from}-${index}`} className="flex justify-between gap-2"><span>{entry.from} 路径</span><span>{latency === null ? "不可用或待探测" : formatLatencyMs(latency)}</span></div>;
+            return <div key={`entry-total-${entry.fromHostId || entry.from}-${index}`} onMouseEnter={() => setHoveredEntryId(entryKey(entry))} onMouseLeave={() => setHoveredEntryId(null)} className={cn("flex justify-between gap-2 rounded px-1 transition-colors", hoveredEntryId === entryKey(entry) && "bg-blue-50 font-semibold")}><span>{entry.from} 路径</span><span>{latency === null ? "不可用或待探测" : formatLatencyMs(latency)}</span></div>;
           })}
         </div>
       ) : null}

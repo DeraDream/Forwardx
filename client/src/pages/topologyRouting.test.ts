@@ -50,11 +50,38 @@ test("relationship overview uses smooth curves and routes long direct exits outs
   ], new Set(["direct"]));
   assert.match(topologyRoutePath(result.edgeRoutes.get("chain-a")!), /^M .* C /);
   const direct = result.edgeRoutes.get("direct-exit")!;
+  assert.equal(direct.length, 7);
+  assert.match(topologyRoutePath(direct), /^M .* C .* C /);
   assert.ok(direct[2].y > result.positions.get("relay")!.y + result.positions.get("relay")!.height);
   assert.ok(result.positions.get("direct")!.y > result.positions.get("landing")!.y);
   assert.ok(direct[2].x < result.positions.get("relay")!.x, "the exit reaches its lower lane before the relay card");
   assert.ok(direct[3].y > result.positions.get("relay")!.y + result.positions.get("relay")!.height);
   assert.ok(direct[0].x < direct[1].x && direct[1].x < direct[2].x, "the exit fans out diagonally, not as a vertical hairpin");
+});
+
+test("forwarded destinations follow their relay order before direct destinations", () => {
+  const nodes = [
+    { id: "entry", column: 0, row: 0 }, { id: "hk", column: 1, row: 0 },
+    { id: "sg", column: 2, row: 0 }, { id: "jp", column: 2, row: 1 },
+    { id: "sg-1", column: 3, row: 0 }, { id: "jp-1", column: 3, row: 1 },
+    { id: "shared", column: 3, row: 2 }, { id: "sg-2", column: 3, row: 3 },
+    { id: "sg-3", column: 3, row: 4 }, { id: "direct", column: 3, row: 5 },
+  ];
+  const edges = [
+    { id: "entry-hk", from: "entry", to: "hk" },
+    { id: "hk-sg", from: "hk", to: "sg" }, { id: "hk-jp", from: "hk", to: "jp" },
+    { id: "sg-1", from: "sg", to: "sg-1" },
+    { id: "sg-2", from: "sg", to: "sg-2" }, { id: "sg-3", from: "sg", to: "sg-3" },
+    { id: "jp-1", from: "jp", to: "jp-1" },
+    { id: "shared-sg", from: "sg", to: "shared" }, { id: "shared-jp", from: "jp", to: "shared" },
+    { id: "direct", from: "entry", to: "direct" },
+  ];
+  const graph = routeSmoothLayeredTopologyGraph(nodes, edges, new Set(["direct"]));
+  const y = (id: string) => graph.positions.get(id)!.y;
+  assert.ok(y("sg-1") < y("sg-2") && y("sg-2") < y("sg-3"));
+  assert.ok(y("sg-3") < y("jp-1"), "SG destinations belong above the JP-only destination");
+  assert.ok(y("jp-1") < y("direct"), "direct landing stays below the forwarded destinations");
+  assert.deepEqual([...graph.edgeRoutes.keys()].sort(), edges.map((edge) => edge.id).sort(), "routing preserves all actual edges");
 });
 
 test("parallel direct exits have separate labeled lanes below the shared chain", () => {
