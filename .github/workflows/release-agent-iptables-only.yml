@@ -32,6 +32,7 @@ jobs:
         run: |
           (cd agent && go test -tags iptablesonly ./... && go vet -tags iptablesonly ./...)
           bash scripts/test-forwardx-iptables-menu.sh
+          bash scripts/test-install-agent-iptables-only-input.sh
           bash scripts/build-agent-iptables-only.sh
           (cd dist/agent && sha256sum -c "iptables-only-v${VERSION}-SHA256SUMS")
       - name: Publish separate release
