@@ -52,9 +52,33 @@ test("relationship overview uses smooth curves and routes long direct exits outs
   const direct = result.edgeRoutes.get("direct-exit")!;
   assert.ok(direct[2].y > result.positions.get("relay")!.y + result.positions.get("relay")!.height);
   assert.ok(result.positions.get("direct")!.y > result.positions.get("landing")!.y);
-  for (const line of segments(new Map([["direct-exit", direct]]))) {
-    assert.equal(intersectsCard(line, result.positions.get("relay")!), false, "direct exit crossed the relay");
-  }
+  assert.ok(direct[2].x < result.positions.get("relay")!.x, "the exit reaches its lower lane before the relay card");
+  assert.ok(direct[3].y > result.positions.get("relay")!.y + result.positions.get("relay")!.height);
+  assert.ok(direct[0].x < direct[1].x && direct[1].x < direct[2].x, "the exit fans out diagonally, not as a vertical hairpin");
+});
+
+test("parallel direct exits have separate labeled lanes below the shared chain", () => {
+  const nodes = [
+    { id: "entry", column: 0, row: 0 }, { id: "merge", column: 1, row: 0 },
+    { id: "hk", column: 2, row: 0 }, { id: "sg", column: 3, row: 0 },
+    { id: "forwarded", column: 4, row: 0 },
+    { id: "direct-a", column: 4, row: 1 }, { id: "direct-b", column: 4, row: 2 },
+  ];
+  const graph = routeSmoothLayeredTopologyGraph(nodes, [
+    { id: "entry-merge", from: "entry", to: "merge" },
+    { id: "merge-hk", from: "merge", to: "hk" },
+    { id: "hk-sg", from: "hk", to: "sg" },
+    { id: "sg-forwarded", from: "sg", to: "forwarded" },
+    { id: "direct-a", from: "merge", to: "direct-a" },
+    { id: "direct-b", from: "merge", to: "direct-b" },
+  ], new Set(["direct-a", "direct-b"]));
+  const first = graph.edgeRoutes.get("direct-a")!;
+  const second = graph.edgeRoutes.get("direct-b")!;
+  assert.ok(first[2].x < graph.positions.get("hk")!.x);
+  assert.ok(first[2].y > graph.positions.get("sg")!.y + graph.positions.get("sg")!.height);
+  assert.ok(Math.abs(first[2].y - second[2].y) >= 30, "latency badges need separate lanes");
+  assert.ok(graph.positions.get("direct-a")!.y > graph.positions.get("forwarded")!.y);
+  assert.ok(graph.positions.get("direct-b")!.y > graph.positions.get("direct-a")!.y);
 });
 
 test("long smooth edges use compact reusable lanes, independent of ordinary edge count", () => {

@@ -84,6 +84,7 @@ import {
 import DataSectionLoading from "@/components/DataSectionLoading";
 import { trpc } from "@/lib/trpc";
 import { copyTextToClipboard } from "@/lib/clipboard";
+import { buildFinalLandingSsUri } from "@/lib/ruleCopySs";
 import { pollingInterval } from "@/lib/polling";
 import { handoffManualTestResult } from "@/lib/manualTestCache";
 import {
@@ -376,6 +377,7 @@ type RuleFormData = {
   targetPort: number;
   targetRuleId: number | null;
   targetLandingServiceId: number | null;
+  copySsHostMode: "landing" | "entry";
   telegramErrorNotifyEnabled: boolean;
   blockHttp: boolean;
   blockSocks: boolean;
@@ -440,6 +442,7 @@ const defaultForm: RuleFormData = {
   targetPort: 0,
   targetRuleId: null,
   targetLandingServiceId: null,
+  copySsHostMode: "landing",
   telegramErrorNotifyEnabled: false,
   blockHttp: false,
   blockSocks: false,
@@ -3802,6 +3805,7 @@ function RulesContent() {
       targetPort: rule.targetPort,
       targetRuleId: rule.targetRuleId || null,
       targetLandingServiceId: rule.targetLandingServiceId || null,
+      copySsHostMode: rule.copySsHostMode === "entry" ? "entry" : "landing",
       telegramErrorNotifyEnabled: !!rule.telegramErrorNotifyEnabled,
       blockHttp: false,
       blockSocks: false,
@@ -5300,6 +5304,7 @@ function RulesContent() {
         targetPort: form.targetPort,
         targetRuleId: form.targetRuleId,
         targetLandingServiceId: form.targetLandingServiceId,
+        copySsHostMode: form.copySsHostMode,
         telegramErrorNotifyEnabled: form.telegramErrorNotifyEnabled,
         ...failoverPayload,
       });
@@ -5319,6 +5324,7 @@ function RulesContent() {
         targetPort: form.targetPort,
         targetRuleId: form.targetRuleId,
         targetLandingServiceId: form.targetLandingServiceId,
+        copySsHostMode: form.copySsHostMode,
         telegramErrorNotifyEnabled: form.telegramErrorNotifyEnabled,
         ...failoverPayload,
       });
@@ -8217,8 +8223,13 @@ function RulesContent() {
     if (!resolved?.serviceId) return toast.error("当前规则最终目标没有可复制的 SS");
     const services = landingServicesQuery.data || await utils.landing.list.fetch();
     const service = services.find((item: any) => Number(item.id) === Number(resolved.serviceId));
-    const endpoint = String(service?.endpoint || service?.host?.exitIp || service?.host?.ip || "").trim();
-    const link = endpoint && service?.password ? `ss://${btoa(unescape(encodeURIComponent(`${service.method}:${service.password}`))).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "")}@${endpoint}:${service.port}#${encodeURIComponent(service.name)}` : "";
+    const group = rule.forwardGroupId ? forwardGroupById.get(Number(rule.forwardGroupId)) : null;
+    if (rule.copySsHostMode === "entry" && rule.forwardGroupId && !group) return toast.error("入口组尚未加载，请稍后重试");
+    const entryAddress = group?.entryGroupId
+      ? entryDomainForForwardGroup(group)
+      : getRuleTransferDisplay(rule).entryAddresses.find((entry) => entry.copyable)?.value;
+    if (rule.copySsHostMode === "entry" && !entryAddress) return toast.error("规则入口地址不可用，请检查入口组域名或入口主机");
+    const link = service ? buildFinalLandingSsUri(service, rule.copySsHostMode === "entry" ? "entry" : "landing", entryAddress) : "";
     if (!link) return toast.error("最终 SS 配置不可用");
     const copied = await copyTextToClipboard(link);
     toast[copied ? "success" : "error"](copied ? "最终 SS 链接已复制" : "复制失败，请手动复制");
@@ -11044,6 +11055,19 @@ function RulesContent() {
                         />
                       </div>
                     </>
+                  )}
+                  {editingId && (form.routeMode === "local" || form.routeMode === "chain") && (
+                    <div className="space-y-2 sm:col-span-2">
+                      <Label>复制最终 SS 链接的地址</Label>
+                      <Select value={form.copySsHostMode} onValueChange={(value: "landing" | "entry") => setForm((prev) => ({ ...prev, copySsHostMode: value }))}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="landing">落地 SS 服务地址（默认）</SelectItem>
+                          <SelectItem value="entry">当前规则入口 IP／入口组域名</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground">仅影响操作栏复制出的最终 SS 链接地址，不修改实际转发目标或 SS 配置。</p>
+                    </div>
                   )}
                   {!form.targetRuleId && !form.targetLandingServiceId && (
                     <div className="space-y-2 sm:col-span-2">

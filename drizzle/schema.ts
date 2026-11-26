@@ -433,6 +433,8 @@ export const forwardRules = table("forward_rules", {
   targetRuleId: int("targetRuleId"),
   // Resolved IP/port of a managed landing Shadowsocks listener.
   targetLandingServiceId: int("targetLandingServiceId"),
+  // Display-only preference for copying the final SS URI; never changes the runtime target.
+  copySsHostMode: varchar("copySsHostMode", { length: 16 }).notNull().default("landing"),
   telegramErrorNotifyEnabled: boolean("telegramErrorNotifyEnabled").notNull().default(false),
   blockHttp: boolean("blockHttp").notNull().default(false),
   blockSocks: boolean("blockSocks").notNull().default(false),

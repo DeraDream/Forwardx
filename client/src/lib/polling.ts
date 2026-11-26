@@ -15,7 +15,3 @@ export type QueryPollingInterval = number | false;
 export function pollingInterval(name: PollingIntervalName, enabled = true): QueryPollingInterval {
   return enabled ? POLLING_INTERVALS[name] : false;
 }
-
-export function visiblePollingInterval(name: PollingIntervalName, visible = true): QueryPollingInterval {
-  return pollingInterval(name, visible);
-}

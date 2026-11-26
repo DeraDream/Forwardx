@@ -169,6 +169,14 @@ export function routeSmoothLayeredTopologyGraph(nodes: TopologyRoutingNode[], in
   };
   const base = routeTopologyGraph(nodes, inputEdges, directOnly);
   const byId = new Map(nodes.map((node) => [node.id, node]));
+  // Give an early direct exit enough room to fan out below the relay row,
+  // rather than dropping two parallel lines vertically beside the source.
+  const directSourceColumns = [...new Set(inputEdges
+    .filter((edge) => directOnly.has(edge.to) && (byId.get(edge.to)?.column || 0) - (byId.get(edge.from)?.column || 0) > 1)
+    .map((edge) => byId.get(edge.from)!.column))].sort((a, b) => a - b);
+  for (const [id, box] of base.positions) {
+    box.x += directSourceColumns.filter((column) => byId.get(id)!.column > column).length * 120;
+  }
   // Keep all relay stages centered on the forwarded landing group.  The
   // landing column has one continuous upper block for chain destinations and
   // a separate lower block for direct destinations.
@@ -239,12 +247,14 @@ export function routeSmoothLayeredTopologyGraph(nodes: TopologyRoutingNode[], in
     const to = base.positions.get(edge.to)!;
     const fromEdges = outgoing.get(edge.from) || [];
     const toEdges = incoming.get(edge.to) || [];
-    const start = { x: from.x + from.width, y: from.y + from.height * (fromEdges.indexOf(edge) + 1) / (fromEdges.length + 1) };
-    const end = { x: to.x, y: to.y + to.height * (toEdges.indexOf(edge) + 1) / (toEdges.length + 1) };
+    const isDirectLanding = directOnly.has(edge.to);
     const sourceColumn = byId.get(edge.from)?.column || 0;
     const targetColumn = byId.get(edge.to)?.column || sourceColumn + 1;
     const spansRelayLayer = targetColumn - sourceColumn > 1;
-    const isDirectLanding = directOnly.has(edge.to);
+    const start = isDirectLanding && spansRelayLayer
+      ? { x: from.x + from.width * (0.48 + 0.38 * (fromEdges.indexOf(edge) + 1) / (fromEdges.length + 1)), y: from.y + from.height }
+      : { x: from.x + from.width, y: from.y + from.height * (fromEdges.indexOf(edge) + 1) / (fromEdges.length + 1) };
+    const end = { x: to.x, y: to.y + to.height * (toEdges.indexOf(edge) + 1) / (toEdges.length + 1) };
     const distance = Math.max(80, end.x - start.x);
     let controlY1 = start.y;
     let controlY2 = end.y;
@@ -252,7 +262,7 @@ export function routeSmoothLayeredTopologyGraph(nodes: TopologyRoutingNode[], in
       // Direct sinks deliberately travel below the relay rows. Other long
       // edges use compact, reusable tracks above them.
       const laneY = isDirectLanding
-        ? directLane + Math.max(0, landingNodes.indexOf(byId.get(edge.to)!) - mainCount) * 12
+        ? directLane + Math.max(0, landingNodes.indexOf(byId.get(edge.to)!) - mainCount) * 32
         : top - 40 - (longLaneByEdge.get(edge.id) || 0) * 16;
       controlY1 = laneY;
       controlY2 = laneY;
@@ -260,10 +270,10 @@ export function routeSmoothLayeredTopologyGraph(nodes: TopologyRoutingNode[], in
     }
     edgeRoutes.set(edge.id, isDirectLanding && spansRelayLayer ? [
       start,
-      { x: start.x + 24, y: start.y },
-      { x: start.x + 24, y: controlY1 },
-      { x: end.x - 24, y: controlY2 },
-      { x: end.x - 24, y: end.y },
+      { x: from.x + from.width + 36, y: start.y + (controlY1 - start.y) * 0.52 },
+      { x: from.x + from.width + 100, y: controlY1 },
+      { x: end.x - 36, y: controlY2 },
+      { x: end.x - 20, y: end.y },
       end,
     ] : [
       start,

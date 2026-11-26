@@ -64,7 +64,7 @@ import DataSectionLoading from "@/components/DataSectionLoading";
 import { countryFeatureHasCode, normalizeCountryCode } from "@/lib/countryFeatures";
 import { normalizeForwardProtocolSettings } from "@shared/forwardTypes";
 import { useUrlTab } from "@/hooks/useUrlTab";
-import { pollingInterval, visiblePollingInterval } from "@/lib/polling";
+import { pollingInterval } from "@/lib/polling";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import {
@@ -142,16 +142,6 @@ function parseCustomPortsInput(value: string) {
     invalid,
     normalized: normalizedPorts.join(","),
   };
-}
-
-function usePageVisible() {
-  const [visible, setVisible] = useState(() => typeof document === "undefined" || document.visibilityState === "visible");
-  useEffect(() => {
-    const onVisibilityChange = () => setVisible(document.visibilityState === "visible");
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
-  }, []);
-  return visible;
 }
 
 function hostGeoCoordinate(host: any) {
@@ -1341,7 +1331,6 @@ function HostGroupFilterBar({
 function HostsContent() {
   const { user } = useAuth();
   const utils = trpc.useUtils();
-  const pageVisible = usePageVisible();
   const [viewMode, setViewMode] = useState<HostViewMode>(() => getStoredHostViewMode());
   const [activeManageTab, setActiveManageTab] = useUrlTab<HostManageTab>({
     values: user?.role === "admin" ? HOST_MANAGE_TABS_ADMIN : HOST_MANAGE_TABS_USER,
@@ -1359,7 +1348,7 @@ function HostsContent() {
   const [bulkUpgradeDialogOpen, setBulkUpgradeDialogOpen] = useState(false);
   const hostSearchQuery = manageSearchQueries.hosts;
   const hostPageRequest = usePersistentPageRequest("forwardx.hosts.page");
-  const hostListRefreshInterval = visiblePollingInterval("slow", pageVisible);
+  const hostListRefreshInterval = pollingInterval("slow");
   const hostPageQuery = trpc.hosts.listPage.useQuery({
     page: hostPageRequest.page,
     pageSize: 16,
@@ -1497,7 +1486,7 @@ function HostsContent() {
     }
   };
   const hostManageTabItems = user?.role === "admin" ? HOST_MANAGE_TAB_ITEMS_ADMIN : HOST_MANAGE_TAB_ITEMS_USER;
-  const hostLiveRefreshInterval = visiblePollingInterval("live", pageVisible && activeManageTab === "hosts");
+  const hostLiveRefreshInterval = pollingInterval("live", activeManageTab === "hosts");
   // Sorted, because the ids travel as a query input: keeping the visual order here
   // would give every reorder a brand-new query key and refetch the whole summary.
   const currentPageHostIds = useMemo(

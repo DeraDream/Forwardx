@@ -26,7 +26,8 @@ if (cachedSiteTitle) {
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      refetchOnWindowFocus: false,
+      refetchOnWindowFocus: true,
+      refetchIntervalInBackground: true,
       retry: (failureCount, error) => {
         if (error instanceof TRPCClientError) {
           if (

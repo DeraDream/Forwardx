@@ -934,9 +934,16 @@ export function LinkTestProbeView({
             <div style={{ minWidth: Math.max(0, convergedEntryView.entrySegments.length * 175) }}>
               <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${convergedEntryView.entrySegments.length}, minmax(0, 1fr))` }}>
                 {convergedEntryView.entrySegments.map((segment, index) => (
-                  <div key={`entry-${segment.fromHostId || segment.from}-${index}`} className="min-w-0 rounded-lg border border-slate-200/80 p-2">
-                    {renderTimelineNode(segment.from, segment.fromMeta, "entry", `entry-from-${index}`)}
-                    {renderTimelineConnector(segment, `entry-connector-${index}`)}
+                  <div key={`entry-${segment.fromHostId || segment.from}-${index}`} className="min-w-0">
+                    <div className="rounded-lg border border-slate-200/80 p-2">
+                      {renderTimelineNode(segment.from, segment.fromMeta, "entry", `entry-from-${index}`)}
+                    </div>
+                    <div className="relative flex h-14 items-center justify-center">
+                      <span className={cn("absolute inset-y-0 left-1/2 w-px -translate-x-1/2", getSegmentState(segment).lineClass)} />
+                      <span className={cn("relative rounded-md border bg-background px-2 py-0.5 font-mono text-[11px] font-semibold shadow-sm", getSegmentState(segment).badgeClass)}>
+                        {getSegmentState(segment).label}
+                      </span>
+                    </div>
                   </div>
                 ))}
               </div>

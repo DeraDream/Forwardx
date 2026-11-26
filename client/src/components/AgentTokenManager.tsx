@@ -68,16 +68,6 @@ type InstallAddressOption = {
 };
 
 const AGENT_TOKEN_VIEW_MODE_STORAGE_KEY = "forwardx.agentTokens.viewMode";
-function usePageVisible() {
-  const [visible, setVisible] = useState(() => typeof document === "undefined" || document.visibilityState === "visible");
-  useEffect(() => {
-    const onVisibilityChange = () => setVisible(document.visibilityState === "visible");
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
-  }, []);
-  return visible;
-}
-
 function getStoredAgentTokenViewMode(): AgentTokenViewMode {
   if (typeof window === "undefined") return "card";
   try {
@@ -420,7 +410,6 @@ export default function AgentTokenManager({
 }: AgentTokenManagerProps) {
   const { user } = useAuth();
   const utils = trpc.useUtils();
-  const pageVisible = usePageVisible();
   const [showCreate, setShowCreate] = useState(false);
   const [showNewToken, setShowNewToken] = useState(false);
   const [showScript, setShowScript] = useState(false);
@@ -463,7 +452,7 @@ export default function AgentTokenManager({
     undefined,
     {
       enabled: user?.role === "admin" && !dialogOnly,
-      refetchInterval: !dialogOnly && pageVisible ? 2000 : false,
+      refetchInterval: !dialogOnly ? 2000 : false,
       refetchOnWindowFocus: true,
     }
   );

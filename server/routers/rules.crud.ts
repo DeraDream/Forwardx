@@ -1071,6 +1071,7 @@ export async function createDirectForwardRuleForActor(
       targetIp: normalizeRuleTargetIp(input.targetIp, { tunnelId }),
       targetRuleId: input.targetRuleId || null,
       targetLandingServiceId: input.targetLandingServiceId || null,
+      copySsHostMode: input.copySsHostMode || "landing",
       gostMode: "direct",
       gostRelayHost: null,
       gostRelayPort: null,
@@ -1121,6 +1122,7 @@ export const crudRulesRouter = router({
       targetPort: z.number().min(1).max(65535),
       targetRuleId: z.number().int().positive().nullable().optional(),
       targetLandingServiceId: z.number().int().positive().nullable().optional(),
+      copySsHostMode: z.enum(["landing", "entry"]).optional().default("landing"),
       isEnabled: z.boolean().optional().default(true),
       telegramErrorNotifyEnabled: z.boolean().optional().default(false),
       blockHttp: z.boolean().optional(),
@@ -1285,6 +1287,7 @@ export const crudRulesRouter = router({
           targetPort: input.targetPort,
           targetRuleId: input.targetRuleId || null,
           targetLandingServiceId: input.targetLandingServiceId || null,
+          copySsHostMode: input.copySsHostMode || "landing",
           isEnabled: input.isEnabled,
           telegramErrorNotifyEnabled: !!input.telegramErrorNotifyEnabled,
           blockHttp: false,
@@ -1353,6 +1356,7 @@ export const crudRulesRouter = router({
       targetPort: z.number().min(1).max(65535).optional(),
       targetRuleId: z.number().int().positive().nullable().optional(),
       targetLandingServiceId: z.number().int().positive().nullable().optional(),
+      copySsHostMode: z.enum(["landing", "entry"]).optional(),
       telegramErrorNotifyEnabled: z.boolean().optional(),
       blockHttp: z.boolean().optional(),
       blockSocks: z.boolean().optional(),
@@ -1669,6 +1673,7 @@ export const crudRulesRouter = router({
             // converted back into a direct rule.
             targetRuleId: input.targetRuleId !== undefined ? input.targetRuleId : ((rule as any).targetRuleId ?? null),
             targetLandingServiceId: input.targetLandingServiceId !== undefined ? input.targetLandingServiceId : ((rule as any).targetLandingServiceId ?? null),
+            copySsHostMode: input.copySsHostMode ?? (rule as any).copySsHostMode ?? "landing",
             telegramErrorNotifyEnabled: input.telegramErrorNotifyEnabled ?? (rule as any).telegramErrorNotifyEnabled,
             blockHttp: false,
             blockSocks: false,
@@ -1831,6 +1836,7 @@ export const crudRulesRouter = router({
           // Landing SS is also a valid final target for a forwarding chain.
           targetRuleId: isPortGroup ? (input.targetRuleId !== undefined ? input.targetRuleId : ((rule as any).targetRuleId ?? null)) : null,
           targetLandingServiceId: input.targetLandingServiceId !== undefined ? input.targetLandingServiceId : ((rule as any).targetLandingServiceId ?? null),
+          copySsHostMode: input.copySsHostMode ?? (rule as any).copySsHostMode ?? "landing",
         };
         delete data.id;
         delete data.blockHttp;
@@ -1930,6 +1936,7 @@ export const crudRulesRouter = router({
           sourcePort,
           targetIp: normalizeRuleTargetIp(input.targetIp ?? (rule as any).targetIp, { tunnelId: !isForwardChain && (group as any).groupType === "tunnel" ? 1 : null }),
           targetPort: Number(input.targetPort ?? (rule as any).targetPort),
+          copySsHostMode: input.copySsHostMode ?? (rule as any).copySsHostMode ?? "landing",
           telegramErrorNotifyEnabled: input.telegramErrorNotifyEnabled ?? (rule as any).telegramErrorNotifyEnabled,
           blockHttp: false,
           blockSocks: false,

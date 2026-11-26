@@ -344,6 +344,7 @@ const tables: TableDef[] = [
       c("sourcePort", "int", { notNull: true }), c("targetIp", "text", { notNull: true }),
       c("targetPort", "int", { notNull: true }),
       c("targetRuleId", "int"), c("targetLandingServiceId", "int"),
+      c("copySsHostMode", "varchar", { length: 16, notNull: true, default: "landing" }),
       c("telegramErrorNotifyEnabled", "bool", { notNull: true, default: false }),
       c("blockHttp", "bool", { notNull: true, default: false }), c("blockSocks", "bool", { notNull: true, default: false }),
       c("blockTls", "bool", { notNull: true, default: false }),
