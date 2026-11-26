@@ -580,7 +580,7 @@ function CreateDialog({
   }, [editingChain?.id, open]);
   const save = async (): Promise<number | undefined> => {
     if (!valid)
-      throw new Error("至少两台机器，末端必须是落地机，并填写有效端口和密码");
+      throw new Error("至少两台机器，末端必须安装标准 Agent，并填写有效端口和密码");
     const input = {
       name: name.trim(),
       port: Number(port),
@@ -731,13 +731,13 @@ function CreateDialog({
         <div className="grid gap-3 px-6 py-4">
           <>
             <div className="order-0 rounded-md border border-emerald-500/20 bg-emerald-500/5 p-3">
-              <Label>使用落地机</Label>
+              <Label>落地 SS 部署主机（标准 Agent）</Label>
               <Select
                 value={landingHostId ? String(landingHostId) : ""}
                 onValueChange={selectLandingHost}
               >
                 <SelectTrigger className="mt-2">
-                  <SelectValue placeholder="请选择落地机" />
+                  <SelectValue placeholder="请选择标准 Agent 主机" />
                 </SelectTrigger>
                 <SelectContent>
                   {(hostsQuery.data || [])

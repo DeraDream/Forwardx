@@ -6,6 +6,7 @@ import { pushTunnelEndpointRefresh } from "./helpers";
 import { reserveSpecificHostPort } from "../portReservations";
 import { getLandingPortCheck, requestLandingPortCheck } from "../landingPortChecks";
 import { assertPortNotSystemReserved, getSystemReservedPort } from "../systemReservedPorts";
+import { supportsManagedLandingSS } from "../landingHostEligibility";
 
 const METHODS = [
   "aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305",
@@ -34,8 +35,7 @@ async function requireEligibleHost(user: any, hostId: number) {
   const host = await db.getHostById(hostId) as any;
   if (!host) throw new Error("主机不存在");
   if (!isAdmin(user) && Number(host.userId) !== Number(user.id)) throw new Error("无权使用该主机");
-  const eligible = await db.getLandingHostByHostId(hostId);
-  if (!eligible) throw new Error("该主机尚未在链路管理中标记为落地机");
+  if (!supportsManagedLandingSS(host)) throw new Error("该主机需要安装标准 Agent 才能部署落地 SS");
   return host;
 }
 
@@ -63,6 +63,16 @@ async function activeLandingServiceReferences(serviceId: number) {
 }
 
 export const landingRouter = router({
+  deployableHosts: protectedProcedure.query(async ({ ctx }) => {
+    const ownerId = isAdmin(ctx.user) ? undefined : Number(ctx.user.id);
+    const [hosts, markers] = await Promise.all([db.getHosts(ownerId), db.getLandingHosts(ownerId)]);
+    const disabledIds = new Set(markers.filter((marker: any) => marker.isEnabled === false).map((marker: any) => Number(marker.hostId)));
+    return (hosts as any[]).filter(supportsManagedLandingSS).map((host) => ({
+      hostId: Number(host.id),
+      hostDisabled: disabledIds.has(Number(host.id)),
+      host: { id: Number(host.id), name: host.name, ip: publicEndpoint(host), exitIp: exitEndpoint(host), isOnline: !!host.isOnline },
+    }));
+  }),
   eligibleHosts: protectedProcedure.query(async ({ ctx }) => {
     const ownerUserId = isAdmin(ctx.user) ? undefined : ctx.user.id;
     const [markers, services, rules, groups] = await Promise.all([
@@ -208,6 +218,7 @@ export const landingRouter = router({
     endpoint: z.string().trim().min(1).max(255), latencyTargetHost: z.string().trim().min(1).max(255).default(DEFAULT_LANDING_LATENCY_TARGET), latencyTargetPort: z.number().int().min(1).max(65535).default(443),
   })).mutation(async ({ input, ctx }) => {
     const host = input.hostId ? await requireEligibleHost(ctx.user, input.hostId) : null;
+    if (host && (await db.getLandingHostByHostId(input.hostId!))?.isEnabled === false) throw new Error("该主机的落地 SS 总开关已关闭，请先开启");
     if (host) await assertPortNotSystemReserved(input.hostId!, input.port);
     const wants2022 = input.protocol === "ss2022";
     if (wants2022 !== input.method.startsWith("2022-")) throw new Error("SS2022 必须使用 2022 加密方式，普通 SS 不能使用 2022 加密方式");

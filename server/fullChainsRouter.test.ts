@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-test("panel can create only a unique chain ending at a marked landing host", () => {
+test("panel can create only a unique chain ending at a standard Agent host", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-full-chain-router-"));
   const databasePath = path.join(directory, "full-chain.db");
   const script = String.raw`
@@ -25,6 +25,7 @@ test("panel can create only a unique chain ending at a marked landing host", () 
       for (const [id, name, ip] of [[11, "入口", "198.51.100.11"], [12, "旧中转", "198.51.100.12"], [13, "落地", "198.51.100.13"], [14, "新中转", "198.51.100.14"]]) {
         await runtime.executeRaw('INSERT INTO "hosts" ("id", "name", "ip", "ipv4", "userId") VALUES (?, ?, ?, ?, 1)', [id, name, ip, ip]);
       }
+      await runtime.executeRaw('UPDATE "hosts" SET "agentVersion" = ? WHERE "id" = 13', ["2.4.139"]);
       await runtime.executeRaw('INSERT INTO "landing_hosts" ("hostId", "userId") VALUES (13, 1)');
       const caller = fullChainsRouter.createCaller({ req: { headers: {} }, res: { clearCookie() {} }, user: { id: 1, username: "chain-user", role: "user", accountEnabled: true }, authSession: null, authFailureReason: null });
       const landingCaller = landingRouter.createCaller({ req: { headers: {} }, res: { clearCookie() {} }, user: { id: 1, username: "chain-user", role: "user", accountEnabled: true }, authSession: null, authFailureReason: null });
@@ -119,6 +120,7 @@ test("full-chain checks all nodes before deployment", () => {
       await schema.ensureDatabaseSchema();
       await runtime.executeRaw('INSERT INTO "users" ("id", "username", "password", "name", "role") VALUES (1, ?, ?, ?, ?)', ["chain-user", "x", "Chain User", "user"]);
       for (const [id, name, ip] of [[11, "入口", "198.51.100.11"], [12, "落地", "198.51.100.12"]]) await runtime.executeRaw('INSERT INTO "hosts" ("id", "name", "ip", "ipv4", "userId") VALUES (?, ?, ?, ?, 1)', [id, name, ip, ip]);
+      await runtime.executeRaw('UPDATE "hosts" SET "agentVersion" = ? WHERE "id" = 12', ["2.4.139"]);
       await runtime.executeRaw('INSERT INTO "landing_hosts" ("hostId", "userId") VALUES (12, 1)');
       const caller = fullChainsRouter.createCaller({ req: { headers: {} }, res: { clearCookie() {} }, user: { id: 1, username: "chain-user", role: "user", accountEnabled: true }, authSession: null, authFailureReason: null });
       const randomOne = await caller.random();
@@ -236,6 +238,7 @@ test("full-chain waits for referenced chain rules and records its internal hop l
       for (const [id, name, ip] of [[11, "入口", "198.51.100.11"], [12, "落地", "198.51.100.12"], [13, "链入口", "198.51.100.13"], [14, "链出口", "198.51.100.14"], [15, "链后中转", "198.51.100.15"]]) {
         await runtime.executeRaw('INSERT INTO "hosts" ("id", "name", "ip", "ipv4", "userId") VALUES (?, ?, ?, ?, 1)', [id, name, ip, ip]);
       }
+      await runtime.executeRaw('UPDATE "hosts" SET "agentVersion" = ? WHERE "id" = 12', ["2.4.139"]);
       await runtime.executeRaw('INSERT INTO "landing_hosts" ("hostId", "userId") VALUES (12, 1)');
       await runtime.executeRaw('INSERT INTO "forward_groups" ("id", "name", "groupMode", "forwardType", "protocol", "targetIp", "userId") VALUES (31, ?, ?, ?, ?, ?, 1)', ["链路管理转发链", "chain", "iptables", "both", "198.51.100.12"]);
       await runtime.executeRaw('INSERT INTO "forward_group_members" ("groupId", "memberType", "hostId", "priority") VALUES (31, ?, 13, 0), (31, ?, 14, 1)', ["host", "host"]);

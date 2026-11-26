@@ -3,6 +3,7 @@ import { z } from "zod";
 import * as db from "../db";
 import { pushAgentRefresh } from "../agentEvents";
 import { cancelFullChain, deployFullChain, startFullChain, startFullChainLatencyCheck, startFullChainProtocolCheck } from "../fullChainRuntime";
+import { supportsManagedLandingSS } from "../landingHostEligibility";
 
 const methods = ["aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305", "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"] as const;
 const secret = () => Array.from(crypto.getRandomValues(new Uint8Array(28)), (v) => "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"[v % 64]).join("");
@@ -58,7 +59,8 @@ async function validateNodes(user: any, nodes: z.infer<typeof nodeInput>[]) {
     }
   }
   const last = nodes.at(-1);
-  if (!last || !("hostId" in last) || !last.hostId || !await db.getLandingHostByHostId(last.hostId)) throw new Error("末端 SS 必须选择已标记的落地机");
+  if (!last || !("hostId" in last) || !last.hostId || !supportsManagedLandingSS(await db.getHostById(last.hostId))) throw new Error("末端 SS 必须选择安装了标准 Agent 的主机");
+  if ((await db.getLandingHostByHostId(last.hostId))?.isEnabled === false) throw new Error("末端主机的落地 SS 总开关已关闭");
 }
 
 export const fullChainsRouter = router({
@@ -68,10 +70,9 @@ export const fullChainsRouter = router({
     return db.getFullChainLatencySeries(input.id, input.hours);
   }),
   hosts: protectedProcedure.query(async ({ ctx }) => {
-    const hosts = await db.getHosts(ownerId(ctx.user));
-    const markers = await db.getLandingHosts(ownerId(ctx.user));
-    const landingIds = new Set(markers.map((row: any) => Number(row.hostId)));
-    return hosts.map((host: any) => ({ id: Number(host.id), name: host.name, ip: host.entryIp || host.ipv4 || host.ip || "", isOnline: !!host.isOnline, isLanding: landingIds.has(Number(host.id)) }));
+    const [hosts, markers] = await Promise.all([db.getHosts(ownerId(ctx.user)), db.getLandingHosts(ownerId(ctx.user))]);
+    const disabledIds = new Set(markers.filter((marker: any) => marker.isEnabled === false).map((marker: any) => Number(marker.hostId)));
+    return hosts.map((host: any) => ({ id: Number(host.id), name: host.name, ip: host.entryIp || host.ipv4 || host.ip || "", isOnline: !!host.isOnline, isLanding: supportsManagedLandingSS(host) && !disabledIds.has(Number(host.id)) }));
   }),
   forwardChains: protectedProcedure.query(async ({ ctx }) => Promise.all(((await db.getForwardGroups(ownerId(ctx.user), { includeRuntime: false }) as any[])
     .filter((group) => String(group.groupMode) === "chain" && group.isEnabled !== false)

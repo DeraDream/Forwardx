@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, ne, or, sql } from "drizzle-orm";
 import {
   tunnels,
   hosts,
@@ -1785,11 +1785,12 @@ export async function isPortUsedOnHost(
   excludeTunnelId?: number,
   excludeRuleExitPorts = true,
   allowTunnelListener?: TunnelListenerExemptionInput,
+  excludeLandingServiceId?: number,
 ): Promise<boolean> {
   const db = await getDb();
   if (!db) return false;
   if (await isSystemReservedPort(hostId, sourcePort)) return true;
-  const landingRows = await db.select({ id: landingServices.id }).from(landingServices).where(and(eq(landingServices.hostId, hostId), or(eq(landingServices.port, sourcePort), eq(landingServices.previousPort, sourcePort)))).limit(1);
+  const landingRows = await db.select({ id: landingServices.id }).from(landingServices).where(and(eq(landingServices.hostId, hostId), or(eq(landingServices.port, sourcePort), eq(landingServices.previousPort, sourcePort)), ...(excludeLandingServiceId ? [ne(landingServices.id, excludeLandingServiceId)] : []))).limit(1);
   if (landingRows.length) return true;
   const excludedIds = Array.from(new Set(
     (Array.isArray(excludeRuleId) ? excludeRuleId : [excludeRuleId])

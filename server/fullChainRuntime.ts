@@ -1,5 +1,6 @@
 import * as db from "./db";
 import { pushAgentRefresh } from "./agentEvents";
+import { supportsManagedLandingSS } from "./landingHostEligibility";
 import { createHopTestBatch, recordHopTestResult, registerHopTest } from "./hopTestState";
 
 const runtimePrefix = "full-chain-";
@@ -150,9 +151,10 @@ async function beginDeploy(chainId: number) {
         return;
       }
     }
-    const landing = await db.getLandingHostByHostId(Number(next.hostId));
-    if (!landing)
-      return fail(chainId, Number(next.id), "deploy", "末端主机不是落地机");
+    if (!supportsManagedLandingSS(host))
+      return fail(chainId, Number(next.id), "deploy", "末端主机未安装标准 Agent");
+    if ((await db.getLandingHostByHostId(Number(next.hostId)))?.isEnabled === false)
+      return fail(chainId, Number(next.id), "deploy", "末端主机的落地 SS 总开关已关闭");
     const serviceId = await db.createLandingService({
       hostId: Number(next.hostId),
       userId: Number(chain.userId),
@@ -255,19 +257,25 @@ async function restoreReplacedChain(chain: any) {
   if (!replacedChainId) return;
   const replaced = await db.getFullChainById(replacedChainId) as any;
   if (!replaced || replaced.isEnabled || String(replaced.status) !== "cancelled") return;
-  await startFullChain(replacedChainId, { preserveLandingService: true });
+  await startFullChain(replacedChainId, { preserveLandingService: true, ignoreRulesFromChainId: Number(chain.id) });
 }
 
-export async function startFullChain(chainId: number, { preserveLandingService = false } = {}) {
+export async function startFullChain(chainId: number, { preserveLandingService = false, ignoreRulesFromChainId = 0 } = {}) {
   const chain = (await db.getFullChainById(chainId)) as any;
   if (!chain) throw new Error("全链路不存在");
   const nodes = await db.getFullChainNodes(chainId);
   if (nodes.length < 2) throw new Error("全链路至少需要两台机器");
-  const ignoredRuleIds = Number(chain.replacesChainId) > 0
-    ? (await db.getFullChainNodes(Number(chain.replacesChainId)))
-      .map((node: any) => Number(node.generatedRuleId || 0))
-      .filter((id: number) => id > 0)
-    : undefined;
+  const replacedChain = Number(chain.replacesChainId) > 0
+    ? await db.getFullChainById(Number(chain.replacesChainId)) as any
+    : null;
+  const ignoredRuleIds = [
+    ...(replacedChain ? await db.getFullChainNodes(Number(chain.replacesChainId)) : preserveLandingService ? nodes : []),
+    ...(ignoreRulesFromChainId ? await db.getFullChainNodes(ignoreRulesFromChainId) : []),
+  ].map((node: any) => Number(node.generatedRuleId || 0)).filter((id: number) => id > 0);
+  const ownedLandingId = replacedChain?.landingServiceId || (preserveLandingService ? chain.landingServiceId : null);
+  const reusedLanding = ownedLandingId
+    ? await db.getLandingServiceById(Number(ownedLandingId), true) as any
+    : null;
   for (const node of nodes) {
     if (String(node.nodeType || "host") === "forward-chain") continue;
     if (
@@ -276,6 +284,12 @@ export async function startFullChain(chainId: number, { preserveLandingService =
         Number(chain.port),
         ignoredRuleIds,
         chain.protocol,
+        undefined,
+        true,
+        undefined,
+        node === nodes.at(-1) && Number(reusedLanding?.hostId) === Number(node.hostId) && Number(reusedLanding?.port) === Number(chain.port)
+          ? Number(reusedLanding.id)
+          : undefined,
       )
     ) {
       await fail(
@@ -666,7 +680,11 @@ export async function cancelFullChain(chainId: number, { preserveLandingService 
       });
     }
   }
-  if (!preserveLandingService && Number(chain.landingServiceId) > 0) {
+  const replaced = restoreReplacement && Number(chain.replacesChainId) > 0
+    ? await db.getFullChainById(Number(chain.replacesChainId)) as any
+    : null;
+  const restoringSameLanding = Number(chain.landingServiceId) > 0 && Number(replaced?.landingServiceId) === Number(chain.landingServiceId);
+  if (!preserveLandingService && !restoringSameLanding && Number(chain.landingServiceId) > 0) {
     const service = (await db.getLandingServiceById(
       Number(chain.landingServiceId),
       true,
