@@ -138,14 +138,15 @@ async function resolveFinalLandingForRule(ruleId: number, user: any, visited = n
   const serviceId = Number(rule.targetLandingServiceId || 0);
   if (serviceId > 0) {
     const service = await db.getLandingServiceById(serviceId, false) as any;
-    if (!service || service.isFullChainManaged || service.isExternal || Number(service.hostId || 0) <= 0) return null;
+    if (!service || service.isFullChainManaged) return null;
     if (String(user?.role) !== "admin" && Number(service.userId) !== Number(user?.id)) throw new Error("无权查看该落地服务");
+    const landing = { ruleId: id, serviceId: Number(service.id), serviceName: String(service.name || `落地 SS #${service.id}`) };
+    // An external SS is a valid copy target, but has no host network profile.
+    if (service.isExternal) return { ...landing, hostId: null, hostName: null };
     const host = await db.getHostById(Number(service.hostId)) as any;
     if (!host) return null;
     return {
-      ruleId: id,
-      serviceId: Number(service.id),
-      serviceName: String(service.name || `落地 SS #${service.id}`),
+      ...landing,
       hostId: Number(host.id),
       hostName: String(host.name || `主机 #${host.id}`),
     };

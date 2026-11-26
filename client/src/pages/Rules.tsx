@@ -3037,6 +3037,7 @@ function RulesContent() {
   >(null);
   const [showCopyDialog, setShowCopyDialog] = useState(false);
   const [form, setForm] = useState<RuleFormData>(defaultForm);
+  const initialEditForm = useRef<RuleFormData | null>(null);
   const filterResourceStorageKey = ruleFilterStorageKey(
     RULE_FILTER_RESOURCE_STORAGE_KEY,
     user,
@@ -3378,7 +3379,7 @@ function RulesContent() {
 
   const updateMutation = trpc.rules.update.useMutation({
     onSuccess: (_data, variables) => {
-      invalidateRuleProbeStatuses([Number(variables.id)]);
+      if (!("metadataOnly" in _data && _data.metadataOnly)) invalidateRuleProbeStatuses([Number(variables.id)]);
       utils.rules.list.invalidate();
       utils.rules.listPage.invalidate();
       utils.rules.mapItems.invalidate();
@@ -3784,7 +3785,7 @@ function RulesContent() {
     const isLegacyLocalRule =
       !Number(rule.forwardGroupId || 0) &&
       !(rule.forwardType === "gost" && Number(rule.tunnelId || 0) > 0);
-    setForm({
+    const editForm: RuleFormData = {
       hostId: rule.hostId,
       name: rule.name,
       routeMode: rule.forwardGroupId
@@ -3831,7 +3832,9 @@ function RulesContent() {
       failoverSeconds: Number(rule.failoverSeconds || 60),
       recoverSeconds: Number(rule.recoverSeconds || 120),
       autoFailback: rule.autoFailback !== false,
-    });
+    };
+    initialEditForm.current = editForm;
+    setForm(editForm);
     setEditingId(rule.id);
     setEditingOriginalProtocol(normalizeRuleProtocol(rule.protocol));
     setLegacyLocalRuleEditId(isLegacyLocalRule ? Number(rule.id) : null);
@@ -5131,6 +5134,22 @@ function RulesContent() {
   const handleSubmit = async () => {
     const submitForwardType = effectiveRouteForwardType;
     const ruleName = form.name.trim() || suggestedRuleName;
+    const original = initialEditForm.current;
+    if (editingId && original && form.routeMode === "chain" && ruleName &&
+      (Object.keys(original) as (keyof RuleFormData)[]).every(key => key === "name" || key === "copySsHostMode" || original[key] === form[key])) {
+      // Only send the fields actually edited. In particular, a green port
+      // check is not a request to enable/reapply a running listener.
+      if (ruleName === original.name && form.copySsHostMode === original.copySsHostMode) {
+        setShowDialog(false);
+        resetForm();
+        return;
+      }
+      updateMutation.mutate({ id: editingId,
+        ...(ruleName !== original.name ? { name: ruleName } : {}),
+        ...(form.copySsHostMode !== original.copySsHostMode ? { copySsHostMode: form.copySsHostMode } : {}),
+      });
+      return;
+    }
     if (
       !ruleName ||
       (!form.targetRuleId && !form.targetIp) ||

@@ -681,6 +681,20 @@ test("forward chain synchronization is atomic and skips unnecessary allocations"
         authSession: null,
         authFailureReason: null,
       });
+      const chainRows = () => runtime.queryRaw('SELECT * FROM "forward_rules" WHERE "forwardGroupRuleId" = 8000 ORDER BY id');
+      const beforeRename = await chainRows();
+      const renamed = await rules.update({ id: 8000, name: 'Po0-LegengSG' });
+      assert.equal(renamed.reset, false);
+      assert.equal((await runtime.queryRaw('SELECT name FROM "forward_rules" WHERE id = 8000'))[0].name, 'Po0-LegengSG');
+      assert.deepEqual(await chainRows(), beforeRename, 'renaming must not rewrite any chain hop');
+      const runtimeState = () => runtime.queryRaw('SELECT isRunning, isEnabled, sourcePort, targetIp, targetPort FROM forward_rules WHERE id = 8000');
+      const beforeCopyEdit = await runtimeState();
+      for (const patch of [{ copySsHostMode: 'entry' }, { name: 'MixedCase', copySsHostMode: 'landing' }]) {
+        assert.deepEqual(await rules.update({ id: 8000, ...patch }), { success: true, reset: false, metadataOnly: true });
+        assert.equal((await runtime.queryRaw('SELECT copySsHostMode FROM forward_rules WHERE id = 8000'))[0].copySsHostMode, patch.copySsHostMode);
+        assert.deepEqual(await chainRows(), beforeRename, 'copy preferences must not touch chain hops');
+        assert.deepEqual(await runtimeState(), beforeCopyEdit);
+      }
       await assert.rejects(
         () => rules.update({ id: 8000, targetPort: 8443 }),
         /injected-chain-rule-edit-failure/,

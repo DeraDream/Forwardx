@@ -1759,6 +1759,16 @@ export const crudRulesRouter = router({
         if (ctx.user.role !== "admin" && (input.isEnabled === true || dbBool((rule as any).isEnabled))) {
           await requireTrafficBillingBalanceForRule(ctx.user.id, groupAccess.isTrafficBillingResource);
         }
+        if (isForwardChain && Object.keys(input).every(key => key === "id" || key === "name" || key === "copySsHostMode")) {
+          // Both the card label and the copied URI are template metadata.
+          // Do not reserve ports, rewrite children or request failover sync.
+          const patch = {
+            ...(input.name !== undefined && input.name !== rule.name ? { name: input.name } : {}),
+            ...(input.copySsHostMode !== undefined && input.copySsHostMode !== rule.copySsHostMode ? { copySsHostMode: input.copySsHostMode } : {}),
+          };
+          if (Object.keys(patch).length) await db.updateForwardRule(input.id, patch);
+          return { success: true, reset: false, metadataOnly: true };
+        }
         const nextForwardType = lockedForwardTypeForGroup(group, input.forwardType ?? (rule as any).forwardType);
         const groupRouteChanged = groupChanged
           || String(nextForwardType) !== String((rule as any).forwardType);
