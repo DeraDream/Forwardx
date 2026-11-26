@@ -385,7 +385,7 @@ export async function getHostUpgradeCandidates(input: Omit<HostListQuery, keyof 
   return rows.map(withComputedOnline);
 }
 
-function compactHostOption(host: any) {
+export function compactHostOption(host: any) {
   return {
     id: host?.id,
     userId: host?.userId,
@@ -399,6 +399,8 @@ function compactHostOption(host: any) {
     isOnline: host?.isOnline,
     lastHeartbeat: host?.lastHeartbeat,
     agentVersion: host?.agentVersion,
+    trafficLimit: host?.trafficLimit,
+    trafficMeasureMode: host?.trafficMeasureMode,
     agentProbeVersion: host?.agentProbeVersion,
     agentProbePort: host?.agentProbePort,
     agentProbeTcpReady: host?.agentProbeTcpReady,

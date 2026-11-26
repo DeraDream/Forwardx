@@ -26,9 +26,13 @@ test("host options fall back to the full-row query on a legacy hosts schema", ()
         [1, "admin", "hash", "Admin", "admin"],
       );
       await runtime.executeRaw(
-        'INSERT INTO "hosts" ("id", "name", "ip", "ipv4", "agentToken", "userId", "isOnline", "lastHeartbeat") VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-        [1, "Legacy host", "192.0.2.10", "192.0.2.10", "secret-agent-token", 1, 1, Math.floor(Date.now() / 1000)],
+        'INSERT INTO "hosts" ("id", "name", "ip", "ipv4", "agentToken", "userId", "isOnline", "lastHeartbeat", "trafficLimit", "trafficMeasureMode") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [1, "Legacy host", "192.0.2.10", "192.0.2.10", "secret-agent-token", 1, 1, Math.floor(Date.now() / 1000), 1024 * 1024, "outbound"],
       );
+
+      const projected = await hosts.getHostOptions();
+      assert.equal(Number(projected[0].trafficLimit), 1024 * 1024);
+      assert.equal(projected[0].trafficMeasureMode, "outbound");
 
       // Simulate a deployment that did not apply the later geo columns.
       for (const column of [
@@ -44,6 +48,8 @@ test("host options fall back to the full-row query on a legacy hosts schema", ()
       assert.equal(options[0].name, "Legacy host");
       assert.equal(options[0].isOnline, true);
       assert.equal(options[0].agentToken, undefined);
+      assert.equal(Number(options[0].trafficLimit), 1024 * 1024);
+      assert.equal(options[0].trafficMeasureMode, "outbound");
     } finally {
       await runtime.closeDatabase().catch(() => undefined);
     }
