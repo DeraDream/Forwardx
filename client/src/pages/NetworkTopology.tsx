@@ -809,7 +809,7 @@ function TopologyEntryBranch({
   onProbe: (entry: PhysicalPath, edge: TopologyEdge) => void;
   onSelect: (entry: PhysicalPath) => void;
 }) {
-  const rowHeight = 40;
+  const rowHeight = 64;
   const height = entrances.length * rowHeight;
   const middle = height / 2;
   const branches = entrances.map((entry, index) => {
@@ -818,8 +818,8 @@ function TopologyEntryBranch({
   });
   const selected = branches.some(({ entry, label }) => entry.id === selectedPathId && label !== "阻断" && label !== "离线");
   return <div className="flex shrink-0 items-center gap-1.5">
-    <div className="flex w-36 shrink-0 flex-col">
-      {branches.map(({ entry }) => <button key={entry.id} type="button" onClick={(event) => { event.stopPropagation(); onSelect(entry); }} className="flex h-10 w-full items-center gap-1.5 rounded-lg border border-blue-100 bg-blue-50/70 px-2 text-left text-xs font-semibold text-slate-800 hover:border-primary/60"><span className="shrink-0">{nodeIcon(entry.entry)}</span><span className="truncate">{entry.entry.label}</span></button>)}
+    <div className="flex w-44 shrink-0 flex-col">
+      {branches.map(({ entry }) => <div key={entry.id} className="flex h-16 items-center"><button type="button" onClick={(event) => { event.stopPropagation(); onSelect(entry); }} title={`${entry.entry.label} · ${entry.entry.subtitle || "IP 未知"}`} className="flex h-12 w-full items-center gap-1.5 rounded-lg border border-blue-100 bg-blue-50/70 px-2 text-left text-xs font-semibold text-slate-800 hover:border-primary/60"><span className="shrink-0">{nodeIcon(entry.entry)}</span><span className="min-w-0"><span className="block truncate">{entry.entry.label}</span><span className="block truncate font-mono text-[10px] font-normal text-slate-500">{entry.entry.subtitle || "IP 未知"}</span></span></button></div>)}
     </div>
     <div className="relative w-28 shrink-0" style={{ height }}>
       <svg className="absolute inset-0" width="112" height={height} viewBox={`0 0 112 ${height}`} aria-hidden="true">
