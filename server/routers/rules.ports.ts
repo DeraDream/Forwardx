@@ -8,6 +8,7 @@ import {
   requireTunnelUseOrTrafficBillingAccess,
 } from "./helpers";
 import { combineHostPortPolicyWithRange, combinePortPolicies, isPortAllowedByPolicy, portPolicyErrorMessage, portPolicyFrom } from "../portPolicy";
+import { assertExternalForwardPortAvailable } from "../externalForwardPorts";
 
 const randomPortInputSchema = z.object({
   hostId: z.number().optional(),
@@ -61,6 +62,9 @@ export const portsRulesRouter = router({
             protocol: input.protocol,
             excludeTemplateRuleId: input.excludeRuleId,
           });
+          for (const hostId of await db.getForwardGroupRuleEntryHostIds(input.forwardGroupId)) {
+            await assertExternalForwardPortAvailable(hostId, input.sourcePort, input.protocol);
+          }
           return { used: false };
         } catch (error) {
           const reason = error instanceof Error ? error.message : "";
@@ -108,7 +112,13 @@ export const portsRulesRouter = router({
           ]
         : [];
       const used = await db.isPortUsedOnHost(hostId, input.sourcePort, excludeRuleIds, input.protocol, undefined, false);
-      return { used };
+      if (used) return { used: true };
+      try {
+        await assertExternalForwardPortAvailable(hostId, input.sourcePort, input.protocol);
+      } catch (error) {
+        return { used: true, reason: error instanceof Error ? error.message : "节点端口检查失败" };
+      }
+      return { used: false };
     }),
   randomPort: protectedProcedure
     .input(randomPortInputSchema)
@@ -149,16 +159,26 @@ export const portsRulesRouter = router({
             ...((await db.getForwardGroupChildRulesForTemplate(input.excludeRuleId)) as any[]).map((rule: any) => Number(rule.id)),
           ]
         : [];
-      const port = await db.findAvailablePort(
-        input.hostId,
-        rangeStart,
-        rangeEnd,
-        input.protocol,
-        [],
-        excludeRuleIds,
-        planRange?.ranges || [],
-      );
-      if (!port) throw new Error("该主机端口区间内已无可用端口");
-      return { port };
+      const excludedPorts: number[] = [];
+      for (let attempt = 0; attempt < 64; attempt += 1) {
+        const port = await db.findAvailablePort(
+          input.hostId,
+          rangeStart,
+          rangeEnd,
+          input.protocol,
+          excludedPorts,
+          excludeRuleIds,
+          planRange?.ranges || [],
+        );
+        if (!port) break;
+        try {
+          await assertExternalForwardPortAvailable(input.hostId, port, input.protocol);
+          return { port };
+        } catch (error) {
+          if (!/已被节点上的外部/.test(error instanceof Error ? error.message : "")) throw error;
+          excludedPorts.push(port);
+        }
+      }
+      throw new Error("该主机端口区间内没有可用的未占用端口");
     }),
 });

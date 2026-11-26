@@ -26,6 +26,7 @@ import { trafficBillingUserLockKey, withKeyedTaskLock } from "../keyedTaskLock";
 import { mapWithConcurrency } from "../asyncPool";
 import { reserveRuleCreateQuota, type RuleQuotaReservation } from "../ruleQuotaReservations";
 import { assertPortNotSystemReserved } from "../systemReservedPorts";
+import { assertExternalForwardPortAvailable } from "../externalForwardPorts";
 import { resolveLandingGroupActiveService } from "../landingGroupTarget";
 
 const targetHostSchema = z.string().min(1).max(253).refine(
@@ -1010,6 +1011,8 @@ export async function createDirectForwardRuleForActor(
       }
     }
 
+    await assertExternalForwardPortAvailable(hostId, sourcePort, input.protocol);
+
     quotaReservation = await reserveRuleCreateQuota({
       userId: actor.id,
       maxRules: Number(currentUser?.maxRules || 0),
@@ -1184,6 +1187,7 @@ export const crudRulesRouter = router({
           const reservations: HostPortReservation[] = [];
           try {
             for (const entryHostId of entryHostIds) {
+              await assertExternalForwardPortAvailable(entryHostId, port, input.protocol);
               const reservation = await reserveSpecificHostPort({
                 hostId: entryHostId,
                 port,
@@ -1394,6 +1398,7 @@ export const crudRulesRouter = router({
           && reservation.protocol === protocol
         ));
         if (existing) return existing;
+        await assertExternalForwardPortAvailable(hostId, port, protocol);
         const reservation = await reserveSpecificHostPort({
           hostId,
           port,

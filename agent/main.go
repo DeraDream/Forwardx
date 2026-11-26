@@ -4905,6 +4905,11 @@ func runAgentEventStream(cfg Config) error {
 					}
 				} else if msg.Type == "agent-selftest" {
 					go pullSelfTestsOnce(cfg)
+				} else if msg.Type == "agent-external-port-check" && iptablesOnlyBuild {
+					var request externalPortCheckRequest
+					if err := json.Unmarshal(msg.Data, &request); err == nil {
+						go handleExternalPortCheck(cfg, request)
+					}
 				} else if msg.Type == "agent-network-profile" {
 					var request networkProfileRequest
 					if err := json.Unmarshal(msg.Data, &request); err != nil {
@@ -5056,6 +5061,12 @@ func handleActionWithRuntimeSnapshot(cfg Config, a action, releaseRuntimeGate fu
 
 func handleActionJobWithRuntimeSnapshot(cfg Config, a action, releaseRuntimeGate func(), previousRuntime *localActionRuntimeSnapshot, jobResult *actionJobResult) bool {
 	if rejectAgentProbePortAction(cfg, a) {
+		return false
+	}
+	// Inspect before any cleanup command can remove a third-party DNAT.
+	if conflict := externalForwardConflict(a); conflict != "" {
+		logf("action rejected: %s", conflict)
+		reportActionStatus(cfg, a, false, conflict)
 		return false
 	}
 	if strings.TrimSpace(a.StatusType) == "runtime" && pluginAgentTaskIDPattern.MatchString(strings.TrimSpace(a.PluginID)) {

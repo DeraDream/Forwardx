@@ -344,6 +344,10 @@ export function pushAgentSelfTest(hostId: number, diagnosticId: string) {
   });
 }
 
+export function pushAgentExternalPortCheck(hostId: number, input: { requestId: string; port: number; protocol: unknown }) {
+  return sendAgentEvent(hostId, "agent-external-port-check", input);
+}
+
 export function pushAgentNetworkProfile(
   hostId: number,
   input: { taskId: string; family: "ipv4" | "ipv6"; mode: "quick" | "full" },

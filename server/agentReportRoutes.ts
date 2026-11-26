@@ -47,6 +47,7 @@ import { agentTcpingReportGate } from "./agentTcpingReportGate";
 import { pruneMapEntries, setBoundedMapValue } from "./boundedCache";
 import { branchedTunnelExitEndpoints, relayBranchedTunnelExitEndpoints } from "./tunnelBranchPlan";
 import { completeAgentLinkProbeTask } from "./agentLinkTasks";
+import { completeExternalForwardPortCheck } from "./externalForwardPorts";
 
 const VERBOSE_AGENT_REPORTS = /^(1|true|yes|on)$/i.test(String(process.env.FORWARDX_VERBOSE_AGENT_REPORTS || ""));
 
@@ -534,6 +535,16 @@ function compactHostTraffic(value: unknown): AgentHostTrafficStat | null {
 }
 
 export function registerAgentReportRoutes(agentRouter: Router) {
+agentRouter.post("/api/agent/external-port-check-result", async (req: Request, res: Response) => {
+  try {
+    const host = await getAgentHostIdentityFromRequest(req);
+    if (!host) { res.status(401).json({ error: "Invalid token" }); return; }
+    res.json({ success: completeExternalForwardPortCheck(Number(host.id), req.body) });
+  } catch (error) {
+    console.error("[ExternalForwardPorts] Agent report failed:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
 agentRouter.post("/api/agent/support-bundle-result", async (req: Request, res: Response) => {
   try {
     const host = await getAgentHostIdentityFromRequest(req);
