@@ -61,7 +61,9 @@ test("Agent middleware marks pre-auth failures as rejected", async () => {
   });
 });
 
-test("network profile and link-speed routes are allowed through the encrypted Agent tunnel", () => {
+test("network profile, link-speed, link probes and external port checks are allowed through the encrypted Agent tunnel", () => {
+  assert.equal(AGENT_TUNNEL_PATHS.has("/api/agent/agent-link-probe-result"), true);
+  assert.equal(AGENT_TUNNEL_PATHS.has("/api/agent/external-port-check-result"), true);
   assert.equal(AGENT_TUNNEL_PATHS.has("/api/agent/network-profile-report"), true);
   assert.equal(AGENT_TUNNEL_PATHS.has("/api/agent/network-profile-risk-proxy"), true);
   assert.equal(AGENT_TUNNEL_PATHS.has("/api/agent/link-speed-claim"), true);

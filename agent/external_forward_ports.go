@@ -38,7 +38,8 @@ func externalForwardPorts() externalForwardPortsReport {
 			result.Ports = append(result.Ports, externalForwardPort{port, proto, owner})
 		}
 	}
-	if commandExists("nft") {
+	nftRulesLoaded := commandExists("nft")
+	if nftRulesLoaded {
 		raw, err := commandOutputWithTimeout(5*time.Second, "nft", "-j", "list", "ruleset")
 		if err != nil {
 			result.Error = "nft ruleset unavailable"
@@ -137,6 +138,12 @@ func externalForwardPorts() externalForwardPortsReport {
 		if !commandExists(binary) {
 			continue
 		}
+		// iptables-nft rules are already present in the nft JSON ruleset. Avoid
+		// dumping the same NAT chain twice on every interactive port check.
+		// Legacy backends still need their own inspection.
+		if nftRulesLoaded && iptablesUsesNftBackend(binary) {
+			continue
+		}
 		raw, err := commandOutputWithTimeout(5*time.Second, binary, "-t", "nat", "-S", "PREROUTING")
 		if err != nil {
 			result.Error = binary + " nat rules unavailable"
@@ -175,6 +182,15 @@ func externalForwardPorts() externalForwardPortsReport {
 		}
 	}
 	return result
+}
+
+func iptablesNftVersionOutput(text string) bool {
+	return strings.Contains(strings.ToLower(text), "nf_tables")
+}
+
+func iptablesUsesNftBackend(binary string) bool {
+	version, err := commandOutputWithTimeout(2*time.Second, binary, "-V")
+	return err == nil && iptablesNftVersionOutput(string(version))
 }
 
 func forwardxNftCompatDnat(port int, proto string, raw json.RawMessage) bool {
@@ -240,6 +256,7 @@ func handleExternalPortCheck(cfg Config, request externalPortCheckRequest) {
 	if len(request.RequestID) != 36 || request.Port < 1 || request.Port > 65535 || (request.Protocol != "tcp" && request.Protocol != "udp" && request.Protocol != "both") {
 		return
 	}
+	started := time.Now()
 	report := externalForwardPorts()
 	conflict := ""
 	if report.Error == "" {
@@ -251,7 +268,9 @@ func handleExternalPortCheck(cfg Config, request externalPortCheckRequest) {
 		}
 	}
 	result := map[string]any{"requestId": request.RequestID, "error": report.Error, "conflict": conflict}
-	if err := post(cfg, "/api/agent/external-port-check-result", result, &map[string]any{}); err != nil && shouldLogAgentReport("external-port-check-result", agentReportLogInterval) {
+	err := post(cfg, "/api/agent/external-port-check-result", result, &map[string]any{})
+	logf("external port check port=%d protocol=%s conflict=%s inspectionError=%s duration=%s reportOK=%v", request.Port, request.Protocol, conflict, report.Error, time.Since(started).Round(time.Millisecond), err == nil)
+	if err != nil && shouldLogAgentReport("external-port-check-result", agentReportLogInterval) {
 		logAgentCommError("external-port-check-result", err)
 	}
 }

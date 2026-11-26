@@ -3969,7 +3969,7 @@ function RulesContent() {
     if (portStatus === "used") {
       return {
         type: "used" as const,
-        text: portRangeError ? "超范围" : "不可用",
+        text: portRangeError && /(?:范围|区间|超出)/.test(portRangeError) ? "超范围" : "不可用",
         title: portRangeError || "端口已被占用",
       };
     }

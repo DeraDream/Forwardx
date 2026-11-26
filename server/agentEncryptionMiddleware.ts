@@ -28,6 +28,8 @@ export const AGENT_TUNNEL_PATHS = new Set([
   "/api/agent/link-speed-result",
   "/api/agent/plugin-action-result",
   "/api/agent/support-bundle-result",
+  "/api/agent/agent-link-probe-result",
+  "/api/agent/external-port-check-result",
   "/api/agent/migration-rollback",
   "/api/agent/traffic",
   "/api/agent/tcping",
