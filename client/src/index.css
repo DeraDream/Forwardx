@@ -941,6 +941,87 @@
     will-change: opacity;
   }
 
+  /* Keep all Radix dialogs within the mobile visual viewport, including
+     Safari's browser chrome and device safe areas. Desktop layout is untouched. */
+  @media (max-width: 639px) {
+    .dialog-positioner {
+      padding-top: max(0.75rem, var(--forwardx-safe-area-top)) !important;
+      padding-bottom: max(0.75rem, var(--forwardx-safe-area-bottom)) !important;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+    }
+
+    .dialog-panel {
+      min-width: 0;
+      max-height: calc(100svh - 1.5rem) !important;
+      max-height: calc(100dvh - max(0.75rem, var(--forwardx-safe-area-top)) - max(0.75rem, var(--forwardx-safe-area-bottom))) !important;
+    }
+
+    /* Ordinary grid dialogs have no dedicated scrolling child. Flex dialogs
+       keep their own min-h-0 scroll area and a stationary footer. */
+    .dialog-panel:not(.flex) {
+      overflow-x: hidden !important;
+      overflow-y: auto !important;
+    }
+
+    .dialog-panel > [data-forwardx-dialog-footer] {
+      position: relative;
+      z-index: 1;
+      flex-shrink: 0;
+      background: var(--popover);
+      padding-top: 0.5rem;
+    }
+
+    .subscription-dialog-positioner {
+      padding-top: max(0.75rem, var(--forwardx-safe-area-top)) !important;
+      padding-bottom: max(0.75rem, var(--forwardx-safe-area-bottom)) !important;
+    }
+
+    .subscription-dialog-positioner > [role="dialog"] {
+      min-width: 0;
+      max-width: 100% !important;
+      max-height: calc(100svh - 1.5rem) !important;
+      max-height: calc(100dvh - max(0.75rem, var(--forwardx-safe-area-top)) - max(0.75rem, var(--forwardx-safe-area-bottom))) !important;
+    }
+
+    /* Reflow the same probe nodes and status badges instead of requiring a
+       horizontally clipped multi-entry diagram on a narrow screen. */
+    .link-probe-converged-graph {
+      min-width: 0 !important;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 0.5rem;
+    }
+
+    .link-probe-converged-graph > :first-child {
+      grid-column: 1;
+      grid-template-columns: minmax(0, 1fr) !important;
+      gap: 0.5rem;
+    }
+
+    .link-probe-converged-graph > :nth-child(2) {
+      grid-column: 2;
+      height: auto !important;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-around;
+    }
+
+    .link-probe-converged-graph > :nth-child(2) svg {
+      display: none;
+    }
+
+    .link-probe-converged-graph > :nth-child(2) > span {
+      position: static !important;
+      transform: none !important;
+      white-space: nowrap;
+    }
+
+    .link-probe-converged-graph > :nth-child(n + 3) {
+      grid-column: 1 / -1;
+    }
+  }
+
   .dialog-panel[data-state="open"] {
     animation: dialog-panel-in 190ms cubic-bezier(0.22, 1, 0.36, 1) 10ms both;
   }

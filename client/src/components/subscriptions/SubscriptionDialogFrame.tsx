@@ -8,7 +8,7 @@ export function SubscriptionDialogFrame({ title, onClose, children }: { title: s
     <Dialog open onOpenChange={open => { if (!open) onClose(); }}>
       <DialogPortal>
         <Primitive.Overlay className="fixed inset-0 z-50 bg-slate-950/55 dark:bg-black/70" />
-        <div className="pointer-events-none fixed inset-0 z-50 grid place-items-center overflow-y-auto p-3">
+        <div className="subscription-dialog-positioner pointer-events-none fixed inset-0 z-50 grid place-items-center overflow-y-auto p-3">
           <Primitive.Content asChild aria-label={title} aria-describedby={undefined} className="pointer-events-auto">
             {children}
           </Primitive.Content>

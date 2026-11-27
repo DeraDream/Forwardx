@@ -941,7 +941,7 @@ export function LinkTestProbeView({
         <>
           <div className="mb-2 text-xs font-semibold text-slate-500">入口分支</div>
           <div className="overflow-x-auto pb-1">
-            <div style={{ minWidth: Math.max(0, convergedEntryView.entrySegments.length * 175) }}>
+            <div className="link-probe-converged-graph" style={{ minWidth: Math.max(0, convergedEntryView.entrySegments.length * 175) }}>
               <div className="grid" style={{ gridTemplateColumns: `repeat(${convergedEntryView.entrySegments.length}, minmax(0, 1fr))` }}>
                 {convergedEntryView.entrySegments.map((segment, index) => {
                   const { active, dimmed } = entryBranchHighlightState(entryKey(segment), hoveredEntryId);
