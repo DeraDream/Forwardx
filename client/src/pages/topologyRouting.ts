@@ -223,34 +223,6 @@ export function routeSmoothLayeredTopologyGraph(nodes: TopologyRoutingNode[], in
   for (const list of incoming.values()) list.sort((a, b) => centerY(a.from) - centerY(b.from) || a.id.localeCompare(b.id));
   const top = Math.min(...[...base.positions.values()].map((box) => box.y));
 
-  // A long edge must leave the card rows, but it must not receive a lane based
-  // on its index amongst *all* edges.  That used to make a newly-expanded
-  // forwarding service push every long edge hundreds of pixels upwards: a
-  // dense fan-out has many ordinary edges before the first long one.  Reuse a
-  // lane whenever its column interval is disjoint; only simultaneously
-  // crossing long edges need separate lanes.
-  const longLaneByEdge = new Map<string, number>();
-  const longLaneIntervals: Array<Array<{ start: number; end: number }>> = [];
-  const longEdges = inputEdges
-    .filter((edge) => {
-      const source = byId.get(edge.from)?.column;
-      const target = byId.get(edge.to)?.column;
-      return source !== undefined && target !== undefined && target - source > 1 && !directOnly.has(edge.to);
-    })
-    .slice()
-    .sort((a, b) => {
-      const aStart = byId.get(a.from)!.column, bStart = byId.get(b.from)!.column;
-      const aEnd = byId.get(a.to)!.column, bEnd = byId.get(b.to)!.column;
-      return aStart - bStart || bEnd - aEnd || a.id.localeCompare(b.id);
-    });
-  for (const edge of longEdges) {
-    const start = byId.get(edge.from)!.column, end = byId.get(edge.to)!.column;
-    let lane = longLaneIntervals.findIndex((intervals) => intervals.every((other) => end <= other.start || start >= other.end));
-    if (lane < 0) { lane = longLaneIntervals.length; longLaneIntervals.push([]); }
-    longLaneIntervals[lane].push({ start, end });
-    longLaneByEdge.set(edge.id, lane);
-  }
-
   const edgeRoutes = new Map<string, TopologyPoint[]>();
   [...base.edgeRoutes.keys()].sort().forEach((edgeId) => {
     const edge = inputEdges.find((candidate) => candidate.id === edgeId)!;
@@ -272,13 +244,6 @@ export function routeSmoothLayeredTopologyGraph(nodes: TopologyRoutingNode[], in
       : (fromEdges.indexOf(edge) + 1) / (fromEdges.length + 1)) };
     const end = { x: to.x, y: to.y + to.height * (toEdges.indexOf(edge) + 1) / (toEdges.length + 1) };
     const distance = Math.max(80, end.x - start.x);
-    let controlY1 = start.y;
-    let controlY2 = end.y;
-    if (spansRelayLayer && !isDirectLanding) {
-      const laneY = top - 40 - (longLaneByEdge.get(edge.id) || 0) * 16;
-      controlY1 = laneY;
-      controlY2 = laneY;
-    }
     // Direct landings are already below forwarded landings. One long, shallow
     // cubic reaches each target without a hairpin or a shared horizontal bus.
     const rise = Math.max(0, end.y - start.y);
@@ -289,8 +254,8 @@ export function routeSmoothLayeredTopologyGraph(nodes: TopologyRoutingNode[], in
       end,
     ] : [
       start,
-      { x: start.x + distance * 0.34, y: controlY1, curve: true },
-      { x: end.x - distance * 0.34, y: controlY2, curve: true },
+      { x: start.x + distance * 0.34, y: start.y, curve: true },
+      { x: end.x - distance * 0.34, y: end.y, curve: true },
       end,
     ]);
   });
@@ -323,6 +288,35 @@ export function routeSmoothLayeredTopologyGraph(nodes: TopologyRoutingNode[], in
     }
     return false;
   });
+  // A long link should not automatically arc above the entire graph. Try the
+  // shallow curve first, then the shorter of the clear routes around cards in
+  // the columns it actually crosses. Edges may overlap; cards may not.
+  for (const edge of inputEdges) {
+    const original = edgeRoutes.get(edge.id);
+    const from = base.positions.get(edge.from), to = base.positions.get(edge.to);
+    if (!original || !from || !to || directOnly.has(edge.to)
+      || (byId.get(edge.to)?.column || 0) - (byId.get(edge.from)?.column || 0) <= 1
+      || !hitsCard(edge, original)) continue;
+    const obstacles = cards.filter(([id, box]) => id !== edge.from && id !== edge.to
+      && box.x < to.x && box.x + box.width > from.x + from.width).map(([, box]) => box);
+    if (!obstacles.length) continue;
+    const start = original[0], end = original[3];
+    const distance = Math.max(80, end.x - start.x);
+    const upper = Math.min(...obstacles.map((box) => box.y)) - 24;
+    const lower = Math.max(...obstacles.map((box) => box.y + box.height)) + 24;
+    const options: Array<{ points: TopologyPoint[]; cost: number }> = [];
+    for (const boundary of [upper, lower]) for (let offset = 0; offset < 8; offset++) {
+      const lane = boundary + (boundary === upper ? -offset : offset) * 24;
+      const candidate = [start,
+        { x: start.x + distance * .34, y: lane, curve: true },
+        { x: end.x - distance * .34, y: lane, curve: true }, end];
+      if (hitsCard(edge, candidate)) continue;
+      options.push({ points: candidate, cost: Math.abs(lane - start.y) + Math.abs(lane - end.y) });
+      break;
+    }
+    options.sort((a, b) => a.cost - b.cost || a.points[1].y - b.points[1].y);
+    if (options[0]) edgeRoutes.set(edge.id, options[0].points);
+  }
   let detourIndex = 0;
   for (const edge of inputEdges) {
     const original = edgeRoutes.get(edge.id);

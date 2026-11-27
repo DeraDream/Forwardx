@@ -8,8 +8,7 @@ import {
   latestLinkSpeedJob,
 } from "../linkSpeedTasks";
 import { withKeyedTaskLock } from "../keyedTaskLock";
-import { isAgentVersionAtLeast } from "../agentRouteUtils";
-import { AGENT_VERSION } from "../../shared/versions";
+import { linkSpeedAgentRequirement } from "../linkSpeedAgentCapability";
 import { resolveLinkSpeedHost } from "../linkSpeedHost";
 
 function enabled(value: unknown) {
@@ -77,7 +76,9 @@ export const linkSpeedRouter = router({
       }
       const entryHost = await db.getHostById(input.entryHostId) as any;
       if (!entryHost?.agentToken || !entryHost.isOnline) throw new Error("入口 Agent 离线或未绑定 Token");
-      if (!isAgentVersionAtLeast(String(entryHost.agentVersion || ""), AGENT_VERSION)) throw new Error(`请先将入口 Agent 升级到 ${AGENT_VERSION}`);
+      const entryMode = String(rule.forwardType || "").toLowerCase() === "iptables" ? "iptables" : "listener";
+      const capability = linkSpeedAgentRequirement(entryHost.agentVersion, entryMode);
+      if (!capability.supported) throw new Error(capability.reason || "入口 Agent 不支持全链路测速");
       if (!input.route.some((node) => Number(node.hostId) === input.entryHostId)) throw new Error("测速路径与入口主机不匹配，请刷新网络拓扑后重试");
       const sourcePort = Number(rule.sourcePort || 0);
       if (!Number.isInteger(sourcePort) || sourcePort < 1 || sourcePort > 65535) throw new Error("当前规则缺少有效入口端口");
@@ -106,7 +107,7 @@ export const linkSpeedRouter = router({
         route,
         entryAddress: "127.0.0.1",
         entryPort: sourcePort,
-        entryMode: String(rule.forwardType || "").toLowerCase() === "iptables" ? "iptables" : "listener",
+        entryMode,
         ssMethod: String(landing.method),
         ssPassword: String(landing.password),
         benchmarkHost: resolveLinkSpeedHost(),

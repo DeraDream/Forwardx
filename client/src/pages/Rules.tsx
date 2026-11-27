@@ -86,6 +86,7 @@ import { trpc } from "@/lib/trpc";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { buildFinalLandingSsUri } from "@/lib/ruleCopySs";
 import { pollingInterval } from "@/lib/polling";
+import { ruleCategoryBadgeCacheKey, ruleCategoryBadgeQuery } from "@/lib/ruleCategoryBadges";
 import { handoffManualTestResult } from "@/lib/manualTestCache";
 import {
   buildStableRuleProbeMap,
@@ -3221,18 +3222,11 @@ function RulesContent() {
       placeholderData: (previousData) => previousData,
     },
   );
-  // Tab badges must always be based on an unfiltered category request. Keeping
-  // this independent from the selected tab avoids stale/selected-only badges.
+  // Selecting a tab also changes filterResource. Badge counts must not inherit
+  // that resource filter: each badge represents its category, not just the
+  // currently selected resource type.
   const ruleCategoryCountsQuery = trpc.rules.listPage.useQuery(
-    {
-      ...(effectiveRulesQuery || {}),
-      page: 1,
-      pageSize: 1,
-      resourceType: rulePageResource.type,
-      resourceId: rulePageResource.id,
-      category: "all",
-      search: ruleSearchQuery,
-    },
+    ruleCategoryBadgeQuery(effectiveRulesQuery, ruleSearchQuery),
     {
       refetchInterval: pollingInterval("normal"),
       staleTime: 10_000,
@@ -5778,11 +5772,8 @@ function RulesContent() {
       ? `admin-${user?.id || "self"}-${filterUser}`
       : `user-${user?.id || "self"}`;
   const ruleCategoryCountsCacheKey = useMemo(
-    () =>
-      [ruleFilterCacheScope, filterResource, ruleSearchQuery.trim() || "search-all"]
-        .map((value) => encodeURIComponent(String(value)))
-        .join("."),
-    [filterResource, ruleFilterCacheScope, ruleSearchQuery],
+    () => ruleCategoryBadgeCacheKey(ruleFilterCacheScope, ruleSearchQuery),
+    [ruleFilterCacheScope, ruleSearchQuery],
   );
   const [stableRuleCategoryCounts, setStableRuleCategoryCounts] = useState(
     () => {
@@ -5803,43 +5794,14 @@ function RulesContent() {
       ready: !!cached,
     });
   }, [ruleCategoryCountsCacheKey]);
-  const liveRuleCategoryCounts = useMemo<RuleCategoryCounts>(() => {
-    if (ruleCategoryCountsQuery.data?.categoryCounts) {
-      return normalizeRuleCategoryCounts(ruleCategoryCountsQuery.data.categoryCounts);
-    }
-    if (rulePageQuery.data?.categoryCounts) {
-      return normalizeRuleCategoryCounts(rulePageQuery.data.categoryCounts);
-    }
-    const sourceRules = selectedScopeQueryEnabled
-      ? selectedScopedRules || []
-      : baseScopedRules;
-    const baseFilters = {
-      ...ruleFilters,
-      ruleCategory: "all" as RuleCategory,
-    };
-    const counts: RuleCategoryCounts = { ...EMPTY_RULE_CATEGORY_COUNTS };
-    sourceRules
-      .filter((rule: any) => isForwardRuleVisibleByFilters(rule, baseFilters))
-      .forEach((rule: any) => {
-        const category = getRuleCategory(rule, forwardGroupById);
-        counts.all += 1;
-        counts[category] += 1;
-      });
-    return counts;
-  }, [
-    baseScopedRules,
-    forwardGroupById,
-    needsFullRuleList,
-    ruleFilters,
-    ruleCategoryCountsQuery.data?.categoryCounts,
-    rulePageQuery.data?.categoryCounts,
-    selectedScopeQueryEnabled,
-    selectedScopedRules,
-  ]);
+  const liveRuleCategoryCounts = useMemo(
+    () => normalizeRuleCategoryCounts(ruleCategoryCountsQuery.data?.categoryCounts),
+    [ruleCategoryCountsQuery.data?.categoryCounts],
+  );
+  // Page data is scoped to the selected resource. Never treat its category
+  // counts (or the current page's items) as complete counts for every tab.
   const hasFreshRuleCategoryCounts =
-    (ruleCategoryCountsQuery.data !== undefined &&
-      !ruleCategoryCountsQuery.isPlaceholderData) ||
-    (rulePageQuery.data !== undefined && !rulePageQuery.isPlaceholderData);
+    ruleCategoryCountsQuery.data !== undefined && !ruleCategoryCountsQuery.isPlaceholderData;
   useEffect(() => {
     if (!hasFreshRuleCategoryCounts) return;
     setStableRuleCategoryCounts((previous) =>

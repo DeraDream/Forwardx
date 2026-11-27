@@ -169,6 +169,48 @@ test("long smooth edges use compact reusable lanes, independent of ordinary edge
   }
 });
 
+test("long links choose a nearby clear side of intermediate cards, not a graph-wide overhead arc", () => {
+  const lowerNodes = [
+    { id: "po1", column: 0, row: 0 }, { id: "po2", column: 0, row: 1 },
+    { id: "short", column: 0, row: 2 }, { id: "qhix", column: 1, row: 0 },
+    { id: "hk", column: 2, row: 0 }, { id: "sg", column: 3, row: 0 },
+    ...Array.from({ length: 5 }, (_, index) => ({ id: `exit${index}`, column: 4, row: index })),
+  ];
+  const lower = routeSmoothLayeredTopologyGraph(lowerNodes, [
+    { id: "po1-qhix", from: "po1", to: "qhix" },
+    { id: "po2-qhix", from: "po2", to: "qhix" },
+    { id: "qhix-hk", from: "qhix", to: "hk" },
+    { id: "short-hk", from: "short", to: "hk" },
+    { id: "hk-sg", from: "hk", to: "sg" },
+    { id: "sg-exit", from: "sg", to: "exit0" },
+  ], new Set());
+  const bottomRoute = lower.edgeRoutes.get("short-hk")!, qhix = lower.positions.get("qhix")!;
+  assert.equal(bottomRoute.length, 4, "the nearby detour should remain a smooth curve");
+  assert.ok(bottomRoute[1].y > qhix.y + qhix.height, "short entry joins HK below QHIX");
+  assert.ok(bottomRoute[1].y < lower.positions.get("exit4")!.y, "unrelated low destinations must not set the detour depth");
+  for (let index = 0; index <= 200; index++) {
+    const point = cubicAt(bottomRoute, index / 200);
+    assert.ok(!(point.x > qhix.x && point.x < qhix.x + qhix.width && point.y > qhix.y && point.y < qhix.y + qhix.height));
+  }
+
+  const upper = routeSmoothLayeredTopologyGraph([
+    { id: "short", column: 0, row: 0 }, { id: "main", column: 0, row: 1 },
+    { id: "qhix", column: 1, row: 0 }, { id: "hk", column: 2, row: 0 },
+  ], [
+    { id: "short-hk", from: "short", to: "hk" },
+    { id: "main-qhix", from: "main", to: "qhix" },
+    { id: "qhix-hk", from: "qhix", to: "hk" },
+  ], new Set());
+  const topRoute = upper.edgeRoutes.get("short-hk")!, upperQhix = upper.positions.get("qhix")!;
+  assert.equal(topRoute.length, 4);
+  assert.ok(topRoute[1].y < upperQhix.y, "upper entry keeps a nearby route above QHIX");
+  for (let index = 0; index <= 200; index++) {
+    const point = cubicAt(topRoute, index / 200);
+    assert.ok(!(point.x > upperQhix.x && point.x < upperQhix.x + upperQhix.width
+      && point.y > upperQhix.y && point.y < upperQhix.y + upperQhix.height));
+  }
+});
+
 test("smooth fan-out ports follow destination positions, not edge IDs", () => {
   const nodes = [{id:"hk",column:0,row:0}, {id:"jp",column:1,row:0}, {id:"sg",column:1,row:1}];
   const graph = routeSmoothLayeredTopologyGraph(nodes, [
