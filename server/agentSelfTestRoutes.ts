@@ -16,6 +16,7 @@ import {
   tunnelRuleLatencySampleSucceeded,
 } from "./ruleLatency";
 import { clearRuleLatencyQueryCaches } from "./ruleLatencyQueryCache";
+import { topologyTotalResultMessage } from "./topologyTotalTarget";
 import { waitForTunnelLatencyRefresh } from "./tunnelLatencyRefresh";
 import { getTunnelAutoHopDetails } from "./tunnelAutoLatencyState";
 import { getTunnelMultiEntryHopDetails } from "./tunnelMultiEntryLatencyState";
@@ -245,7 +246,9 @@ agentRouter.post("/api/agent/selftest-result", async (req: Request, res: Respons
         targetReachable: !!targetReachable,
         forwardOk: success,
         latencyMs: cleanLatency,
-        message: cleanMessage,
+        message: meta?.kind === "topology-total"
+          ? topologyTotalResultMessage(meta, cleanMessage, success ? cleanLatency : null)
+          : cleanMessage,
       });
       if (!accepted) {
         res.json({ success: true, ignored: true });
@@ -621,6 +624,9 @@ agentRouter.post("/api/agent/selftest-result", async (req: Request, res: Respons
         success ? "info" : "warn",
         `[SelfTest] forward-chain test=${testId} group=${meta.groupId} success=${success} latency=${success && cleanLatency !== null ? `${cleanLatency}ms` : "-"} entry=${entryTarget} target=${finalTarget}${cleanMessage && !success ? ` message=${cleanMessage}` : ""}`,
       );
+    }
+    if (meta?.kind === "topology-total") {
+      appendPanelLog(success ? "info" : "warn", `[SelfTest] topology-total rule=${t.ruleId} test=${testId} host=${host.id} success=${success} latency=${success ? cleanLatency : "-"}ms`);
     }
     if (!meta) {
       await db.insertTcpingStat({

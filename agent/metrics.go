@@ -1771,7 +1771,14 @@ func tcpingRoundsForWindow(interval time.Duration, window time.Duration) int {
 	return int((window + interval - 1) / interval)
 }
 
-const topologySegmentBackgroundInterval = 5 * time.Second
+const topologySegmentBackgroundInterval = 10 * time.Second
+
+func topologyProbeIntervalAt(now time.Time) time.Duration {
+	if now.UnixNano() < topologyInteractiveUntil.Load() {
+		return time.Second
+	}
+	return topologySegmentBackgroundInterval
+}
 
 func topologySegmentBatchLimit(segmentCount int, _ bool) int {
 	// Every deduplicated physical edge belongs to the same five-second snapshot.
@@ -1780,15 +1787,15 @@ func topologySegmentBatchLimit(segmentCount int, _ bool) int {
 	return segmentCount
 }
 
-// Physical topology RTT is continuous health state. Keep it on its own
-// five-second cadence, independent of the slower forwarding-rule probes.
+// Physical topology RTT uses a one-second cadence while the topology page
+// keeps an interactive watcher alive; otherwise retain a ten-second baseline.
 func topologySegmentsDue(force bool, now time.Time) bool {
 	if force {
 		return true
 	}
 	topologySegmentScheduleMu.Lock()
 	defer topologySegmentScheduleMu.Unlock()
-	return lastTopologySegmentAt.IsZero() || now.Sub(lastTopologySegmentAt) >= topologySegmentBackgroundInterval
+	return lastTopologySegmentAt.IsZero() || now.Sub(lastTopologySegmentAt) >= topologyProbeIntervalAt(now)
 }
 
 func markTopologySegmentsCollected(now time.Time) {

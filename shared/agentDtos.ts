@@ -139,6 +139,7 @@ export function normalizeAgentProbeCounts(value: {
 }
 
 export type SelfTestMeta =
+  | { kind: "topology-total"; targetIp: string; targetPort: number }
   | {
       kind: "tunnel";
       tunnelId: number;
@@ -313,6 +314,7 @@ function validAgentProbeResult(item: any, idKey: string) {
 export function isSelfTestMeta(value: unknown): value is SelfTestMeta {
   const meta = value as Partial<SelfTestMeta>;
   if (!meta || typeof meta.kind !== "string") return false;
+  if (meta.kind === "topology-total") return typeof (meta as any).targetIp === "string" && Number((meta as any).targetPort) > 0;
   if (meta.kind === "forward-chain") return Number.isFinite(Number((meta as any).groupId));
   if (meta.kind === "diagnostic-hop") return typeof (meta as any).diagnosticId === "string" && (meta as any).diagnosticId.length > 0;
   if (meta.kind === "full-chain") return Number.isFinite(Number((meta as any).chainId)) && Number.isFinite(Number((meta as any).nodeId));

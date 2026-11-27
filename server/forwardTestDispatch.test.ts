@@ -113,6 +113,18 @@ test("forward self-test leases recover lost deliveries and give claimed work a f
       );
       const latestActive = await tests.getLatestForwardTest(20);
       assert.equal(Number(latestActive?.id), 9, "active rows with equal timestamps must prefer the larger id");
+
+      await runtime.executeRaw(
+        'INSERT INTO "forward_tests" ("id", "ruleId", "hostId", "userId", "status", "message", "createdAt", "updatedAt") VALUES (?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?)',
+        [
+          10, 20, 21, 1, "success", JSON.stringify({ kind: "topology-total", targetIp: "198.51.100.21", targetPort: 30121, totalLatencyMs: 21 }), now, now,
+          11, 20, 20, 1, "success", JSON.stringify({ kind: "topology-total", targetIp: "198.51.100.20", targetPort: 30120, totalLatencyMs: 11 }), now, now,
+          12, 20, 20, 1, "failed", "other page's test", now + 1, now + 1,
+        ],
+      );
+      assert.equal(Number((await tests.getLatestForwardTest(20, { hostId: 20, topologyTotal: true }))?.id), 11);
+      assert.equal(Number((await tests.getLatestForwardTest(20, { hostId: 21, topologyTotal: true }))?.id), 10);
+      assert.equal(Number((await tests.getLatestForwardTest(20, { hostId: 21, includeActive: false }))?.id), 10);
     } finally {
       await runtime.closeDatabase();
     }

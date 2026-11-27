@@ -1,5 +1,6 @@
-# ---------- 1. Build stage: install dependencies and build frontend/backend ----------
-FROM node:22-alpine AS builder
+# ---------- 1. Build stage: architecture-neutral JS; use the native build CPU ----------
+# Avoid running the full Vite/esbuild pipeline under arm64 emulation on x86 builders.
+FROM --platform=$BUILDPLATFORM node:22-alpine AS builder
 WORKDIR /app
 RUN npm install -g pnpm@10.28.1
 

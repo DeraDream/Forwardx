@@ -121,6 +121,13 @@ export function buildMetaAgentSelfTestPayload(
   test: { id?: unknown; ruleId?: unknown },
   meta: SelfTestMeta | null,
 ) {
+  if (meta?.kind === "topology-total") {
+    return {
+      testId: agentInteger(test?.id), kind: "topology-total", ruleId: agentInteger(test?.ruleId),
+      forwardType: "topology-total", protocol: "tcp", method: "tcp", sourcePort: 0,
+      targetIp: meta.targetIp, targetPort: agentInteger(meta.targetPort),
+    };
+  }
   if (meta?.kind === "diagnostic-hop") {
     const method = normalizeLinkProbeMethod(meta.method);
     return {

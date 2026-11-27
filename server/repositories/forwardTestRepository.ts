@@ -151,7 +151,7 @@ export async function getLatestTunnelLatency(tunnelId: number) {
   return rows[0];
 }
 
-export async function getLatestForwardTest(ruleId: number, options: { includeActive?: boolean } = {}) {
+export async function getLatestForwardTest(ruleId: number, options: { includeActive?: boolean; hostId?: number; topologyTotal?: boolean } = {}) {
   const db = await getDb();
   if (!db) return undefined;
   const table = quoteIdentifier("forward_tests");
@@ -161,16 +161,29 @@ export async function getLatestForwardTest(ruleId: number, options: { includeAct
   const updatedCol = quoteIdentifier("updatedAt");
   const createdCol = quoteIdentifier("createdAt");
   const messageCol = quoteIdentifier("message");
+  const hostFilter = options.hostId ? ` AND ${quoteIdentifier("hostId")} = ?` : "";
+  const params = options.hostId ? [ruleId, options.hostId] : [ruleId];
+  if (options.topologyTotal) {
+    const topologyRows = await queryRaw<any>(
+      `SELECT * FROM ${table} WHERE ${ruleCol} = ?${hostFilter} AND ${messageCol} LIKE '%"kind":"topology-total"%'
+        AND ${statusCol} IN ('pending', 'running', 'success', 'failed', 'timeout')
+        ORDER BY ${idCol} DESC LIMIT 1`, params,
+    );
+    if (topologyRows[0]) return topologyRows[0];
+  }
+  const directOnly = options.topologyTotal
+    ? ` AND ${messageCol} NOT LIKE '%forward-chain-hop-summary%' AND ${messageCol} NOT LIKE '%"kind":"forward-via-tunnel"%'`
+    : "";
   if (options.includeActive !== false) {
     const pendingRows = await queryRaw<any>(
-      `SELECT * FROM ${table} WHERE ${ruleCol} = ? AND ${statusCol} IN ('pending', 'running') ORDER BY ${updatedCol} DESC, ${createdCol} DESC, ${idCol} DESC LIMIT 1`,
-      [ruleId],
+      `SELECT * FROM ${table} WHERE ${ruleCol} = ?${hostFilter}${directOnly} AND ${statusCol} IN ('pending', 'running') ORDER BY ${updatedCol} DESC, ${createdCol} DESC, ${idCol} DESC LIMIT 1`,
+      params,
     );
     if (pendingRows[0]) return pendingRows[0];
   }
   const rows = await queryRaw<any>(
-    `SELECT * FROM ${table} WHERE ${ruleCol} = ? AND ${statusCol} IN ('success', 'failed', 'timeout') ORDER BY ${updatedCol} DESC, CASE WHEN ${messageCol} LIKE '%forward-chain-hop-summary%' OR ${messageCol} LIKE '%"kind":"forward-via-tunnel"%' THEN 0 ELSE 1 END, ${createdCol} DESC, ${idCol} DESC LIMIT 1`,
-    [ruleId],
+    `SELECT * FROM ${table} WHERE ${ruleCol} = ?${hostFilter}${directOnly} AND ${statusCol} IN ('success', 'failed', 'timeout') ORDER BY ${updatedCol} DESC, CASE WHEN ${messageCol} LIKE '%forward-chain-hop-summary%' OR ${messageCol} LIKE '%"kind":"forward-via-tunnel"%' THEN 0 ELSE 1 END, ${createdCol} DESC, ${idCol} DESC LIMIT 1`,
+    params,
   );
   return rows[0];
 }

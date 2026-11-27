@@ -37,7 +37,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.248"
+var Version = "2.2.249"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -260,6 +260,7 @@ var lastTCPingAt time.Time
 var tcpingScheduleMu sync.Mutex
 var lastTopologySegmentAt time.Time
 var topologySegmentScheduleMu sync.Mutex
+var topologyInteractiveUntil atomic.Int64
 var agentMetricsWakeCh = make(chan struct{}, 1)
 var agentMetricsForceTCPing atomic.Bool
 var agentLogMu sync.Mutex
@@ -3305,9 +3306,15 @@ func scheduledAgentPresenceInterval(serverIntervalSeconds int) time.Duration {
 
 func agentMetricsScheduler(cfg Config) {
 	ticker := time.NewTicker(agentMetricsSchedulerResolution)
+	topologyTicker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+	defer topologyTicker.Stop()
 	for {
 		select {
+		case <-topologyTicker.C:
+			if topologyProbeIntervalAt(time.Now()) == time.Second {
+				scheduleAgentTCPing(cfg, false)
+			}
 		case <-ticker.C:
 			scheduleTrafficCollection(cfg)
 			force := agentMetricsForceTCPing.Swap(false)
@@ -3970,6 +3977,9 @@ func heartbeat(cfg Config, forceReconcile ...bool) (heartbeatResult, error) {
 		return heartbeatResult{NextInterval: cfg.Interval}, err
 	}
 	logHeartbeatResponse("full", &resp, time.Since(startedAt))
+	if resp.TrafficReportIntervalMs == 500 {
+		topologyInteractiveUntil.Store(time.Now().Add(4 * time.Second).UnixNano())
+	}
 	compactAgentReports.Store(resp.CompactReports)
 	agentPresenceSupported.Store(resp.PresenceSupported)
 	if resp.TrafficReportIntervalMs > 0 {
@@ -4177,6 +4187,9 @@ func heartbeatKeepalive(cfg Config) (heartbeatResult, error) {
 		return heartbeatResult{NextInterval: cfg.Interval}, err
 	}
 	logHeartbeatResponse("keepalive", &resp, time.Since(startedAt))
+	if resp.TrafficReportIntervalMs == 500 {
+		topologyInteractiveUntil.Store(time.Now().Add(4 * time.Second).UnixNano())
+	}
 	compactAgentReports.Store(resp.CompactReports)
 	agentPresenceSupported.Store(resp.PresenceSupported)
 	if resp.TrafficReportIntervalMs > 0 {

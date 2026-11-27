@@ -106,6 +106,8 @@ test("SQLite host metric summaries seek only the latest two rows per host", asyn
     }]);
     const sharedSegments = await metrics.getLatestTopologySegmentLatency([1, 2]);
     assert.deepEqual(sharedSegments.map((segment) => [segment.ruleId, segment.latencyMs]).sort((a, b) => Number(a[0]) - Number(b[0])), [[1, 40], [2, 55]]);
+    const recentOnly = await metrics.getLatestTopologySegmentLatency([1, 2], now + 1);
+    assert.deepEqual(recentOnly.map((segment) => [segment.ruleId, segment.latencyMs]), [[2, 55]]);
 
     const pingKey = "topology-v1:1:198.51.100.9:0:ping";
     await metrics.recordTopologySegmentLatency([
@@ -128,6 +130,17 @@ test("SQLite host metric summaries seek only the latest two rows per host", asyn
     const blockedSegment = (await metrics.getLatestTopologySegmentLatency([4]))[0];
     assert.equal(blockedSegment.blocked, true);
     assert.equal(blockedSegment.isTimeout, true);
+    const blockedDelta = (await metrics.getLatestTopologySegmentLatency([4], now - 1))[0];
+    assert.equal(blockedDelta.blocked, true);
+    assert.equal(blockedDelta.isTimeout, true);
+    const duplicateSecondKey = "topology-v1:1:198.51.100.20:0:ping";
+    await metrics.recordTopologySegmentLatency([
+      { ruleId: 5, sourceHostId: 1, targetAddress: "198.51.100.20", segmentKey: duplicateSecondKey, method: "ping", latencyMs: 11, isTimeout: false, recordedAt: new Date(now * 1000) },
+      { ruleId: 5, sourceHostId: 1, targetAddress: "198.51.100.20", segmentKey: duplicateSecondKey, method: "ping", latencyMs: 12, isTimeout: false, recordedAt: new Date(now * 1000) },
+    ]);
+    const sameSecond = await metrics.getLatestTopologySegmentLatency([5], now - 1);
+    assert.equal(sameSecond.length, 1);
+    assert.equal(sameSecond[0].latencyMs, 12);
 
     const incidentBase = {
       ruleId: 7, userId: 1, sourceHostId: 1, sourceName: "Source", targetHostId: 2,

@@ -1,11 +1,9 @@
 name: Docker Image
 
+# Docker images are built and published locally; manual/reusable runs remain available.
 on:
   workflow_call:
   workflow_dispatch:
-  push:
-    tags:
-      - "v*.*.*"
 
 env:
   IMAGE_NAME: ghcr.io/deradream/forwardx

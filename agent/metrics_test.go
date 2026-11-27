@@ -1806,29 +1806,45 @@ func TestTCPingDynamicBatchLimitScalesWithoutUnboundedRuns(t *testing.T) {
 	}
 }
 
-func TestTopologySegmentsUseFiveSecondContinuousCadence(t *testing.T) {
+func TestTopologySegmentsUseOneSecondWhileWatchedAndTenSecondsOtherwise(t *testing.T) {
 	topologySegmentScheduleMu.Lock()
 	previous := lastTopologySegmentAt
 	lastTopologySegmentAt = time.Time{}
 	topologySegmentScheduleMu.Unlock()
+	previousUntil := topologyInteractiveUntil.Load()
+	topologyInteractiveUntil.Store(0)
 	t.Cleanup(func() {
 		topologySegmentScheduleMu.Lock()
 		lastTopologySegmentAt = previous
 		topologySegmentScheduleMu.Unlock()
+		topologyInteractiveUntil.Store(previousUntil)
 	})
 	now := time.Now()
 	if !topologySegmentsDue(false, now) {
-		t.Fatal("first topology segment collection should be due")
+		t.Fatal("first sample should be due")
 	}
 	markTopologySegmentsCollected(now)
-	if topologySegmentsDue(false, now.Add(4*time.Second)) {
-		t.Fatal("continuous topology collection ran before five seconds")
+	if topologySegmentsDue(false, now.Add(9*time.Second)) {
+		t.Fatal("background sample ran before ten seconds")
 	}
-	if !topologySegmentsDue(false, now.Add(5*time.Second)) {
-		t.Fatal("continuous topology collection should run after five seconds")
+	if !topologySegmentsDue(false, now.Add(10*time.Second)) {
+		t.Fatal("background sample missed ten seconds")
+	}
+	topologyInteractiveUntil.Store(now.Add(4 * time.Second).UnixNano())
+	if topologyProbeIntervalAt(now) != time.Second {
+		t.Fatal("active topology must use one-second samples")
+	}
+	if topologySegmentsDue(false, now.Add(900*time.Millisecond)) {
+		t.Fatal("active sample ran too early")
+	}
+	if !topologySegmentsDue(false, now.Add(time.Second)) {
+		t.Fatal("active sample missed one second")
+	}
+	if topologyProbeIntervalAt(now.Add(5*time.Second)) != 10*time.Second {
+		t.Fatal("closed topology must restore ten-second samples")
 	}
 	if !topologySegmentsDue(true, now.Add(time.Second)) {
-		t.Fatal("interactive topology request must bypass the background cadence")
+		t.Fatal("manual refresh must bypass cadence")
 	}
 }
 

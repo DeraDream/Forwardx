@@ -16,6 +16,7 @@ export type TopologySegmentProbeResult = {
 
 export type AutomaticTopologySegment = {
   ruleId: number;
+  segmentKey?: string;
   sourceHostId: number;
   targetHostId?: number | null;
   targetAddress?: string | null;
@@ -87,15 +88,4 @@ export function summarizePhysicalTopologySegmentLabels(
   if (newest?.pending) return "探测中";
   const sameBurst = newest ? ordered.filter((candidate) => newest.at - candidate.at <= 5_000) : [];
   return sameBurst.find((candidate) => candidate.success)?.label || newest?.label || fallback;
-}
-
-export function summarizeTopologySegmentLabels(labels: string[]) {
-  if (labels.some((label) => label === "离线" || label === "源节点离线")) return { pending: false, timeout: true, blocked: true, offline: true, latencyMs: null };
-  if (labels.some((label) => label === "阻断")) return { pending: false, timeout: true, blocked: true, offline: false, latencyMs: null };
-  if (labels.some((label) => label === "探测中" || label === "检测中" || label === "加载中")) return { pending: true, timeout: false, blocked: false, offline: false, latencyMs: null };
-  if (labels.some((label) => label === "超时")) return { pending: false, timeout: true, blocked: false, offline: false, latencyMs: null };
-  const values = labels.map((label) => Number.parseFloat(label));
-  return values.length > 0 && values.every(Number.isFinite)
-    ? { pending: false, timeout: false, blocked: false, offline: false, latencyMs: Math.round(values.reduce((sum, value) => sum + value, 0)) }
-    : { pending: false, timeout: false, blocked: false, offline: false, latencyMs: null };
 }

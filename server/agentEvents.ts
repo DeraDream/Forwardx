@@ -41,6 +41,7 @@ type AgentRefreshOptions = {
 const agentEventClients = new Map<number, AgentEventClient>();
 const hostMetricsWatchUntil = new Map<number, number>();
 const hostTopologyTrafficWatchUntil = new Map<number, number>();
+const topologyPageWatchers = new Map<string, { hostIds: Set<number>; until: number }>();
 const hostTopologyTcpingRequestedAt = new Map<number, number>();
 const hostTcpingRequestUntil = new Map<number, number>();
 const hostRefreshPushedAt = new Map<number, number>();
@@ -410,20 +411,30 @@ export function isHostMetricsWatching(hostId: number, now = Date.now()) {
   return true;
 }
 
-export function markHostTopologyTrafficWatching(hostIds: number[], ttlMs = 2_500, now = Date.now()) {
+export function markHostTopologyTrafficWatching(hostIds: number[], ttlMs = 2_500, now = Date.now(), watchId?: string) {
   const until = now + ttlMs;
-  for (const id of hostIds) {
-    if (Number.isFinite(id) && id > 0) hostTopologyTrafficWatchUntil.set(id, until);
+  const valid = hostIds.filter((id) => Number.isFinite(id) && id > 0);
+  for (const id of valid) hostTopologyTrafficWatchUntil.set(id, Math.min(until, now + 2_500));
+  if (watchId) {
+    for (const [id, watcher] of topologyPageWatchers) {
+      if (watcher.until <= now) topologyPageWatchers.delete(id);
+    }
+    topologyPageWatchers.set(watchId, { hostIds: new Set(valid), until });
   }
 }
 
+export function stopHostTopologyTrafficWatching(watchId: string) {
+  topologyPageWatchers.delete(watchId);
+}
+
 export function isHostTopologyTrafficWatching(hostId: number, now = Date.now()) {
-  const until = hostTopologyTrafficWatchUntil.get(hostId) || 0;
-  if (until <= now) {
-    hostTopologyTrafficWatchUntil.delete(hostId);
-    return false;
+  let watched = (hostTopologyTrafficWatchUntil.get(hostId) || 0) > now;
+  if (!watched) hostTopologyTrafficWatchUntil.delete(hostId);
+  for (const [id, watcher] of topologyPageWatchers) {
+    if (watcher.until <= now) { topologyPageWatchers.delete(id); continue; }
+    if (watcher.hostIds.has(hostId)) watched = true;
   }
-  return true;
+  return watched;
 }
 
 // Topology is an interactive view: request a fresh Agent measurement when it

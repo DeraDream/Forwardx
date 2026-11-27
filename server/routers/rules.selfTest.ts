@@ -8,8 +8,35 @@ import { requireRuleProtocolEnabled } from "../forwardProtocolSettings";
 import { createHopTestBatch, registerHopTest } from "../hopTestState";
 import { linkProbeMethodForRule } from "@shared/latencyProbe";
 import { ruleLatencySeriesQueryCache as selfTestQueryCache } from "../ruleLatencyQueryCache";
+import { selectTopologyTotalTarget } from "../topologyTotalTarget";
 
 export const selfTestRulesRouter = router({
+  // Network topology: one TCP handshake from the selected entrance through
+  // the actual first forwarding listener, never a batch of per-hop TCP tests.
+  startTopologyTotalTest: protectedProcedure
+    .input(z.object({ ruleId: z.number().int().positive(), entryHostId: z.number().int().positive() }))
+    .mutation(async ({ input, ctx }) => {
+      const rule = await db.getForwardRuleById(input.ruleId) as any;
+      if (!rule) throw new Error("规则不存在");
+      if (ctx.user.role !== "admin" && Number(rule.userId) !== Number(ctx.user.id)) throw new Error("无权操作此规则");
+      await requireRuleProtocolEnabled(rule);
+      if (Number(rule.tunnelId || 0) > 0) throw new Error("隧道入口没有可直接探测的 TCP 转发目标");
+      if (linkProbeMethodForRule(rule) !== "tcp") throw new Error("纯 UDP 规则无法进行端到端 TCP 自测");
+      const { diagnosticSegments } = await import("./diagnostics");
+      const segments = await diagnosticSegments("rule", rule);
+      const target = selectTopologyTotalTarget(segments, input.entryHostId);
+      if (!target) throw new Error("选中入口没有有效的 TCP 首跳监听端口");
+      const { targetIp, targetPort } = target;
+      const id = await db.createForwardTest({
+        ruleId: rule.id, hostId: input.entryHostId, userId: rule.userId, status: "pending",
+        listenOk: false, targetReachable: false, forwardOk: false,
+        message: JSON.stringify({ kind: "topology-total", targetIp, targetPort }),
+      });
+      pushAgentRefresh(input.entryHostId, "topology-total-selftest", { urgent: true });
+      pushAgentSelfTest(input.entryHostId, `topology-total-${id}`);
+      appendPanelLog("info", `[SelfTest] topology-total rule=${rule.id} test=${id} host=${input.entryHostId} target=${targetIp}:${targetPort}`);
+      return { id: Number(id) };
+    }),
   tcpingSeries: protectedProcedure
       .input(z.object({
         ruleId: z.number(),
@@ -209,6 +236,20 @@ export const selfTestRulesRouter = router({
       return { id };
     }),
 
+  latestTopologyTests: protectedProcedure
+    .input(z.object({ entries: z.array(z.object({ ruleId: z.number().int().positive(), entryHostId: z.number().int().positive() })).max(100) }))
+    .query(async ({ input, ctx }) => {
+      const entries = Array.from(new Map(input.entries.map((entry) => [`${entry.ruleId}:${entry.entryHostId}`, entry])).values());
+      const ruleIds = Array.from(new Set(entries.map((entry) => entry.ruleId)));
+      const rules = new Map(await Promise.all(ruleIds.map(async (id) => [id, await db.getForwardRuleById(id)] as const)));
+      const allowed = entries.filter(({ ruleId }) => {
+        const rule = rules.get(ruleId);
+        return rule && (ctx.user.role === "admin" || Number(rule.userId) === Number(ctx.user.id));
+      });
+      return Promise.all(allowed.map(async ({ ruleId, entryHostId }) => ({
+        ruleId, entryHostId, test: await db.getLatestForwardTest(ruleId, { hostId: entryHostId, includeActive: true, topologyTotal: true }),
+      })));
+    }),
   latestTests: protectedProcedure
     .input(z.object({ ruleIds: z.array(z.number().int().positive()).max(100), includeActive: z.boolean().optional().default(true) }))
     .query(async ({ input, ctx }) => {

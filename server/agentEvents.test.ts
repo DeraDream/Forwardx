@@ -3,9 +3,24 @@ import { EventEmitter } from "node:events";
 import test from "node:test";
 import {
   pushAgentSupportBundle,
+  markHostTopologyTrafficWatching,
+  isHostTopologyTrafficWatching,
+  stopHostTopologyTrafficWatching,
   registerAgentEventClient,
   unregisterAgentEventClient,
 } from "./agentEvents";
+
+test("topology stays interactive while mounted even if browser timers throttle, and stops on leave", () => {
+  const now = 1_000_000;
+  markHostTopologyTrafficWatching([2, 3], 120_000, now, "user:page-a");
+  assert.equal(isHostTopologyTrafficWatching(3, now + 60_000), true);
+  assert.equal(isHostTopologyTrafficWatching(4, now + 60_000), false);
+  stopHostTopologyTrafficWatching("user:page-a");
+  assert.equal(isHostTopologyTrafficWatching(3, now + 60_000), false);
+  markHostTopologyTrafficWatching([2], 2_500, now);
+  assert.equal(isHostTopologyTrafficWatching(2, now + 2_000), true);
+  assert.equal(isHostTopologyTrafficWatching(2, now + 3_000), false);
+});
 
 class FakeEventResponse extends EventEmitter {
   writes: string[] = [];

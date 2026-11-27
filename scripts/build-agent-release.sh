@@ -127,7 +127,8 @@ fi
 if compgen -G "$OUT_DIR/forwardx-runtime-linux-*" >/dev/null; then
   artifacts+=("$OUT_DIR"/forwardx-runtime-linux-*)
 fi
-sha256sum "${artifacts[@]}" > "$OUT_DIR"/SHA256SUMS
+# Release assets are downloaded without the builder's absolute filesystem path.
+(cd "$OUT_DIR" && sha256sum "${artifacts[@]##*/}" > SHA256SUMS)
 
 echo "[agent] release artifacts:"
 ls -lh "$OUT_DIR"

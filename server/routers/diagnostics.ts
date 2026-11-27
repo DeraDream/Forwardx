@@ -721,7 +721,7 @@ async function tunnelSegments(tunnel: any, finalTarget?: { ip: string; port: num
   return segments;
 }
 
-async function diagnosticSegments(scope: "rule" | "tunnel" | "chain" | "full-chain", resource: any): Promise<DiagnosticSegment[]> {
+export async function diagnosticSegments(scope: "rule" | "tunnel" | "chain" | "full-chain", resource: any): Promise<DiagnosticSegment[]> {
   if (scope === "chain") {
     const probes = await db.getForwardGroupChainProbes(Number(resource.id), { includeFinalTarget: false });
     return probes.map((probe: any) => ({
@@ -906,13 +906,13 @@ async function diagnosticSegments(scope: "rule" | "tunnel" | "chain" | "full-cha
 
 export const diagnosticsRouter = router({
   latestSegments: protectedProcedure
-    .input(z.object({ ruleIds: z.array(z.number().int().positive()).max(1000) }))
+    .input(z.object({ ruleIds: z.array(z.number().int().positive()).max(1000), recentSeconds: z.number().int().min(1).max(60).optional(), pollTick: z.number().int().nonnegative().optional() }))
     .query(async ({ input, ctx }) => {
       const ruleIds = Array.from(new Set(input.ruleIds));
       const rules = await Promise.all(ruleIds.map((ruleId) => db.getForwardRuleById(ruleId)));
       const allowedRules = rules.filter((rule: any) => rule && (String(ctx.user.role) === "admin" || Number(rule.userId) === Number(ctx.user.id))) as any[];
       const allowedRuleIds = allowedRules.map((rule) => Number(rule.id));
-      return db.getLatestTopologySegmentLatency(allowedRuleIds);
+      return db.getLatestTopologySegmentLatency(allowedRuleIds, input.recentSeconds === undefined ? undefined : Math.floor(Date.now() / 1000) - input.recentSeconds);
     }),
 
   topologyBlockLogs: protectedProcedure

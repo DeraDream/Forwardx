@@ -1,10 +1,8 @@
 name: Release Panel
 
+# Release bundles are built and uploaded locally; keep manual runs for recovery only.
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - "v*.*.*"
 
 permissions:
   contents: write

@@ -170,6 +170,16 @@ test("forward-chain final domain probes bypass unrelated runtime waits", () => {
   });
 });
 
+test("topology total dispatches a single TCP target independently of Ping", () => {
+  const meta = { kind: "topology-total", targetIp: "198.51.100.2", targetPort: 31000 } as const;
+  assert.deepEqual(parseSelfTestMeta(JSON.stringify(meta)), meta);
+  assert.deepEqual(buildMetaAgentSelfTestPayload({ id: "94", ruleId: "120" }, meta), {
+    testId: 94, kind: "topology-total", ruleId: 120,
+    forwardType: "topology-total", protocol: "tcp", method: "tcp", sourcePort: 0,
+    targetIp: "198.51.100.2", targetPort: 31000,
+  });
+});
+
 test("normalizes PostgreSQL string numbers for every Agent self-test payload", () => {
   assert.equal(parseSelfTestMeta(JSON.stringify({ kind: "full-chain", chainId: 7, nodeId: 11, targetIp: "198.51.100.12", targetPort: 32123 }))?.kind, "full-chain", "全链路自测元数据必须能被 Agent 派发路径识别");
   const fullChainPayload = buildMetaAgentSelfTestPayload({ id: "91", ruleId: "0" }, {

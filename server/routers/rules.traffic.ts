@@ -4,8 +4,11 @@ import * as db from "../db";
 import { lookupAddressGeo } from "../hostGeo";
 import { requireRuleAccess } from "./helpers";
 import { appendPanelLog } from "../_core/panelLogger";
-import { markHostTopologyTrafficWatching } from "../agentEvents";
+import { markHostTopologyTrafficWatching, stopHostTopologyTrafficWatching } from "../agentEvents";
 import { ruleTrafficQueryCache as trafficQueryCache } from "../ruleLatencyQueryCache";
+import { createQueryCache } from "../queryCache";
+
+const topologyWatcherHostCache = createQueryCache(200);
 
 const TRAFFIC_RETENTION_HOURS = 24 * 3;
 
@@ -122,23 +125,47 @@ export const trafficRulesRouter = router({
           }),
       );
     }),
+  stopTopologyWatcher: protectedProcedure
+    .input(z.object({ watchId: z.string().uuid() }))
+    .mutation(({ input, ctx }) => {
+      stopHostTopologyTrafficWatching(`${ctx.user.id}:${input.watchId}`);
+      return { ok: true };
+    }),
   trafficRateBatch: protectedProcedure
-    .input(z.object({ ruleIds: z.array(z.number().int().positive()).max(100) }))
+    .input(z.object({ ruleIds: z.array(z.number().int().positive()).max(100), sourceHostIds: z.array(z.number().int().positive()).max(200).optional(), watchId: z.string().uuid().optional() }))
     .query(async ({ input, ctx }) => {
       const requestedIds = Array.from(new Set(input.ruleIds)).sort((a, b) => a - b);
-      if (requestedIds.length === 0) return [];
-      const visibleRules = await db.getForwardRules(ctx.user.role === "admin" ? undefined : ctx.user.id);
+      if (requestedIds.length === 0 && !input.sourceHostIds?.length) return [];
+      const visibleRules = requestedIds.length ? await db.getForwardRules(ctx.user.role === "admin" ? undefined : ctx.user.id) : [];
       const visibleIds = new Set((visibleRules || []).map((rule: any) => Number(rule.id)).filter((id: number) => id > 0));
       const ruleIds = requestedIds.filter((id) => visibleIds.has(id));
       // Keep the existing Agent traffic reporter in its interactive mode while
       // the topology is open. This is not a second probe or sampler.
-      const topologyHostIds = Array.from(new Set<number>(
-        (visibleRules || [])
-          .filter((rule: any) => ruleIds.includes(Number(rule.id)))
-          .map((rule: any) => Number(rule.hostId || 0))
-          .filter((hostId: number) => hostId > 0),
-      ));
-      markHostTopologyTrafficWatching(topologyHostIds, 2_500);
+      const topologyHostIds = ruleIds.length ? await topologyWatcherHostCache.get(
+        `sources:${ctx.user.id}:${ruleIds.join(",")}`,
+        { ttlMs: 30_000, staleMs: 30_000 },
+        async () => {
+          const sources = new Set<number>();
+          const { diagnosticSegments } = await import("./diagnostics");
+          await Promise.all((visibleRules || []).filter((rule: any) => ruleIds.includes(Number(rule.id))).map(async (rule: any) => {
+            if (Number(rule.hostId) > 0) sources.add(Number(rule.hostId));
+            try {
+              for (const segment of await diagnosticSegments("rule", rule)) {
+                if (segment.fromHostId > 0) sources.add(segment.fromHostId);
+              }
+            } catch { /* Other authorized paths remain active if one chain is unavailable. */ }
+          }));
+          return Array.from(sources);
+        },
+      ) : [];
+      const allowedHostIds = input.sourceHostIds?.length ? await topologyWatcherHostCache.get(
+        `owned:${ctx.user.id}:${ctx.user.role}`,
+        { ttlMs: 30_000, staleMs: 30_000 },
+        async () => new Set((await db.getHosts(ctx.user.role === "admin" ? undefined : ctx.user.id)).map((host: { id: number }) => Number(host.id))),
+      ) : new Set<number>();
+      const watchedHosts = Array.from(new Set([...topologyHostIds, ...(input.sourceHostIds || []).filter((id) => allowedHostIds.has(id))]));
+      markHostTopologyTrafficWatching(watchedHosts, input.watchId ? 120_000 : 2_500, Date.now(), input.watchId ? `${ctx.user.id}:${input.watchId}` : undefined);
+      if (!ruleIds.length) return [];
       return trafficQueryCache.get(
         `rate:${ctx.user.id}:${ruleIds.join(",")}`,
         { ttlMs: 500, staleMs: 0 },

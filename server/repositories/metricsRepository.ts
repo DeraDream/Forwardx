@@ -2648,20 +2648,21 @@ export async function cleanOldTopologySegmentIncidents(retentionHours = 30 * 24)
   );
 }
 
-export async function getLatestTopologySegmentLatency(ruleIds: number[]) {
+export async function getLatestTopologySegmentLatency(ruleIds: number[], since?: number) {
   const ids = Array.from(new Set(ruleIds.map(Number).filter((id) => Number.isInteger(id) && id > 0)));
   if (ids.length === 0) return [] as TopologySegmentLatencySample[];
   const q = quoteIdentifier;
+  const sinceFilter = since !== undefined ? ` AND ${q("recordedAt")} >= ?` : "";
   const rows = await queryRaw<any>(
-    `SELECT s.* FROM ${q("topology_segment_latency_stats")} s
-      INNER JOIN (
-        SELECT ${q("ruleId")} AS ${q("ruleId")}, ${q("segmentKey")} AS ${q("segmentKey")}, MAX(${q("recordedAt")}) AS ${q("recordedAt")}
-          FROM ${q("topology_segment_latency_stats")}
-         WHERE ${q("ruleId")} IN (${ids.map(() => "?").join(",")})
-         GROUP BY ${q("ruleId")}, ${q("segmentKey")}
-      ) latest ON latest.${q("ruleId")} = s.${q("ruleId")} AND latest.${q("segmentKey")} = s.${q("segmentKey")} AND latest.${q("recordedAt")} = s.${q("recordedAt")}
-     WHERE s.${q("ruleId")} IN (${ids.map(() => "?").join(",")})`,
-    [...ids, ...ids],
+    `SELECT * FROM (
+      SELECT s.*, ROW_NUMBER() OVER (
+        PARTITION BY s.${q("ruleId")}, s.${q("segmentKey")}
+        ORDER BY s.${q("recordedAt")} DESC, s.${q("id")} DESC
+      ) AS ${q("sampleRank")}
+      FROM ${q("topology_segment_latency_stats")} s
+      WHERE s.${q("ruleId")} IN (${ids.map(() => "?").join(",")})${sinceFilter}
+    ) latest WHERE latest.${q("sampleRank")} = 1`,
+    [...ids, ...(since === undefined ? [] : [since])],
   );
   const latest = rows.map((row: any) => ({
     ruleId: Number(row.ruleId), sourceHostId: Number(row.sourceHostId), targetHostId: Number(row.targetHostId) || null,
@@ -2681,10 +2682,10 @@ export async function getLatestTopologySegmentLatency(ruleIds: number[]) {
          SELECT ${q("ruleId")}, ${q("segmentKey")}, ${q("latencyMs")}, ${q("isTimeout")}, ${q("probeCount")}, ${q("probeSuccesses")}, ${q("recordedAt")},
                 ROW_NUMBER() OVER (PARTITION BY ${q("ruleId")}, ${q("segmentKey")} ORDER BY ${q("recordedAt")} DESC) AS ${q("sampleRank")}
            FROM ${q("topology_segment_latency_stats")}
-          WHERE ${q("segmentKey")} IN (${segmentKeys.map(() => "?").join(",")})
+          WHERE ${q("segmentKey")} IN (${segmentKeys.map(() => "?").join(",")})${since === undefined ? "" : ` AND ${q("recordedAt")} >= ?`}
        ) recent
       WHERE ${q("sampleRank")} <= 20`,
-    segmentKeys,
+    since === undefined ? segmentKeys : [...segmentKeys, Math.max(0, since - 60)],
   );
   const historyByKey = new Map<string, any[]>();
   for (const row of history) {

@@ -5,7 +5,6 @@ import {
   latestAutomaticTopologySegment,
   mergeTopologySegmentProbeResults,
   summarizePhysicalTopologySegmentLabels,
-  summarizeTopologySegmentLabels,
   topologySegmentProbeKey,
   type TopologySegmentProbe,
 } from "./topologySegmentProbeState";
@@ -17,14 +16,6 @@ const probe = (testId: number, status: string, requestedAt: number, latencyMs: n
   success: status === "success",
   latencyMs,
   requestedAt,
-});
-
-test("loading and probing are not failures, but a confirmed blocked hop takes precedence", () => {
-  assert.equal(summarizeTopologySegmentLabels(["加载中"]).pending, true);
-  assert.equal(summarizeTopologySegmentLabels(["探测中"]).timeout, false);
-  assert.deepEqual(summarizeTopologySegmentLabels(["阻断", "探测中"]), {
-    pending: false, timeout: true, blocked: true, offline: false, latencyMs: null,
-  });
 });
 
 test("segment probe identity is isolated by complete logical path", () => {
@@ -91,12 +82,4 @@ test("a newer physical-leg failure replaces an old success from a previous burst
     { at: 20_000, pending: false, success: false, label: "超时" },
     { at: 10_000, pending: false, success: true, label: "45 ms" },
   ], "待探测"), "超时");
-});
-
-test("path total is the sum of the displayed segment snapshot", () => {
-  assert.deepEqual(summarizeTopologySegmentLabels(["37 ms", "33 ms", "1 ms"]), { pending: false, timeout: false, blocked: false, offline: false, latencyMs: 71 });
-  assert.deepEqual(summarizeTopologySegmentLabels(["37 ms", "探测中", "1 ms"]), { pending: true, timeout: false, blocked: false, offline: false, latencyMs: null });
-  assert.deepEqual(summarizeTopologySegmentLabels(["37 ms", "超时"]), { pending: false, timeout: true, blocked: false, offline: false, latencyMs: null });
-  assert.deepEqual(summarizeTopologySegmentLabels(["37 ms", "阻断"]), { pending: false, timeout: true, blocked: true, offline: false, latencyMs: null });
-  assert.deepEqual(summarizeTopologySegmentLabels(["37 ms", "离线"]), { pending: false, timeout: true, blocked: true, offline: true, latencyMs: null });
 });
