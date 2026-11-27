@@ -29,6 +29,27 @@ export async function hasActiveForwardTests() {
 
 const FORWARD_TEST_LEASE_SECONDS = 8;
 
+// Heartbeat delivery is not an acknowledgement: it claims a test before the
+// Agent receives the response. Return aged in-flight hosts so the scheduler
+// can re-send an independent pull notification until a result arrives.
+export async function getUnreportedForwardTestHosts(now = Date.now()) {
+  const cutoff = Math.floor((now - 2_000) / 1_000);
+  const rows = await queryRaw<{ hostId: number; id: number }>(
+    `SELECT ${quoteIdentifier("hostId")} AS hostId, ${quoteIdentifier("id")} AS id
+       FROM ${quoteIdentifier("forward_tests")}
+      WHERE (${quoteIdentifier("status")} = 'pending' AND ${quoteIdentifier("createdAt")} < ?)
+         OR (${quoteIdentifier("status")} = 'running' AND ${quoteIdentifier("updatedAt")} < ?)
+      ORDER BY ${quoteIdentifier("id")} DESC LIMIT 256`,
+    [cutoff, cutoff],
+  );
+  const hosts = new Map<number, number>();
+  for (const row of rows) {
+    const id = Number(row.hostId);
+    if (id > 0 && !hosts.has(id)) hosts.set(id, Number(row.id));
+  }
+  return hosts;
+}
+
 // Claiming an unbounded backlog marks jobs running before the Agent has even
 // accepted them; keep each heartbeat/pull within the Agent worker capacity.
 export async function getPendingForwardTestsByHost(hostId: number, leaseSeconds = FORWARD_TEST_LEASE_SECONDS, limit = 16) {

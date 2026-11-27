@@ -34,9 +34,12 @@ test("forward self-test leases recover lost deliveries and give claimed work a f
       );
 
       assert.equal(await tests.hasActiveForwardTests(), true);
+      assert.deepEqual([...await tests.getUnreportedForwardTestHosts(now * 1000)], []);
+      assert.deepEqual([...await tests.getUnreportedForwardTestHosts((now + 4) * 1000)], [[10, 1]]);
       assert.deepEqual((await tests.getPendingForwardTestsByHost(10)).map((row) => Number(row.id)), [1]);
       assert.equal(await tests.markForwardTestRunning(1), true);
       assert.deepEqual(await tests.getPendingForwardTestsByHost(10), []);
+      assert.deepEqual([...await tests.getUnreportedForwardTestHosts((now + 4) * 1000)], [[10, 1]]);
       assert.equal(await tests.markForwardTestRunning(1), false);
 
       await runtime.executeRaw('UPDATE "forward_tests" SET "updatedAt" = ? WHERE "id" = ?', [now - 20, 1]);
@@ -45,6 +48,7 @@ test("forward self-test leases recover lost deliveries and give claimed work a f
       assert.equal(await tests.completeForwardTestIfActive(1, { status: "success", latencyMs: 12 }), true);
       assert.equal(await tests.completeForwardTestIfActive(1, { status: "failed" }), false);
       assert.equal(await tests.hasActiveForwardTests(), false);
+      assert.deepEqual([...await tests.getUnreportedForwardTestHosts((now + 4) * 1000)], []);
 
       await runtime.executeRaw(
         'INSERT INTO "forward_tests" ("id", "ruleId", "hostId", "userId", "status", "createdAt", "updatedAt") VALUES (?, ?, ?, ?, ?, ?, ?)',

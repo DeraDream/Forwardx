@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createNonOverlappingScheduledTask } from "./scheduledTask";
 import {
+  FORWARD_CHAIN_TARGET_TIMEOUT_SECONDS,
   FORWARD_TUNNEL_LATENCY_WAIT_MS,
   SELF_TEST_SWEEP_ACTIVE_WINDOW_MS,
   SELF_TEST_SWEEP_INTERVAL_MS,
@@ -36,8 +37,9 @@ test("only runtime-dependent self-tests receive the extended timeout", () => {
   }
   assert.equal(
     selfTestTimeoutSeconds({ kind: "forward-chain", runtimeDependent: false }),
-    SELF_TEST_TIMEOUT_SECONDS,
+    FORWARD_CHAIN_TARGET_TIMEOUT_SECONDS,
   );
+  assert.ok(FORWARD_CHAIN_TARGET_TIMEOUT_SECONDS > 8 + SELF_TEST_SWEEP_INTERVAL_MS / 1_000);
   assert.equal(selfTestTimeoutSeconds({ kind: "direct" }), SELF_TEST_TIMEOUT_SECONDS);
   assert.equal(selfTestTimeoutSeconds(null), SELF_TEST_TIMEOUT_SECONDS);
 });

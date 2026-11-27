@@ -1,5 +1,9 @@
 export const SELF_TEST_TIMEOUT_SECONDS = 8;
 export const RUNTIME_SELF_TEST_TIMEOUT_SECONDS = 45;
+// A forward-chain final target has no runtime readiness retry, but its delivery
+// can still be leased by a heartbeat whose response never reaches the Agent.
+// Allow the eight-second lease to expire and a second pull before timing out.
+export const FORWARD_CHAIN_TARGET_TIMEOUT_SECONDS = 20;
 // A multi-hop tunnel needs one heartbeat/probe round on every participating
 // Agent.  Runtime reconciliation can take close to 20 seconds, so leave a
 // little headroom for the reports to make it back to the panel before the
@@ -19,9 +23,10 @@ const RUNTIME_SELF_TEST_KINDS = new Set([
 ]);
 
 export function selfTestTimeoutSeconds(meta: { kind?: string; runtimeDependent?: boolean } | null | undefined) {
-  const runtimeDependent = meta
-    && RUNTIME_SELF_TEST_KINDS.has(String(meta.kind || ""))
-    && !(meta.kind === "forward-chain" && meta.runtimeDependent === false);
+  if (meta?.kind === "forward-chain" && meta.runtimeDependent === false) {
+    return FORWARD_CHAIN_TARGET_TIMEOUT_SECONDS;
+  }
+  const runtimeDependent = meta && RUNTIME_SELF_TEST_KINDS.has(String(meta.kind || ""));
   return runtimeDependent ? RUNTIME_SELF_TEST_TIMEOUT_SECONDS : SELF_TEST_TIMEOUT_SECONDS;
 }
 

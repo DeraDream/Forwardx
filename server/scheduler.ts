@@ -1,5 +1,5 @@
 import * as db from "./db";
-import { pushAgentRefresh } from "./agentEvents";
+import { pushAgentRefresh, pushAgentSelfTest } from "./agentEvents";
 import { appendPanelLog } from "./_core/panelLogger";
 import { parseSelfTestMeta } from "./agentRouteUtils";
 import { getEmailConfig, sendMail } from "./email";
@@ -302,9 +302,26 @@ export async function settleTimedOutTunnelTests(timedOutTests: TimedOutForwardTe
   }
 }
 
+const selfTestRedeliveryAt = new Map<number, number>();
+
 async function runSelfTestTimeoutSweep() {
   if (!selfTestSweepActivity.shouldSweep()) return;
   try {
+    const now = Date.now();
+    const unreportedHosts = await db.getUnreportedForwardTestHosts(now);
+    for (const [hostId, testId] of unreportedHosts) {
+      if (now - (selfTestRedeliveryAt.get(hostId) || 0) < 4_000) continue;
+      selfTestRedeliveryAt.set(hostId, now);
+      // The initial heartbeat can claim work without successfully delivering
+      // its response. Re-notify the independent pull path; after the lease
+      // expires it can reclaim the job without waiting for an SSE reconnect.
+      const delivered = pushAgentSelfTest(hostId, `retry-${testId}`);
+      if (!delivered) pushAgentRefresh(hostId, "selftest-redelivery", { urgent: true });
+      appendPanelLog("info", `[SelfTest] redelivery host=${hostId} test=${testId} event=${delivered}`);
+    }
+    for (const hostId of selfTestRedeliveryAt.keys()) {
+      if (!unreportedHosts.has(hostId) && now - (selfTestRedeliveryAt.get(hostId) || 0) > 60_000) selfTestRedeliveryAt.delete(hostId);
+    }
     const timedOutTests = await db.timeoutStaleForwardTests(
       SELF_TEST_TIMEOUT_SECONDS,
       timeoutSecondsForForwardTest,
