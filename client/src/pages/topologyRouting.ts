@@ -294,6 +294,51 @@ export function routeSmoothLayeredTopologyGraph(nodes: TopologyRoutingNode[], in
       end,
     ]);
   });
+  // Overlaps between edges are fine; an edge crossing an unrelated VPS card is
+  // not. Check the final Bezier geometry (rather than just its control points)
+  // and send exceptional edges through an outside lane between card columns.
+  const cards = [...base.positions.entries()];
+  const inside = (x: number, y: number, box: TopologyBox) =>
+    x > box.x && x < box.x + box.width && y > box.y && y < box.y + box.height;
+  const hitsCard = (edge: TopologyRoutingEdge, points: TopologyPoint[]) => cards.some(([id, box]) => {
+    if (id === edge.from || id === edge.to) return false;
+    for (let segment = 1; segment < points.length; segment++) {
+      const a = points[segment - 1], b = points[segment];
+      const curve = points.length === 4 && !!points[1].curve;
+      const length = curve
+        ? points.slice(1).reduce((total, point, index) => total + Math.hypot(point.x - points[index].x, point.y - points[index].y), 0)
+        : Math.hypot(b.x - a.x, b.y - a.y);
+      const steps = Math.max(16, Math.ceil(length / 6));
+      for (let step = 0; step <= steps; step++) {
+        const t = step / steps;
+        const x = curve
+          ? (1 - t) ** 3 * points[0].x + 3 * (1 - t) ** 2 * t * points[1].x + 3 * (1 - t) * t * t * points[2].x + t ** 3 * points[3].x
+          : a.x + (b.x - a.x) * t;
+        const y = curve
+          ? (1 - t) ** 3 * points[0].y + 3 * (1 - t) ** 2 * t * points[1].y + 3 * (1 - t) * t * t * points[2].y + t ** 3 * points[3].y
+          : a.y + (b.y - a.y) * t;
+        if (inside(x, y, box)) return true;
+      }
+      if (curve) break;
+    }
+    return false;
+  });
+  let detourIndex = 0;
+  for (const edge of inputEdges) {
+    const original = edgeRoutes.get(edge.id);
+    if (!original || !hitsCard(edge, original)) continue;
+    const from = base.positions.get(edge.from)!, to = base.positions.get(edge.to)!;
+    const start = original[0], end = original[original.length - 1];
+    const upper = Math.min(...cards.map(([, box]) => box.y)) - 32 - detourIndex * 16;
+    const lower = Math.max(...cards.map(([, box]) => box.y + box.height)) + 32 + detourIndex * 16;
+    const lanes = start.y > end.y ? [lower, upper] : [upper, lower];
+    for (const lane of lanes) {
+      const detour = [start, { x: from.x + from.width + 12, y: start.y },
+        { x: from.x + from.width + 12, y: lane }, { x: to.x - 12, y: lane },
+        { x: to.x - 12, y: end.y }, end];
+      if (!hitsCard(edge, detour)) { edgeRoutes.set(edge.id, detour); detourIndex++; break; }
+    }
+  }
   // Crop the old orthogonal router's unused overhead and side margins.
   const points = [...edgeRoutes.values()].flat();
   const boxes = [...base.positions.values()];

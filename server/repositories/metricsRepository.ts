@@ -2157,6 +2157,29 @@ export async function getTrafficSummaryByRule(opts: {
   const entryGroupByChain = new Map((chainGroupRows as any[])
     .map((row) => [Number(row.id), Number(row.entryGroupId || 0)] as const));
   const entryGroupIds = Array.from(new Set([...entryGroupByChain.values()].filter((id) => id > 0)));
+  const q = quoteIdentifier;
+  // The card and the chain history chart must use the same completed-hop
+  // aggregate. Child tcping samples may represent overlapping paths; adding
+  // them together inflates latency on chains without a separate entry group.
+  const latestChainGroupRows = chainGroupIds.length > 0
+    ? await queryRaw<any>(
+      `SELECT s.${q("groupId")} AS ${q("groupId")},
+              s.${q("latencyMs")} AS ${q("latencyMs")},
+              s.${q("isTimeout")} AS ${q("isTimeout")},
+              s.${q("recordedAt")} AS ${q("recordedAt")}
+         FROM ${q("forward_groups")} g
+         INNER JOIN ${q("forward_group_latency_stats")} s ON s.${q("id")} = (
+           SELECT latest.${q("id")} FROM ${q("forward_group_latency_stats")} latest
+            WHERE latest.${q("groupId")} = g.${q("id")}
+              AND latest.${q("recordedAt")} >= ?
+            ORDER BY latest.${q("recordedAt")} DESC, latest.${q("id")} DESC LIMIT 1
+         )
+        WHERE g.${q("id")} IN (${chainGroupIds.map(() => "?").join(",")})`,
+      [epochSeconds(new Date(Date.now() - 24 * 60 * 60 * 1000)), ...chainGroupIds],
+    )
+    : [];
+  const latestChainGroupById = new Map((latestChainGroupRows as any[])
+    .map((row) => [Number(row.groupId), row] as const));
   const entryHostRows = entryGroupIds.length > 0
     ? await db.select({ groupId: forwardGroupMembers.groupId, hostId: forwardGroupMembers.hostId })
       .from(forwardGroupMembers)
@@ -2173,7 +2196,6 @@ export async function getTrafficSummaryByRule(opts: {
     ...Array.from(parentByChildRule.keys()),
     ...Array.from(parentChainChildren.values()).flat(),
   ]));
-  const q = quoteIdentifier;
   const latestRows = latencyRuleIds.length > 0
     ? await queryRaw<any>(
       `SELECT s.${q("ruleId")} AS ${q("ruleId")},
@@ -2238,8 +2260,21 @@ export async function getTrafficSummaryByRule(opts: {
       latestByRule.delete(parentId);
     }
   }
-  for (const [parentId, childIds] of parentChainChildren.entries()) {
-    const entryHostIds = entryHostsByGroup.get(entryGroupByChain.get(chainGroupByParent.get(parentId) || 0) || 0);
+  for (const [parentId] of parentChainChildren.entries()) {
+    const chainGroupId = chainGroupByParent.get(parentId) || 0;
+    const groupSample = latestChainGroupById.get(chainGroupId);
+    if (groupSample) {
+      latestByRule.set(parentId, {
+        ruleId: parentId,
+        latencyMs: rowBool(groupSample.isTimeout) ? null : groupSample.latencyMs === null ? null : Number(groupSample.latencyMs),
+        isTimeout: rowBool(groupSample.isTimeout),
+        recordedAt: rowDate(groupSample.recordedAt),
+        source: "chain_group",
+      });
+      entryChainParentIds.add(parentId);
+      continue;
+    }
+    const entryHostIds = entryHostsByGroup.get(entryGroupByChain.get(chainGroupId) || 0);
     const entryResult = entryHostIds && lowestEntryChainLatency(
       entryHostIds, parentChainChildRows.get(parentId) || [], latestByRawRule,
     );
@@ -2248,32 +2283,10 @@ export async function getTrafficSummaryByRule(opts: {
       entryChainParentIds.add(parentId);
       continue;
     }
-    let latencySum = 0;
-    let recordedAt: Date | null = null;
-    let isTimeout = childIds.length === 0;
-    let hasLatency = false;
-    for (const childId of childIds) {
-      const latest = latestByRawRule.get(childId);
-      if (!latest) {
-        isTimeout = true;
-        continue;
-      }
-      if (!recordedAt || new Date(latest.recordedAt).getTime() > new Date(recordedAt).getTime()) {
-        recordedAt = latest.recordedAt;
-      }
-      if (latest.isTimeout || latest.latencyMs === null || latest.latencyMs === undefined) {
-        isTimeout = true;
-        continue;
-      }
-      latencySum += Number(latest.latencyMs) || 0;
-      hasLatency = true;
-    }
-    latestByRule.set(parentId, {
-      ruleId: parentId,
-      latencyMs: !isTimeout && hasLatency ? latencySum : null,
-      isTimeout,
-      recordedAt,
-    });
+    // No complete-path measurement yet. Summing unrelated child tcping
+    // results is not a valid end-to-end latency; leave the card untested
+    // until the hop aggregate (or a complete manual chain test) arrives.
+    latestByRule.delete(parentId);
   }
   const chainParentIds = Array.from(chainParentRuleIds);
   const latestChainTestRows = chainParentIds.length > 0

@@ -124,6 +124,26 @@ test("latency series resolve direct rules, active forward-group children, tunnel
     const chainSeries = await metrics.getForwardGroupLatencySeries(20, { since });
     assert.deepEqual(chainSeries.map((item) => item.latencyMs), [66]);
 
+    // Without a separate entry group, child tcping paths overlap. The card
+    // must show the same hop aggregate as the chart, not 70 + 36 + 5.
+    await insert("forward_rules", ruleColumns, [150, 1, "chain template", "iptables", "tcp", 20, null, null, 1, 31287, "example.test", 443, 1, 1, 1]);
+    for (const [id, hostId, latency] of [[151, 1, 70], [152, 2, 36], [153, 3, 5]]) {
+      await insert("forward_rules", ruleColumns, [id, hostId, "chain child", "iptables", "tcp", 20, 150, id, 0, 31287, "example.test", 443, 1, 1, 1]);
+      await insert("tcping_stats", ["ruleId", "hostId", "latencyMs", "isTimeout", "recordedAt"], [id, hostId, latency, 0, now - 10]);
+    }
+    await insert("traffic_stats", ["ruleId", "hostId", "recordedAt"], [150, 1, now - 10]);
+    const chainCard = await metrics.getTrafficSummaryByRule({ userId: 1, ruleIds: [150], since });
+    assert.equal(chainCard.find((row) => row.ruleId === 150)?.latestLatencyMs, 66,
+      "card latency must match the completed-hop chart rather than summed child tcping");
+    await insert("forward_group_latency_stats", ["groupId", "latencyMs", "isTimeout", "recordedAt"], [20, null, 1, now - 5]);
+    const timedOutCard = await metrics.getTrafficSummaryByRule({ userId: 1, ruleIds: [150], since });
+    assert.equal(timedOutCard.find((row) => row.ruleId === 150)?.latestLatencyIsTimeout, true,
+      "the most recent chart timeout must also appear on the card");
+    await runtime.executeRaw('DELETE FROM "forward_group_latency_stats" WHERE "groupId" = 20');
+    const unmeasuredCard = await metrics.getTrafficSummaryByRule({ userId: 1, ruleIds: [150], since });
+    assert.equal(unmeasuredCard.find((row) => row.ruleId === 150)?.latestLatencyMs, null,
+      "without a complete-path sample, do not display a sum of overlapping child probes");
+
     // A multi-entry chain has two complete entry-to-landing samples. The card
     // must choose the lower path, not sum the parallel entries and relay rows.
     await insert("forward_groups", ["id", "name", "groupType", "groupMode", "entryGroupId", "targetIp", "userId", "isEnabled"], [21, "multi-entry", "host", "chain", 22, "0.0.0.0", 1, 1]);

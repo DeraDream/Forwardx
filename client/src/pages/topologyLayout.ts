@@ -36,7 +36,7 @@ export function acyclicTopologyLayerEdges<T extends LayoutEdge>(nodeIds: Iterabl
  * Give each fork its own horizontal lane. A node remains unique; only the
  * row assigned to a non-primary branch changes until that branch converges.
  */
-export function assignTopologyBranchRows<T extends LayoutNode>(columns: Map<number, T[]>, edges: LayoutEdge[], rootIds: Set<string>, directOnlyIds: Set<string>) {
+export function assignTopologyBranchRows<T extends LayoutNode>(columns: Map<number, T[]>, edges: LayoutEdge[], rootIds: Set<string>, directOnlyIds: Set<string>, rootPriority: ReadonlyMap<string, { depth: number; shared: number }> = new Map()) {
   const byId = new Map([...columns.values()].flat().map((node) => [node.id, node]));
   const incoming = new Map<string, LayoutEdge[]>(), outgoing = new Map<string, LayoutEdge[]>();
   for (const edge of edges) {
@@ -63,7 +63,12 @@ export function assignTopologyBranchRows<T extends LayoutNode>(columns: Map<numb
   for (const column of keys) {
     const list = columns.get(column) || [];
     const used = new Set<number>();
-    for (const node of list.filter((node) => rootIds.has(node.id)).sort((a, b) => a.label.localeCompare(b.label, "zh-CN"))) {
+    for (const node of list.filter((node) => rootIds.has(node.id)).sort((a, b) => {
+      const first = rootPriority.get(a.id), second = rootPriority.get(b.id);
+      return (second?.depth || 0) - (first?.depth || 0)
+        || (second?.shared || 0) - (first?.shared || 0)
+        || a.label.localeCompare(b.label, "zh-CN") || a.id.localeCompare(b.id);
+    })) {
       node.row = nextLane++;
       used.add(node.row);
     }

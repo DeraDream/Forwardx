@@ -386,6 +386,14 @@ async function applyAgentRuleStatus(host: any, payload: any): Promise<AgentStatu
   const wasRunning = !!(rule as any).isRunning;
   await db.updateRuleRunningStatus(ruleId, !!isRunning, !isRunning && payload?.actionSucceeded === true && payload?.actionOp === "remove");
   await applyFullChainRuleStatus(ruleId, !!isRunning, message);
+  // Probe only after the new/changed listener has actually been applied.
+  // An immediate probe from the create/update handler can race deployment and
+  // store a spurious timeout. This also covers every child of a forward chain.
+  if (!wasRunning && isRunning && payload?.actionOp === "apply" && payload?.actionSucceeded === true
+    && (rule as any).isEnabled && !(rule as any).pendingDelete) {
+    requestHostTcping(Number(host.id));
+    pushAgentRefresh(Number(host.id), "forward-rule-applied-tcping", { urgent: true });
+  }
   if (
     (wasRunning || !!message)
     && !isRunning

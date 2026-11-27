@@ -158,9 +158,15 @@ test("long smooth edges use compact reusable lanes, independent of ordinary edge
   const graph = routeSmoothLayeredTopologyGraph(nodes, [...ordinary, { id: "long", from: "a", to: "d" }], new Set());
   const long = graph.edgeRoutes.get("long")!;
   // Ordinary links do not consume the long-link track budget.
-  assert.equal(long[1].y, long[2].y);
-  assert.ok(long[1].y > -80, "the long edge was sent to a lane based on all edge indices");
+  assert.equal(long.length === 6 ? long[2].y : long[1].y, long.length === 6 ? long[3].y : long[2].y);
+  assert.ok((long.length === 6 ? long[2].y : long[1].y) > -80, "the long edge was sent to a lane based on all edge indices");
   assert.ok(graph.height < 500, "ordinary fan-out unnecessarily enlarged the canvas");
+  if (long.length === 6) {
+    const box = graph.positions.get("b")!;
+    for (const segment of segments(new Map([["long", long]]))) {
+      assert.equal(intersectsCard(segment, box), false, "detoured long link entered a relay card");
+    }
+  }
 });
 
 test("smooth fan-out ports follow destination positions, not edge IDs", () => {

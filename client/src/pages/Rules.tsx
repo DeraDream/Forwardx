@@ -2953,6 +2953,11 @@ function RulesContent() {
   const isMobile = useIsMobile();
   const utils = trpc.useUtils();
   const [ruleProbeCacheRevision, setRuleProbeCacheRevision] = useState(0);
+  const [pendingLatencyRefresh, setPendingLatencyRefresh] = useState<Map<number, number>>(() => new Map());
+  const expectFreshLatency = useCallback((ruleId: number) => {
+    if (!Number.isInteger(ruleId) || ruleId <= 0) return;
+    setPendingLatencyRefresh((previous) => new Map(previous).set(ruleId, Date.now()));
+  }, []);
   const invalidatedRuleProbeIdsRef = useRef(new Set<number>());
   const invalidateRuleProbeStatuses = useCallback(
     (ruleIds: Iterable<number> | undefined) => {
@@ -3038,6 +3043,7 @@ function RulesContent() {
   const [showCopyDialog, setShowCopyDialog] = useState(false);
   const [form, setForm] = useState<RuleFormData>(defaultForm);
   const initialEditForm = useRef<RuleFormData | null>(null);
+  const initialEditRuleEnabled = useRef(false);
   const filterResourceStorageKey = ruleFilterStorageKey(
     RULE_FILTER_RESOURCE_STORAGE_KEY,
     user,
@@ -3362,7 +3368,12 @@ function RulesContent() {
     (!secondaryQueriesReady || walletLoading || trafficBillingLoading);
 
   const createMutation = trpc.rules.create.useMutation({
-    onSuccess: (data) => {
+    onSuccess: (data, variables) => {
+      if (variables.isEnabled !== false) {
+        invalidateRuleProbeStatuses([Number(data.id)]);
+        expectFreshLatency(Number(data.id));
+        utils.rules.trafficSummary.invalidate();
+      }
       utils.rules.list.invalidate();
       utils.rules.listPage.invalidate();
       utils.rules.mapItems.invalidate();
@@ -3380,6 +3391,10 @@ function RulesContent() {
   const updateMutation = trpc.rules.update.useMutation({
     onSuccess: (_data, variables) => {
       if (!("metadataOnly" in _data && _data.metadataOnly)) invalidateRuleProbeStatuses([Number(variables.id)]);
+      if (variables.isEnabled !== false && "reset" in _data && (_data.reset || ("hotUpdated" in _data && _data.hotUpdated))) {
+        expectFreshLatency(Number(variables.id));
+        utils.rules.trafficSummary.invalidate();
+      }
       utils.rules.list.invalidate();
       utils.rules.listPage.invalidate();
       utils.rules.mapItems.invalidate();
@@ -3628,6 +3643,7 @@ function RulesContent() {
   const resetForm = () => {
     setForm({ ...defaultForm, failoverTargetsText: "" });
     setEditingId(null);
+    initialEditRuleEnabled.current = false;
     setEditingOriginalProtocol(null);
     setLegacyLocalRuleEditId(null);
     setPortStatus("idle");
@@ -3834,6 +3850,7 @@ function RulesContent() {
       autoFailback: rule.autoFailback !== false,
     };
     initialEditForm.current = editForm;
+    initialEditRuleEnabled.current = rule.isEnabled !== false;
     setForm(editForm);
     setEditingId(rule.id);
     setEditingOriginalProtocol(normalizeRuleProtocol(rule.protocol));
@@ -3974,14 +3991,22 @@ function RulesContent() {
       };
     }
     if (portStatus === "available") {
+      const original = initialEditForm.current;
+      const isCurrentRulePort = !!editingId && initialEditRuleEnabled.current && !!original &&
+        form.sourcePort === original.sourcePort &&
+        form.routeMode === original.routeMode &&
+        form.hostId === original.hostId &&
+        form.forwardGroupId === original.forwardGroupId &&
+        form.tunnelId === original.tunnelId &&
+        form.protocol === original.protocol;
       return {
         type: "available" as const,
-        text: "可用",
-        title: `允许端口范围: ${sourcePortRangeText}`,
+        text: isCurrentRulePort ? "正在使用" : "可用",
+        title: isCurrentRulePort ? "该端口正由当前规则使用" : `允许端口范围: ${sourcePortRangeText}`,
       };
     }
     return null;
-  }, [portRangeError, portStatus, sourcePortRangeText]);
+  }, [editingId, form.forwardGroupId, form.hostId, form.protocol, form.routeMode, form.sourcePort, form.tunnelId, portRangeError, portStatus, sourcePortRangeText]);
   const tunnelById = useMemo(() => {
     const map = new Map<number, any>();
     (tunnels || []).forEach((tunnel: any) =>
@@ -6000,8 +6025,8 @@ function RulesContent() {
       { hours: 24, range: "24h", ruleIds: visibleRuleIdsForMetrics },
       {
         enabled: visibleRuleIdsForMetrics.length > 0,
-        refetchInterval: pollingInterval("normal"),
-        staleTime: 5000,
+        refetchInterval: pollingInterval(pendingLatencyRefresh.size > 0 ? "live" : "normal"),
+        staleTime: pendingLatencyRefresh.size > 0 ? 0 : 5000,
         refetchOnWindowFocus: false,
         placeholderData: (previousData) => previousData,
       },
@@ -6137,6 +6162,22 @@ function RulesContent() {
       ),
     [ruleProbeCacheRevision, trafficByRule, user?.id, visibleRuleIdsForMetrics],
   );
+  useEffect(() => {
+    if (pendingLatencyRefresh.size === 0 || !dailyTrafficSummary) return;
+    const now = Date.now();
+    setPendingLatencyRefresh((previous) => {
+      let next: Map<number, number> | null = null;
+      for (const [ruleId, savedAt] of previous) {
+        const probeAt = stableProbeByRule.get(ruleId)?.latestLatencyAt;
+        const recordedAt = probeAt ? new Date(probeAt).getTime() : 0;
+        if ((recordedAt > 0 && recordedAt >= Math.floor(savedAt / 1000) * 1000) || now - savedAt > 90_000) {
+          if (!next) next = new Map(previous);
+          next.delete(ruleId);
+        }
+      }
+      return next || previous;
+    });
+  }, [dailyTrafficSummary, pendingLatencyRefresh, stableProbeByRule]);
   const hasForwardGroupRules = useMemo(
     () =>
       filteredRules.some((rule: any) => Number(rule.forwardGroupId || 0) > 0),
@@ -10953,6 +10994,16 @@ function RulesContent() {
                                 : ""
                           }`}
                         />
+                        {portStatus === "checking" && (
+                          <div
+                            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"
+                            role="status"
+                            aria-label="正在检查端口"
+                            title="正在检查端口"
+                          >
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          </div>
+                        )}
                         {portStatus === "used" && (
                           <div
                             className="absolute right-2.5 top-1/2 inline-flex max-w-[5.5rem] -translate-y-1/2 items-center gap-1 text-[11px] font-medium text-destructive"

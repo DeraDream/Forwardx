@@ -65,6 +65,50 @@ test("relationship overview places standalone forwards above chains and shared d
   assert.ok(graph.edges.some((edge) => edge.from === "host:2" && edge.to === "target:198.51.100.10:443"));
 });
 
+test("the deeper shared route anchors entries regardless of their names, without routing through cards", () => {
+  const node = (id: string, label = id) => ({ id, label, kind: "relay" });
+  const mk = node("mk", "AAA short"), poA = node("po-a", "ZZZ deep A"), poB = node("po-b", "ZZZ deep B");
+  const qhix = node("qhix"), hk = node("hk"), sg = node("sg"), exit = node("exit"), direct = node("direct");
+  const paths = [
+    { id: "deep-a", entry: poA, relays: [qhix, hk, sg], landing: exit },
+    { id: "deep-b", entry: poB, relays: [qhix, hk, sg], landing: exit },
+    { id: "short", entry: mk, relays: [hk, sg], landing: exit },
+    { id: "direct", entry: qhix, relays: [], landing: direct },
+  ] as any;
+  const graph = buildOverviewGraph(paths);
+  assert.ok(graph.positions.get("mk")!.y > graph.positions.get("po-a")!.y);
+  assert.ok(graph.positions.get("mk")!.y > graph.positions.get("po-b")!.y);
+  assert.equal(graph.nodes.filter((node) => node.id === "hk").length, 1);
+  assert.ok(graph.edges.some((edge) => edge.from === "qhix" && edge.to === "hk"));
+  assert.ok(graph.edges.some((edge) => edge.from === "mk" && edge.to === "hk"));
+  const route = graph.edgeRoutes.get("mk=>hk")!;
+  const cubic = (t: number) => ({
+    x: (1-t)**3*route[0].x + 3*(1-t)**2*t*route[1].x + 3*(1-t)*t*t*route[2].x + t**3*route[3].x,
+    y: (1-t)**3*route[0].y + 3*(1-t)**2*t*route[1].y + 3*(1-t)*t*t*route[2].y + t**3*route[3].y,
+  });
+  const qhixBox = graph.positions.get("qhix")!;
+  for (let index = 0; index <= 200; index++) {
+    const progress = index / 200 * (route.length - 1);
+    const segment = Math.min(route.length - 2, Math.floor(progress));
+    const a = route[segment], b = route[segment + 1], t = progress - segment;
+    const point = route.length === 4 ? cubic(index / 200) : { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+    assert.ok(!(point.x > qhixBox.x && point.x < qhixBox.x + qhixBox.width
+      && point.y > qhixBox.y && point.y < qhixBox.y + qhixBox.height), "short path passed through QHIX");
+  }
+});
+
+test("transitively connected direct paths remain in the chain band without duplicate nodes", () => {
+  const node = (id: string) => ({ id, label: id, kind: "relay" });
+  const paths = [
+    { id: "chain", entry: node("a"), relays: [node("b")], landing: node("c") },
+    { id: "joined", entry: node("b"), relays: [], landing: node("d") },
+    { id: "indirect", entry: node("d"), relays: [], landing: node("e") },
+  ] as any;
+  const graph = buildOverviewGraph(paths);
+  assert.equal(graph.nodes.filter((node) => node.id === "d").length, 1);
+  assert.ok(graph.edges.some((edge) => edge.from === "d" && edge.to === "e"));
+});
+
 test("parallel entry, shared relays and direct convergence exits keep their real connections", () => {
   const node = (id: string) => ({ id, label: id, kind: "relay" });
   const paths = [
