@@ -753,6 +753,7 @@ const IMPORT_TABLE_ORDER = [
   "traffic_stat_buckets",
   "agent_traffic_reports",
   "tcping_stats",
+  "topology_segment_latest",
   "forward_tests",
   "forward_group_events",
   "ip_geo_cache",
@@ -1432,6 +1433,13 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
       row.ruleId = mapRequiredId(maps, "forward_rules", source.ruleId);
       row.hostId = mapRequiredId(maps, "hosts", source.hostId);
       return { row };
+
+    case "topology_segment_latest":
+      row.ruleId = mapRequiredId(maps, "forward_rules", source.ruleId);
+      row.sourceHostId = mapRequiredId(maps, "hosts", source.sourceHostId);
+      row.targetHostId = mapOptionalId(maps, "hosts", source.targetHostId);
+      row.segmentKey = `topology-v1:${row.sourceHostId}:${String(row.targetAddress || "").trim().toLowerCase()}:${Number(row.targetPort) || 0}:${row.method === "ping" ? "ping" : "tcp"}`;
+      return { row, existingWhere: { ruleId: row.ruleId, segmentKey: row.segmentKey } };
 
     case "forward_tests":
       row.ruleId = mapRequiredId(maps, "forward_rules", source.ruleId);

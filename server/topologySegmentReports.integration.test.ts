@@ -55,7 +55,7 @@ test("topology segment report persists an Agent's reconciled next hop", () => {
         }] }),
       });
       assert.equal(pingResponse.status, 200, await pingResponse.text());
-      const rows = await runtime.queryRaw('SELECT ruleId,sourceHostId,targetHostId,targetAddress,targetPort,latencyMs,isTimeout FROM topology_segment_latency_stats ORDER BY id');
+      const rows = await runtime.queryRaw('SELECT ruleId,sourceHostId,targetHostId,targetAddress,targetPort,latencyMs,isTimeout FROM topology_segment_latest ORDER BY id');
       assert.deepEqual(rows.map((row) => [Number(row.ruleId), Number(row.sourceHostId), Number(row.targetHostId), row.targetAddress, Number(row.targetPort), Number(row.latencyMs), Number(row.isTimeout)]), [
         [101, 1, 2, '10.23.0.2', 31001, 18, 0],
         [100, 1, 2, '10.23.0.2', 0, 2, 0],

@@ -88,23 +88,7 @@ jobs:
         shell: bash
         env:
           VERSION_NO_V: ${{ steps.release.outputs.version_no_v }}
-        run: |
-          mkdir -p .release dist/panel
-          BUNDLE="forwardx-panel-v${VERSION_NO_V}.tar.gz"
-          tar -czf ".release/${BUNDLE}" \
-            dist \
-            client/dist \
-            drizzle \
-            patches \
-            package.json \
-            pnpm-lock.yaml \
-            pnpm-workspace.yaml \
-            scripts/install-panel-local.sh \
-            scripts/install-panel-docker.sh \
-            scripts/migrate-agent-legacy.sh \
-            services/sublinkx/LICENSE
-          cp ".release/${BUNDLE}" "dist/panel/${BUNDLE}"
-          ls -lh "dist/panel/${BUNDLE}"
+        run: bash scripts/package-panel-local.sh "$VERSION_NO_V"
 
       - name: Upload panel bundle artifact
         uses: actions/upload-artifact@v4

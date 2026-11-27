@@ -239,16 +239,20 @@ export const selfTestRulesRouter = router({
   latestTopologyTests: protectedProcedure
     .input(z.object({ entries: z.array(z.object({ ruleId: z.number().int().positive(), entryHostId: z.number().int().positive() })).max(100) }))
     .query(async ({ input, ctx }) => {
+      const started = Date.now();
       const entries = Array.from(new Map(input.entries.map((entry) => [`${entry.ruleId}:${entry.entryHostId}`, entry])).values());
       const ruleIds = Array.from(new Set(entries.map((entry) => entry.ruleId)));
-      const rules = new Map(await Promise.all(ruleIds.map(async (id) => [id, await db.getForwardRuleById(id)] as const)));
+      const rules = new Map((await db.getForwardRulesByIds(ruleIds)).map((rule: any) => [Number(rule.id), rule] as const));
       const allowed = entries.filter(({ ruleId }) => {
         const rule = rules.get(ruleId);
         return rule && (ctx.user.role === "admin" || Number(rule.userId) === Number(ctx.user.id));
       });
-      return Promise.all(allowed.map(async ({ ruleId, entryHostId }) => ({
-        ruleId, entryHostId, test: await db.getLatestForwardTest(ruleId, { hostId: entryHostId, includeActive: true, topologyTotal: true }),
-      })));
+      const authorizedMs = Date.now() - started;
+      const stored = await db.getLatestTopologyTestsForEntries(allowed);
+      if (Date.now() - started > 500) console.warn(`[Topology] slow TCP totals: entries=${allowed.length} results=${stored.size} authorization=${authorizedMs}ms total=${Date.now() - started}ms`);
+      return allowed.map(({ ruleId, entryHostId }) => ({
+        ruleId, entryHostId, test: stored.get(`${ruleId}:${entryHostId}`) || null,
+      }));
     }),
   latestTests: protectedProcedure
     .input(z.object({ ruleIds: z.array(z.number().int().positive()).max(100), includeActive: z.boolean().optional().default(true) }))

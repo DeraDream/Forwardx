@@ -908,11 +908,15 @@ export const diagnosticsRouter = router({
   latestSegments: protectedProcedure
     .input(z.object({ ruleIds: z.array(z.number().int().positive()).max(1000), recentSeconds: z.number().int().min(1).max(60).optional(), pollTick: z.number().int().nonnegative().optional() }))
     .query(async ({ input, ctx }) => {
+      const started = Date.now();
       const ruleIds = Array.from(new Set(input.ruleIds));
-      const rules = await Promise.all(ruleIds.map((ruleId) => db.getForwardRuleById(ruleId)));
+      const rules = await db.getForwardRulesByIds(ruleIds);
       const allowedRules = rules.filter((rule: any) => rule && (String(ctx.user.role) === "admin" || Number(rule.userId) === Number(ctx.user.id))) as any[];
       const allowedRuleIds = allowedRules.map((rule) => Number(rule.id));
-      return db.getLatestTopologySegmentLatency(allowedRuleIds, input.recentSeconds === undefined ? undefined : Math.floor(Date.now() / 1000) - input.recentSeconds);
+      const authorizedMs = Date.now() - started;
+      const rows = await db.getLatestTopologySegmentLatency(allowedRuleIds, input.recentSeconds === undefined ? undefined : Math.floor(Date.now() / 1000) - input.recentSeconds);
+      if (Date.now() - started > 500) console.warn(`[Topology] slow snapshot: rules=${allowedRuleIds.length} rows=${rows.length} authorization=${authorizedMs}ms total=${Date.now() - started}ms`);
+      return rows;
     }),
 
   topologyBlockLogs: protectedProcedure

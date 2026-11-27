@@ -95,9 +95,11 @@ test("SQLite host metric summaries seek only the latest two rows per host", asyn
     assert.equal(segments.length, 1);
     assert.equal(segments[0].targetHostId, 2);
     assert.equal(segments[0].latencyMs, 40);
-    assert.equal(segments[0].sampleCount, 3);
+    assert.equal(segments[0].sampleCount, 1);
     assert.equal(segments[0].successRate, 0.5);
-    assert.equal(Math.round(Number(segments[0].jitterMs)), 10);
+    assert.equal(segments[0].jitterMs, null);
+    assert.equal((await runtime.queryRaw('SELECT COUNT(*) AS count FROM topology_segment_latest'))[0].count, 1);
+    assert.equal((await runtime.queryRaw('SELECT COUNT(*) AS count FROM topology_segment_latency_stats'))[0].count, 0);
 
     await metrics.recordTopologySegmentLatency([{
       ruleId: 2, sourceHostId: 1, targetHostId: 2,

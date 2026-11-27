@@ -2501,12 +2501,37 @@ export async function recordTopologySegmentLatency(samples: TopologySegmentLaten
     && String(sample.segmentKey || "").trim().length > 0
   ));
   if (rows.length === 0) return;
+  // PostgreSQL cannot update the same conflict key twice in one INSERT.
+  // Distinct physical legs stay batched; repeated samples retain their order.
+  const batches: TopologySegmentLatencySample[][] = [];
+  let batch: TopologySegmentLatencySample[] = [];
+  let keys = new Set<string>();
+  for (const row of rows) {
+    const key = `${row.ruleId}:${row.segmentKey}`;
+    if (keys.has(key)) { batches.push(batch); batch = []; keys = new Set(); }
+    batch.push(row);
+    keys.add(key);
+  }
+  if (batch.length) batches.push(batch);
   const q = quoteIdentifier;
-  await executeRaw(
-    `INSERT INTO ${q("topology_segment_latency_stats")}
-      (${q("ruleId")}, ${q("sourceHostId")}, ${q("targetHostId")}, ${q("targetAddress")}, ${q("targetPort")}, ${q("segmentKey")}, ${q("method")}, ${q("latencyMs")}, ${q("isTimeout")}, ${q("probeCount")}, ${q("probeSuccesses")}, ${q("recordedAt")})
-     VALUES ${rows.map(() => "(?,?,?,?,?,?,?,?,?,?,?,?)").join(",")}`,
-    rows.flatMap((sample) => [
+  const mysql = getDatabaseKind() === "mysql";
+  const table = q("topology_segment_latest");
+  const incoming = (column: string) => mysql ? `VALUES(${q(column)})` : `excluded.${q(column)}`;
+  // Update failure state BEFORE isTimeout on MySQL (assignments there run in order).
+  // The last successful value remains visible during the 15-second loss grace.
+  const updates = [
+    `${q("failureSince")} = CASE WHEN NOT ${incoming("isTimeout")} THEN NULL WHEN ${q("isTimeout")} THEN COALESCE(${q("failureSince")}, ${incoming("recordedAt")}) ELSE ${incoming("recordedAt")} END`,
+    `${q("lastSuccessLatencyMs")} = CASE WHEN ${incoming("isTimeout")} THEN COALESCE(${q("lastSuccessLatencyMs")}, CASE WHEN NOT ${q("isTimeout")} THEN ${q("latencyMs")} END) ELSE ${incoming("latencyMs")} END`,
+    ...["sourceHostId", "targetHostId", "targetAddress", "targetPort", "method", "latencyMs", "isTimeout", "probeCount", "probeSuccesses", "recordedAt"].map((column) => `${q(column)} = ${incoming(column)}`),
+  ];
+  const upsert = mysql
+    ? `ON DUPLICATE KEY UPDATE ${updates.join(", ")}`
+    : `ON CONFLICT (${q("ruleId")}, ${q("segmentKey")}) DO UPDATE SET ${updates.join(", ")} WHERE ${table}.${q("recordedAt")} <= ${incoming("recordedAt")}`;
+  for (const batch of batches) await executeRaw(
+    `INSERT INTO ${table}
+      (${q("ruleId")}, ${q("sourceHostId")}, ${q("targetHostId")}, ${q("targetAddress")}, ${q("targetPort")}, ${q("segmentKey")}, ${q("method")}, ${q("latencyMs")}, ${q("isTimeout")}, ${q("lastSuccessLatencyMs")}, ${q("failureSince")}, ${q("probeCount")}, ${q("probeSuccesses")}, ${q("recordedAt")})
+     VALUES ${batch.map(() => "(?,?,?,?,?,?,?,?,?,?,?,?,?,?)").join(",")} ${upsert}`,
+    batch.flatMap((sample) => [
       sample.ruleId,
       sample.sourceHostId,
       Number(sample.targetHostId || 0) || null,
@@ -2516,6 +2541,8 @@ export async function recordTopologySegmentLatency(samples: TopologySegmentLaten
       sample.method === "ping" ? "ping" : "tcp",
       sample.isTimeout ? null : Math.max(1, Math.round(Number(sample.latencyMs) || 0)),
       !!sample.isTimeout,
+      sample.isTimeout ? null : Math.max(1, Math.round(Number(sample.latencyMs) || 0)),
+      sample.isTimeout ? epochSeconds(sample.recordedAt || nowDate()) : null,
       Math.max(1, Math.floor(Number(sample.probeCount) || 1)),
       Math.max(0, Math.floor(Number(sample.probeSuccesses) || 0)),
       epochSeconds(sample.recordedAt || nowDate()),
@@ -2654,76 +2681,26 @@ export async function getLatestTopologySegmentLatency(ruleIds: number[], since?:
   const q = quoteIdentifier;
   const sinceFilter = since !== undefined ? ` AND ${q("recordedAt")} >= ?` : "";
   const rows = await queryRaw<any>(
-    `SELECT * FROM (
-      SELECT s.*, ROW_NUMBER() OVER (
-        PARTITION BY s.${q("ruleId")}, s.${q("segmentKey")}
-        ORDER BY s.${q("recordedAt")} DESC, s.${q("id")} DESC
-      ) AS ${q("sampleRank")}
-      FROM ${q("topology_segment_latency_stats")} s
-      WHERE s.${q("ruleId")} IN (${ids.map(() => "?").join(",")})${sinceFilter}
-    ) latest WHERE latest.${q("sampleRank")} = 1`,
+    `SELECT * FROM ${q("topology_segment_latest")}
+      WHERE ${q("ruleId")} IN (${ids.map(() => "?").join(",")})${sinceFilter}`,
     [...ids, ...(since === undefined ? [] : [since])],
   );
-  const latest = rows.map((row: any) => ({
+  const now = Date.now();
+  return rows.map((row: any) => {
+    const failed = rowBool(row.isTimeout);
+    const failureSince = failed && row.failureSince != null ? rowDate(row.failureSince) : null;
+    const blocked = failed && failureSince !== null && now - failureSince.getTime() >= 15_000;
+    const probeCount = Math.max(1, Number(row.probeCount) || 1);
+    return {
     ruleId: Number(row.ruleId), sourceHostId: Number(row.sourceHostId), targetHostId: Number(row.targetHostId) || null,
     targetAddress: String(row.targetAddress || ""), targetPort: Number(row.targetPort) || 0,
     segmentKey: String(row.segmentKey || ""), method: String(row.method) === "ping" ? "ping" : "tcp",
-    latencyMs: row.latencyMs == null ? null : Number(row.latencyMs), isTimeout: rowBool(row.isTimeout),
-    probeCount: Number(row.probeCount) || 1, probeSuccesses: Number(row.probeSuccesses) || 0,
+    latencyMs: blocked ? null : failed ? (row.lastSuccessLatencyMs == null ? null : Number(row.lastSuccessLatencyMs)) : (row.latencyMs == null ? null : Number(row.latencyMs)),
+    isTimeout: blocked, blocked, failureSince,
+    probeCount, probeSuccesses: Number(row.probeSuccesses) || 0,
     recordedAt: rowDate(row.recordedAt),
-  })) as TopologySegmentLatencySample[];
-  const segmentKeys = Array.from(new Set(latest.map((sample) => sample.segmentKey).filter(Boolean)));
-  if (segmentKeys.length === 0) return latest;
-  // Keep a compact rolling window per physical leg. This deliberately uses
-  // probe counters (rather than rows) so ping packet loss is reflected.
-  const history = await queryRaw<any>(
-    `SELECT ${q("ruleId")}, ${q("segmentKey")}, ${q("latencyMs")}, ${q("isTimeout")}, ${q("probeCount")}, ${q("probeSuccesses")}, ${q("recordedAt")}
-       FROM (
-         SELECT ${q("ruleId")}, ${q("segmentKey")}, ${q("latencyMs")}, ${q("isTimeout")}, ${q("probeCount")}, ${q("probeSuccesses")}, ${q("recordedAt")},
-                ROW_NUMBER() OVER (PARTITION BY ${q("ruleId")}, ${q("segmentKey")} ORDER BY ${q("recordedAt")} DESC) AS ${q("sampleRank")}
-           FROM ${q("topology_segment_latency_stats")}
-          WHERE ${q("segmentKey")} IN (${segmentKeys.map(() => "?").join(",")})${since === undefined ? "" : ` AND ${q("recordedAt")} >= ?`}
-       ) recent
-      WHERE ${q("sampleRank")} <= 20`,
-    since === undefined ? segmentKeys : [...segmentKeys, Math.max(0, since - 60)],
-  );
-  const historyByKey = new Map<string, any[]>();
-  for (const row of history) {
-    const key = `${Number(row.ruleId)}:${String(row.segmentKey || "")}`;
-    const samples = historyByKey.get(key) || [];
-    if (samples.length < 20) samples.push(row);
-    historyByKey.set(key, samples);
-  }
-  const now = Date.now();
-  return latest.map((sample) => {
-    const samples = historyByKey.get(`${sample.ruleId}:${sample.segmentKey}`) || [];
-    const probeCount = samples.reduce((sum, row) => sum + Math.max(1, Number(row.probeCount) || 1), 0);
-    const successes = samples.reduce((sum, row) => sum + Math.max(0, Number(row.probeSuccesses) || 0), 0);
-    const latencies = samples.map((row) => row.latencyMs == null ? null : Number(row.latencyMs)).filter((value): value is number => Number.isFinite(value));
-    const mean = latencies.length ? latencies.reduce((sum, value) => sum + value, 0) / latencies.length : 0;
-    const jitterMs = latencies.length > 1
-      ? Math.sqrt(latencies.reduce((sum, value) => sum + (value - mean) ** 2, 0) / latencies.length)
-      : null;
-    const ordered = [...samples].sort((left, right) => rowDate(right.recordedAt).getTime() - rowDate(left.recordedAt).getTime());
-    const latestTimedOut = sample.isTimeout;
-    const consecutiveFailures = latestTimedOut ? ordered.filter((row, index) => (
-      index === 0 || ordered.slice(0, index).every((candidate) => rowBool(candidate.isTimeout))
-    )).filter((row) => rowBool(row.isTimeout)) : [];
-    const failureSince = consecutiveFailures.length
-      ? Math.min(...consecutiveFailures.map((row) => rowDate(row.recordedAt).getTime()))
-      : null;
-    const blocked = latestTimedOut && failureSince !== null && now - failureSince >= 15_000;
-    const lastSuccess = ordered.find((row) => !rowBool(row.isTimeout) && row.latencyMs != null);
-    return {
-      ...sample,
-      latencyMs: latestTimedOut && !blocked && lastSuccess ? Number(lastSuccess.latencyMs) : sample.latencyMs,
-      isTimeout: blocked,
-      blocked,
-      failureSince: failureSince === null ? null : new Date(failureSince),
-      sampleCount: samples.length,
-      successRate: probeCount ? successes / probeCount : 0,
-      jitterMs,
-    };
+    sampleCount: 1, successRate: (Number(row.probeSuccesses) || 0) / probeCount, jitterMs: null,
+    } as TopologySegmentLatencySample;
   });
 }
 

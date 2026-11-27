@@ -166,7 +166,7 @@ export async function getLatestForwardTest(ruleId: number, options: { includeAct
   if (options.topologyTotal) {
     const topologyRows = await queryRaw<any>(
       `SELECT * FROM ${table} WHERE ${ruleCol} = ?${hostFilter} AND ${messageCol} LIKE '%"kind":"topology-total"%'
-        AND ${statusCol} IN ('pending', 'running', 'success', 'failed', 'timeout')
+        AND ${statusCol} IN (${options.includeActive === false ? "'success', 'failed', 'timeout'" : "'pending', 'running', 'success', 'failed', 'timeout'"})
         ORDER BY ${idCol} DESC LIMIT 1`, params,
     );
     if (topologyRows[0]) return topologyRows[0];
@@ -188,6 +188,33 @@ export async function getLatestForwardTest(ruleId: number, options: { includeAct
   return rows[0];
 }
 
+// Topology opens with up to 100 entrances. Fetch their stored terminal TCP
+// results in one indexed query instead of 1-3 round trips per entrance.
+export async function getLatestTopologyTestsForEntries(entries: Array<{ ruleId: number; entryHostId: number }>) {
+  if (!entries.length) return new Map<string, any>();
+  const q = quoteIdentifier;
+  const ruleIds = [...new Set(entries.map((entry) => entry.ruleId))];
+  const hostIds = [...new Set(entries.map((entry) => entry.entryHostId))];
+  const rows = await queryRaw<any>(
+    `SELECT * FROM (
+       SELECT t.*, ROW_NUMBER() OVER (
+         PARTITION BY t.${q("ruleId")}, t.${q("hostId")}
+         ORDER BY CASE WHEN t.${q("message")} LIKE '%"kind":"topology-total"%' THEN 0 ELSE 1 END,
+                  CASE WHEN t.${q("message")} LIKE '%"kind":"topology-total"%' THEN t.${q("id")} ELSE NULL END DESC,
+                  t.${q("updatedAt")} DESC, t.${q("createdAt")} DESC, t.${q("id")} DESC
+       ) AS ${q("sampleRank")}
+       FROM ${q("forward_tests")} t
+       WHERE t.${q("ruleId")} IN (${ruleIds.map(() => "?").join(",")})
+         AND t.${q("hostId")} IN (${hostIds.map(() => "?").join(",")})
+         AND t.${q("status")} IN ('success', 'failed', 'timeout')
+         AND t.${q("message")} NOT LIKE '%forward-chain-hop-summary%'
+         AND t.${q("message")} NOT LIKE '%"kind":"forward-via-tunnel"%'
+     ) latest WHERE latest.${q("sampleRank")} = 1`,
+    [...ruleIds, ...hostIds],
+  );
+  return new Map(rows.map((row) => [`${Number(row.ruleId)}:${Number(row.hostId)}`, row]));
+}
+
 export async function getForwardTestById(id: number) {
   const db = await getDb();
   if (!db) return undefined;
@@ -197,8 +224,24 @@ export async function getForwardTestById(id: number) {
 
 export async function cleanOldForwardTests(retainHours = 72) {
   const cutoff = Math.floor((Date.now() - retainHours * 3600 * 1000) / 1000);
+  const q = quoteIdentifier;
+  const table = q("forward_tests");
+  // Keep one completed, entry-specific TCP total per rule/host even after the
+  // ordinary 72-hour test-log retention. Without this, a quiet topology would
+  // return to "click to probe" despite previously having a stored result.
   await executeRaw(
-    `DELETE FROM ${quoteIdentifier("forward_tests")} WHERE ${quoteIdentifier("updatedAt")} < ?`,
+    `DELETE FROM ${table} WHERE ${q("updatedAt")} < ? AND (
+       ${q("message")} IS NULL OR ${q("message")} NOT LIKE '%"kind":"topology-total"%'
+       OR ${q("status")} NOT IN ('success', 'failed', 'timeout')
+       OR ${q("id")} NOT IN (
+         SELECT keep.${q("id")} FROM (
+           SELECT MAX(${q("id")}) AS ${q("id")} FROM ${table}
+           WHERE ${q("message")} LIKE '%"kind":"topology-total"%'
+             AND ${q("status")} IN ('success', 'failed', 'timeout')
+           GROUP BY ${q("ruleId")}, ${q("hostId")}
+         ) keep
+       )
+     )`,
     [cutoff],
   );
 }

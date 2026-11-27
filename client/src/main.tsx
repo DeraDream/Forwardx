@@ -94,6 +94,9 @@ const criticalQueryPaths = new Set([
   "dashboard.trafficSeries",
   "dashboard.trafficBreakdown",
   "dashboard.userTraffic",
+  // A slow topology total/traffic query must not hold up the persisted Ping snapshot.
+  "diagnostics.latestSegments",
+  "rules.latestTopologyTests",
 ]);
 
 const trpcFetch = (input: RequestInfo | URL, init?: RequestInit) => {

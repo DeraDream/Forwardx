@@ -125,6 +125,24 @@ test("forward self-test leases recover lost deliveries and give claimed work a f
       assert.equal(Number((await tests.getLatestForwardTest(20, { hostId: 20, topologyTotal: true }))?.id), 11);
       assert.equal(Number((await tests.getLatestForwardTest(20, { hostId: 21, topologyTotal: true }))?.id), 10);
       assert.equal(Number((await tests.getLatestForwardTest(20, { hostId: 21, includeActive: false }))?.id), 10);
+      const storedTopology = await tests.getLatestTopologyTestsForEntries([
+        { ruleId: 20, entryHostId: 20 }, { ruleId: 20, entryHostId: 21 }, { ruleId: 20, entryHostId: 22 },
+      ]);
+      assert.equal(Number(storedTopology.get("20:20")?.id), 11, "show persisted TCP even while another test is pending");
+      assert.equal(Number(storedTopology.get("20:21")?.id), 10);
+      assert.equal(storedTopology.has("20:22"), false);
+      const old = now - 100 * 3600;
+      await runtime.executeRaw(
+        'INSERT INTO "forward_tests" ("id", "ruleId", "hostId", "userId", "status", "message", "createdAt", "updatedAt") VALUES (?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?)',
+        [
+          13, 21, 20, 1, "success", JSON.stringify({ kind: "topology-total", totalLatencyMs: 9 }), old - 1, old - 1,
+          14, 21, 20, 1, "success", JSON.stringify({ kind: "topology-total", totalLatencyMs: 10 }), old, old,
+          15, 21, 20, 1, "success", "old ordinary test", old, old,
+        ],
+      );
+      await tests.cleanOldForwardTests(72);
+      assert.deepEqual((await runtime.queryRaw('SELECT id FROM "forward_tests" WHERE "ruleId" = 21 ORDER BY id')).map((row) => Number(row.id)), [14]);
+      assert.equal(Number((await tests.getLatestTopologyTestsForEntries([{ ruleId: 21, entryHostId: 20 }])).get("21:20")?.id), 14);
     } finally {
       await runtime.closeDatabase();
     }

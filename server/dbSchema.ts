@@ -67,6 +67,7 @@ export const MIGRATION_TABLES = [
   "ip_geo_cache",
   "agent_tokens",
   "tcping_stats",
+  "topology_segment_latest",
   "forward_tests",
   "user_host_permissions",
   "user_tunnel_permissions",
@@ -551,10 +552,13 @@ const tables: TableDef[] = [
   // One row per measured physical forwarding segment. Segment keys are derived
   // by the Panel and validated against the source Agent's assigned plan.
   { name: "topology_segment_latency_stats", columns: [c("id", "id"), c("ruleId", "int", { notNull: true }), c("sourceHostId", "int", { notNull: true }), c("targetHostId", "int"), c("targetAddress", "varchar", { length: 253, notNull: true }), c("targetPort", "int", { notNull: true, default: 0 }), c("segmentKey", "varchar", { length: 191, notNull: true }), c("method", "varchar", { length: 16, notNull: true, default: "tcp" }), c("latencyMs", "int"), c("isTimeout", "bool", { notNull: true, default: false }), c("probeCount", "int", { notNull: true, default: 1 }), c("probeSuccesses", "int", { notNull: true, default: 0 }), c("recordedAt", "epoch", { notNull: true, default: "now" })], indexes: [["ruleId", "recordedAt"], ["segmentKey", "recordedAt"], ["sourceHostId", "recordedAt"], ["targetHostId", "recordedAt"]] },
+  // One persisted current sample per logical rule and physical Ping edge.
+  // Existing history is backfilled once, then new topology probes update only this table.
+  { name: "topology_segment_latest", columns: [c("id", "id"), c("ruleId", "int", { notNull: true }), c("sourceHostId", "int", { notNull: true }), c("targetHostId", "int"), c("targetAddress", "varchar", { length: 253, notNull: true }), c("targetPort", "int", { notNull: true, default: 0 }), c("segmentKey", "varchar", { length: 191, notNull: true }), c("method", "varchar", { length: 16, notNull: true, default: "ping" }), c("latencyMs", "int"), c("isTimeout", "bool", { notNull: true, default: false }), c("lastSuccessLatencyMs", "int"), c("failureSince", "epoch"), c("probeCount", "int", { notNull: true, default: 1 }), c("probeSuccesses", "int", { notNull: true, default: 0 }), c("recordedAt", "epoch", { notNull: true, default: "now" })], unique: [["ruleId", "segmentKey"]], indexes: [["ruleId"]] },
   // One incident per user-visible physical edge outage. Confirmation rows are
   // kept hidden until blockedAt is set; recovery closes the same incident.
   { name: "topology_segment_incidents", columns: [c("id", "id"), c("userId", "int", { notNull: true }), c("sourceHostId", "int", { notNull: true }), c("sourceName", "text", { notNull: true }), c("targetHostId", "int"), c("targetName", "text", { notNull: true }), c("targetAddress", "varchar", { length: 253, notNull: true }), c("segmentKey", "varchar", { length: 191, notNull: true }), c("method", "varchar", { length: 16, notNull: true, default: "ping" }), c("failureStartedAt", "epoch", { notNull: true }), c("blockedAt", "epoch"), c("recoveredAt", "epoch"), c("recoveryLatencyMs", "int"), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], indexes: [["userId", "blockedAt"], ["userId", "recoveredAt"], ["sourceHostId", "segmentKey", "recoveredAt"], ["updatedAt"]] },
-  { name: "forward_tests", columns: [c("id", "id"), c("ruleId", "int", { notNull: true }), c("hostId", "int", { notNull: true }), c("userId", "int", { notNull: true }), c("status", "varchar", { length: 32, notNull: true, default: "pending" }), c("listenOk", "bool", { notNull: true, default: false }), c("targetReachable", "bool", { notNull: true, default: false }), c("forwardOk", "bool", { notNull: true, default: false }), c("latencyMs", "int"), c("message", "text"), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], indexes: [["ruleId", "createdAt"], ["hostId", "status"], ["status", "createdAt"], ["status", "updatedAt"], ["updatedAt"]] },
+  { name: "forward_tests", columns: [c("id", "id"), c("ruleId", "int", { notNull: true }), c("hostId", "int", { notNull: true }), c("userId", "int", { notNull: true }), c("status", "varchar", { length: 32, notNull: true, default: "pending" }), c("listenOk", "bool", { notNull: true, default: false }), c("targetReachable", "bool", { notNull: true, default: false }), c("forwardOk", "bool", { notNull: true, default: false }), c("latencyMs", "int"), c("message", "text"), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], indexes: [["ruleId", "createdAt"], ["ruleId", "hostId", "updatedAt"], ["hostId", "status"], ["status", "createdAt"], ["status", "updatedAt"], ["updatedAt"]] },
   { name: "user_host_permissions", columns: [c("id", "id"), c("userId", "int", { notNull: true }), c("hostId", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" })], unique: [["userId", "hostId"]], indexes: [["hostId"]] },
   { name: "user_tunnel_permissions", columns: [c("id", "id"), c("userId", "int", { notNull: true }), c("tunnelId", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" })], unique: [["userId", "tunnelId"]], indexes: [["tunnelId"]] },
   { name: "user_forward_group_permissions", columns: [c("id", "id"), c("userId", "int", { notNull: true }), c("forwardGroupId", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" })], unique: [["userId", "forwardGroupId"]], indexes: [["forwardGroupId"]] },
@@ -708,6 +712,57 @@ async function ensureMysqlSchema(pool: Pool) {
     );
   }
   await backfillMysqlLastAutoTrafficReset(pool);
+  await backfillTopologySnapshot("mysql", pool);
+}
+
+// Upgrade old installations before accepting requests. This is a one-time scan
+// of legacy history; all subsequent page reads and reports use the small snapshot.
+function topologySnapshotBackfillSql(kind: "mysql" | "postgresql" | "sqlite") {
+  const q = (name: string) => quote(kind, name);
+  const latest = q("topology_segment_latest");
+  const history = q("topology_segment_latency_stats");
+  const incidents = q("topology_segment_incidents");
+  const columns = ["ruleId", "sourceHostId", "targetHostId", "targetAddress", "targetPort", "segmentKey", "method", "latencyMs", "isTimeout", "lastSuccessLatencyMs", "failureSince", "probeCount", "probeSuccesses", "recordedAt"].map(q).join(", ");
+  const prefix = kind === "mysql" ? "INSERT IGNORE" : "INSERT";
+  const suffix = kind === "mysql" ? "" : ` ON CONFLICT (${q("ruleId")}, ${q("segmentKey")}) DO NOTHING`;
+  return `${prefix} INTO ${latest} (${columns})
+    SELECT s.${q("ruleId")}, s.${q("sourceHostId")}, s.${q("targetHostId")}, s.${q("targetAddress")},
+           s.${q("targetPort")}, s.${q("segmentKey")}, s.${q("method")}, s.${q("latencyMs")}, s.${q("isTimeout")},
+           CASE WHEN NOT s.${q("isTimeout")} THEN s.${q("latencyMs")}
+                ELSE (SELECT h.${q("latencyMs")} FROM ${history} h
+                      WHERE h.${q("ruleId")} = s.${q("ruleId")} AND h.${q("segmentKey")} = s.${q("segmentKey")}
+                        AND NOT h.${q("isTimeout")} AND h.${q("latencyMs")} IS NOT NULL
+                      ORDER BY h.${q("recordedAt")} DESC, h.${q("id")} DESC LIMIT 1) END,
+           CASE WHEN s.${q("isTimeout")} THEN COALESCE(
+             (SELECT MIN(i.${q("failureStartedAt")}) FROM ${incidents} i
+               WHERE i.${q("sourceHostId")} = s.${q("sourceHostId")}
+                 AND i.${q("segmentKey")} = s.${q("segmentKey")} AND i.${q("recoveredAt")} IS NULL),
+             s.${q("recordedAt")}) ELSE NULL END,
+           s.${q("probeCount")}, s.${q("probeSuccesses")}, s.${q("recordedAt")}
+      FROM (SELECT h.*, ROW_NUMBER() OVER (
+        PARTITION BY h.${q("ruleId")}, h.${q("segmentKey")}
+        ORDER BY h.${q("recordedAt")} DESC, h.${q("id")} DESC
+      ) AS rn FROM ${history} h) s WHERE s.rn = 1${suffix}`;
+}
+
+async function backfillTopologySnapshot(kind: "mysql" | "postgresql", pool: Pool | pg.Pool) {
+  const q = (name: string) => quote(kind, name);
+  const exec = (sql: string) => kind === "mysql" ? (pool as Pool).query(sql) : (pool as pg.Pool).query(sql);
+  const result: any = await exec(`SELECT 1 FROM ${q("topology_segment_latest")} LIMIT 1`);
+  if ((kind === "mysql" ? result[0] : result.rows).length) return;
+  const old: any = await exec(`SELECT 1 FROM ${q("topology_segment_latency_stats")} LIMIT 1`);
+  if (!(kind === "mysql" ? old[0] : old.rows).length) return;
+  const started = Date.now();
+  await exec(topologySnapshotBackfillSql(kind));
+  console.info(`[Database] topology snapshot backfill finished in ${Date.now() - started} ms`);
+}
+
+function backfillSqliteTopologySnapshot(sqlite: Database.Database) {
+  if (sqlite.prepare('SELECT 1 FROM "topology_segment_latest" LIMIT 1').get()) return;
+  if (!sqlite.prepare('SELECT 1 FROM "topology_segment_latency_stats" LIMIT 1').get()) return;
+  const started = Date.now();
+  sqlite.exec(topologySnapshotBackfillSql("sqlite"));
+  console.info(`[Database] topology snapshot backfill finished in ${Date.now() - started} ms`);
 }
 
 function indexName(prefix: string, table: string, cols: string[]) {
@@ -742,6 +797,7 @@ async function ensurePostgresqlSchema(pool: pg.Pool) {
     );
   }
   await backfillPostgresqlLastAutoTrafficReset(pool);
+  await backfillTopologySnapshot("postgresql", pool);
 }
 
 function ensureSqliteSchema(sqlite: Database.Database) {
@@ -782,6 +838,7 @@ function ensureSqliteSchema(sqlite: Database.Database) {
     ).run(key, value);
   }
   backfillSqliteLastAutoTrafficReset(sqlite);
+  backfillSqliteTopologySnapshot(sqlite);
 }
 
 export async function ensureDatabaseSchema(target?: Pool | pg.Pool | Database.Database) {
