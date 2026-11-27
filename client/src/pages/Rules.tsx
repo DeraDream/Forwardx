@@ -444,7 +444,7 @@ const defaultForm: RuleFormData = {
   targetRuleId: null,
   targetLandingServiceId: null,
   targetLandingGroupId: null,
-  copySsHostMode: "landing",
+  copySsHostMode: "entry",
   telegramErrorNotifyEnabled: false,
   blockHttp: false,
   blockSocks: false,
@@ -11115,8 +11115,8 @@ function RulesContent() {
                       <Select value={form.targetLandingGroupId ? "entry" : form.copySsHostMode} disabled={!!form.targetLandingGroupId} onValueChange={(value: "landing" | "entry") => setForm((prev) => ({ ...prev, copySsHostMode: value }))}>
                         <SelectTrigger><SelectValue /></SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="landing">落地 SS 服务地址（默认）</SelectItem>
-                          <SelectItem value="entry">当前规则入口 IP／入口组域名</SelectItem>
+                          <SelectItem value="landing">落地 SS 服务地址</SelectItem>
+                          <SelectItem value="entry">当前规则入口 IP／入口组域名（默认）</SelectItem>
                         </SelectContent>
                       </Select>
                       <p className="text-xs text-muted-foreground">{form.targetLandingGroupId ? "落地组主备的 SS 链接必须使用规则入口地址，直连落地 SS 无法故障切换。" : "仅影响操作栏复制出的最终 SS 链接地址，不修改实际转发目标或 SS 配置。"}</p>

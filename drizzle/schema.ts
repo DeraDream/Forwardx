@@ -466,7 +466,7 @@ export const forwardRules = table("forward_rules", {
   targetLandingGroupId: int("targetLandingGroupId"),
   landingSwitchPending: text("landingSwitchPending"),
   // Display-only preference for copying the final SS URI; never changes the runtime target.
-  copySsHostMode: varchar("copySsHostMode", { length: 16 }).notNull().default("landing"),
+  copySsHostMode: varchar("copySsHostMode", { length: 16 }).notNull().default("entry"),
   telegramErrorNotifyEnabled: boolean("telegramErrorNotifyEnabled").notNull().default(false),
   blockHttp: boolean("blockHttp").notNull().default(false),
   blockSocks: boolean("blockSocks").notNull().default(false),
