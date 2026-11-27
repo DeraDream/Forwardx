@@ -2,7 +2,7 @@ import { protectedProcedure, router } from "../_core/trpc";
 import { z } from "zod";
 import * as db from "../db";
 import { appendPanelLog } from "../_core/panelLogger";
-import { pushAgentRefresh } from "../agentEvents";
+import { pushAgentRefresh, pushAgentSelfTest } from "../agentEvents";
 import { pushTunnelEndpointRefresh } from "./helpers";
 import { requireRuleProtocolEnabled } from "../forwardProtocolSettings";
 import { createHopTestBatch, registerHopTest } from "../hopTestState";
@@ -98,7 +98,13 @@ export const selfTestRulesRouter = router({
             registerHopTest(batchId, Number(testId));
             testHostIds.add(Number(probe.fromHostId));
           }
-          for (const hostId of testHostIds) pushAgentRefresh(hostId, "saved-forward-chain-selftest", { urgent: true });
+          for (const hostId of testHostIds) {
+            pushAgentRefresh(hostId, "saved-forward-chain-selftest", { urgent: true });
+            // A heartbeat can defer self-tests while it requests the Agent's local
+            // runtime snapshot. With SSE connected the fallback poller is idle,
+            // so wake the independent self-test pull path as well.
+            pushAgentSelfTest(hostId, `rule-${rule.id}-${batchId}`);
+          }
           return { id: Number(outerTestId), queued: hopCount };
         }
       }
@@ -156,6 +162,7 @@ export const selfTestRulesRouter = router({
           }
           for (const hostId of testHostIds) {
             pushAgentRefresh(hostId, "forward-chain-rule-selftest", { urgent: true });
+            pushAgentSelfTest(hostId, `rule-${rule.id}-${batchId}`);
           }
           return { id: firstTestId, queued };
         }
@@ -195,6 +202,7 @@ export const selfTestRulesRouter = router({
         message,
       });
       pushAgentRefresh(hostId, "forward-selftest", { urgent: true });
+      pushAgentSelfTest(hostId, `rule-${rule.id}-${id}`);
       if (!(rule as any).tunnelId) {
         appendPanelLog("info", `[SelfTest] rule=${rule.id} queued direct test=${id} from host=${hostId} to target=${rule.targetIp}:${rule.targetPort}`);
       }
