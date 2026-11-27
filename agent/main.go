@@ -284,6 +284,7 @@ var dnsWatchRetiredSnapshots = map[string]dnsWatchRetiredSnapshot{}
 var pendingDNSChanges []dnsChangeReport
 var publicIPMu sync.Mutex
 var publicIPv4Cache string
+
 // Set at startup before the IP refresh loop; a static address avoids querying
 // public-IP services through a proxy (which would report the relay IP).
 var configuredPublicIPv4 string
@@ -1054,6 +1055,18 @@ func applyHeartbeatState(resp heartbeatResp) heartbeatStateSnapshot {
 }
 
 func readLocalRuntimeReadiness() localRuntimeReadiness {
+	if iptablesOnlyBuild {
+		return localRuntimeReadiness{
+			serviceActiveCache: map[string]bool{},
+			sharedRuntimeReady: true,
+			kernelSnapshot:     newKernelForwardSnapshot(),
+			listenSnapshot:     newRuntimeListenSnapshot(),
+		}
+	}
+	return readStandardLocalRuntimeReadiness()
+}
+
+func readStandardLocalRuntimeReadiness() localRuntimeReadiness {
 	readiness := localRuntimeReadiness{
 		runtimePorts:               map[int]bool{},
 		gostRuntimePorts:           map[int]bool{},
@@ -1382,6 +1395,14 @@ func managedRuleServiceListenReady(forwardType string, port int, protocol string
 }
 
 func localRuleStateReady(state localRuleState, readiness *localRuntimeReadiness) bool {
+	if iptablesOnlyBuild {
+		return (state.ForwardType == "iptables" || state.ForwardType == "nftables") &&
+			readiness.kernelSnapshot != nil && readiness.kernelSnapshot.localRuleStateReady(state)
+	}
+	return localStandardRuleStateReady(state, readiness)
+}
+
+func localStandardRuleStateReady(state localRuleState, readiness *localRuntimeReadiness) bool {
 	port := atoi(state.Port)
 	if port <= 0 || readiness == nil {
 		return false
@@ -2156,6 +2177,13 @@ func (s *kernelForwardSnapshot) iptablesForwardxMarkerSeenForPort(port int) bool
 }
 
 func readLocalRuntimeStatePayload() localRuntimeStatePayload {
+	if iptablesOnlyBuild {
+		return readKernelLocalRuntimeStatePayload()
+	}
+	return readStandardLocalRuntimeStatePayload()
+}
+
+func readStandardLocalRuntimeStatePayload() localRuntimeStatePayload {
 	readiness := readLocalRuntimeReadinessCached()
 	ruleStates := readLocalRuntimeRuleStates()
 	ruleStates = mergeDesiredDisjointRuleStates(ruleStates, desiredRunningRuleStatesSnapshot())
@@ -2856,15 +2884,21 @@ func main() {
 	resetDesiredActionRecordsAfterAgentUpgrade()
 	startDesiredActionRecordsFlusher()
 	startActionStatusReporter()
-	startPluginAgentTaskWorkers(cfg)
+	if !iptablesOnlyBuild {
+		startPluginAgentTaskWorkers(cfg)
+	}
 	go actionWorker()
-	go selfTestPoller(cfg)
+	if !iptablesOnlyBuild {
+		go selfTestPoller(cfg)
+	}
 	go agentEventStream(cfg)
 	go agentPresenceLoop(cfg)
 	go agentMetricsScheduler(cfg)
 	go agentDNSWatchScheduler()
 	go func() {
-		restorePersistedForwardXRuntimes(cfg)
+		if !iptablesOnlyBuild {
+			restorePersistedForwardXRuntimes(cfg)
+		}
 		wakeHeartbeat()
 	}()
 	lastFullHeartbeatAt := time.Time{}
@@ -3932,10 +3966,12 @@ func heartbeat(cfg Config, forceReconcile ...bool) (heartbeatResult, error) {
 	if len(forceReconcile) > 0 && forceReconcile[0] {
 		payload["forceReconcile"] = true
 	}
-	pluginVersions, pluginSyncSignatures := installedPluginInventory()
-	payload["pluginVersions"] = pluginVersions
-	payload["pluginSyncSignatures"] = pluginSyncSignatures
-	payload["mimicEnvironment"] = mimicEnvironment(false)
+	if !iptablesOnlyBuild {
+		pluginVersions, pluginSyncSignatures := installedPluginInventory()
+		payload["pluginVersions"] = pluginVersions
+		payload["pluginSyncSignatures"] = pluginSyncSignatures
+		payload["mimicEnvironment"] = mimicEnvironment(false)
+	}
 	payload["agentProbe"] = currentAgentProbeStatus()
 	if (!compactEnabled || shouldReportStatic) && primaryIP != "" {
 		payload["ip"] = primaryIP
@@ -4006,20 +4042,24 @@ func heartbeat(cfg Config, forceReconcile ...bool) (heartbeatResult, error) {
 	// Interactive tasks are independent from desired-state reconciliation. Accept
 	// them before an early local-state return so a heartbeat response cannot drop
 	// a task while the Agent is rebuilding its runtime snapshot.
-	for _, task := range resp.LookingGlassTests {
-		go handleLookingGlassTask(cfg, task)
-	}
-	for _, task := range resp.Iperf3Tasks {
-		go handleIperf3Task(cfg, task)
-	}
+	// Full-link speed is explicitly rejected even on older panels. The
+	// lightweight build does not start other interactive/provisioning tasks.
 	for _, task := range resp.LinkSpeedTasks {
 		go handleLinkSpeedTask(cfg, task)
 	}
-	for _, task := range resp.AgentLinkProbeTasks {
-		go handleAgentLinkProbeTask(cfg, task)
-	}
-	for _, task := range resp.PluginTasks {
-		enqueuePluginAgentTask(cfg, task)
+	if !iptablesOnlyBuild {
+		for _, task := range resp.LookingGlassTests {
+			go handleLookingGlassTask(cfg, task)
+		}
+		for _, task := range resp.Iperf3Tasks {
+			go handleIperf3Task(cfg, task)
+		}
+		for _, task := range resp.AgentLinkProbeTasks {
+			go handleAgentLinkProbeTask(cfg, task)
+		}
+		for _, task := range resp.PluginTasks {
+			enqueuePluginAgentTask(cfg, task)
+		}
 	}
 	if resp.RequestLocalState {
 		requestLocalRuntimeStateUpload()
@@ -4033,6 +4073,16 @@ func heartbeat(cfg Config, forceReconcile ...bool) (heartbeatResult, error) {
 		return heartbeatResult{NextInterval: resp.NextInterval, ReconciliationCoalesced: true, MetricsOnly: resp.MetricsOnly}, nil
 	}
 	state := applyHeartbeatState(resp)
+	if iptablesOnlyBuild {
+		kernelRules := make([]runningRule, 0, len(state.RunningRules))
+		for _, rule := range state.RunningRules {
+			if rule.ForwardType == "iptables" || rule.ForwardType == "nftables" {
+				rule.Failover = nil
+				kernelRules = append(kernelRules, rule)
+			}
+		}
+		state.RunningRules = kernelRules
+	}
 	wakeAgentDNSWatchScheduler()
 	rememberDesiredRunningRules(state.RunningRules)
 	pendingActionPorts := map[string]bool{}
@@ -4055,15 +4105,17 @@ func heartbeat(cfg Config, forceReconcile ...bool) (heartbeatResult, error) {
 		}
 		actionDone = append(actionDone, enqueueAction(cfg, a))
 	}
-	dependentSelfTests := make([]selfTest, 0, len(resp.SelfTests))
-	for _, t := range resp.SelfTests {
-		if !selfTestDependsOnRuntime(t) {
-			enqueueSelfTest(cfg, t)
-			continue
+	if !iptablesOnlyBuild {
+		dependentSelfTests := make([]selfTest, 0, len(resp.SelfTests))
+		for _, t := range resp.SelfTests {
+			if !selfTestDependsOnRuntime(t) {
+				enqueueSelfTest(cfg, t)
+				continue
+			}
+			dependentSelfTests = append(dependentSelfTests, t)
 		}
-		dependentSelfTests = append(dependentSelfTests, t)
+		enqueueSelfTestsAfterActions(cfg, dependentSelfTests, actionDone)
 	}
-	enqueueSelfTestsAfterActions(cfg, dependentSelfTests, actionDone)
 	activeActionPorts := snapshotProtectedActionPorts()
 	for port := range activeActionPorts {
 		pendingActionPorts[port] = true
@@ -4077,7 +4129,9 @@ func heartbeat(cfg Config, forceReconcile ...bool) (heartbeatResult, error) {
 		writeRunningRuleState(r)
 		ensureCountingChainsIfNeeded(r)
 	}
-	syncProtocolGuardsAfterActions(cfg, state.GuardRules, actionDone)
+	if !iptablesOnlyBuild {
+		syncProtocolGuardsAfterActions(cfg, state.GuardRules, actionDone)
+	}
 	if resp.ForceTCPing {
 		agentMetricsForceTCPing.Store(true)
 	}
@@ -4916,7 +4970,7 @@ func runAgentEventStream(cfg Config) error {
 						}
 						go selfUpgrade(cfg, &up)
 					}
-				} else if msg.Type == "agent-selftest" {
+				} else if msg.Type == "agent-selftest" && !iptablesOnlyBuild {
 					go pullSelfTestsOnce(cfg)
 				} else if msg.Type == "agent-external-port-check" && iptablesOnlyBuild {
 					var request externalPortCheckRequest
@@ -5073,6 +5127,13 @@ func handleActionWithRuntimeSnapshot(cfg Config, a action, releaseRuntimeGate fu
 }
 
 func handleActionJobWithRuntimeSnapshot(cfg Config, a action, releaseRuntimeGate func(), previousRuntime *localActionRuntimeSnapshot, jobResult *actionJobResult) bool {
+	if iptablesOnlyBuild {
+		return handleKernelForwardAction(cfg, a, releaseRuntimeGate)
+	}
+	return handleStandardActionJobWithRuntimeSnapshot(cfg, a, releaseRuntimeGate, previousRuntime, jobResult)
+}
+
+func handleStandardActionJobWithRuntimeSnapshot(cfg Config, a action, releaseRuntimeGate func(), previousRuntime *localActionRuntimeSnapshot, jobResult *actionJobResult) bool {
 	if rejectAgentProbePortAction(cfg, a) {
 		return false
 	}
@@ -8135,6 +8196,14 @@ func resetTrafficStateIfRuleChanged(port string, nextRuleID int) {
 }
 
 func syncRunningRuleState(rules []runningRule, protectedPorts map[string]bool) {
+	if iptablesOnlyBuild {
+		syncKernelRunningRuleState(rules, protectedPorts)
+		return
+	}
+	syncStandardRunningRuleState(rules, protectedPorts)
+}
+
+func syncStandardRunningRuleState(rules []runningRule, protectedPorts map[string]bool) {
 	wanted := map[string]bool{}
 	wantedFailover := map[string]bool{}
 	for _, r := range rules {

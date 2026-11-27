@@ -1981,6 +1981,13 @@ func tcpingTaskConcurrency(taskCount int) int {
 }
 
 func executeTCPingTask(task tcpingTask) tcpingTaskResult {
+	if iptablesOnlyBuild {
+		return executeTCPingTaskWithProbes(task, nil, pingLatencyDetailed)
+	}
+	return executeStandardTCPingTask(task)
+}
+
+func executeStandardTCPingTask(task tcpingTask) tcpingTaskResult {
 	return executeTCPingTaskWithWireGuardProbe(task, wireGuardTCPLatencyDetailed)
 }
 

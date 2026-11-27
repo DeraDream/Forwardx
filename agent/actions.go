@@ -262,14 +262,19 @@ func syncDesiredState(cfg Config, state *desiredState) []<-chan struct{} {
 		return nil
 	}
 	rememberDesiredStateReceived(state)
-	attachDesiredSharedFXPEntryGroups(state.Actions)
-	wireGuardReplacementTunnels := desiredWireGuardReplacementTunnels(state.Actions)
+	var wireGuardReplacementTunnels map[int]bool
+	if !iptablesOnlyBuild {
+		attachDesiredSharedFXPEntryGroups(state.Actions)
+		wireGuardReplacementTunnels = desiredWireGuardReplacementTunnels(state.Actions)
+	}
 	kernelSnapshot := newKernelForwardSnapshot()
 	// Pre-populate the per-port readiness cache once for all gost/nginx actions in this
 	// batch. Without this, canAdoptDesiredAction → desiredGostRuntimeReady calls
 	// readLocalRuntimeReadiness() once per unique (port, protocol) pair — O(N) expensive
 	// syscalls (ss -H -ltnup + systemctl + config parse) for N rules on first restart.
-	primeDesiredRuntimeReadyCacheForActions(state.Actions)
+	if !iptablesOnlyBuild {
+		primeDesiredRuntimeReadyCacheForActions(state.Actions)
+	}
 	desiredActionRecordMu.Lock()
 	records := readDesiredActionRecordsLocked()
 	done := make([]<-chan struct{}, 0, len(state.Actions))
@@ -288,7 +293,10 @@ func syncDesiredState(cfg Config, state *desiredState) []<-chan struct{} {
 			continue
 		}
 		signature := desiredActionSignature(a)
-		forceWireGuardReapply := desiredActionNeedsWireGuardReplacementReapply(a, wireGuardReplacementTunnels)
+		forceWireGuardReapply := false
+		if !iptablesOnlyBuild {
+			forceWireGuardReapply = desiredActionNeedsWireGuardReplacementReapply(a, wireGuardReplacementTunnels)
+		}
 		seen[key] = true
 		record, hasRecord := records[key]
 		forceSchemaApply := desiredActionRecordForcesApply(record, hasRecord)
@@ -452,6 +460,13 @@ func rememberDesiredStateAppliedAfterActions(state *desiredState, done []<-chan 
 }
 
 func desiredActionRecordConsistent(a action, kernelSnapshot *kernelForwardSnapshot) bool {
+	if iptablesOnlyBuild {
+		return allowKernelForwardAction(a) && kernelSnapshot != nil && kernelSnapshot.desiredActionConsistent(a)
+	}
+	return desiredStandardActionRecordConsistent(a, kernelSnapshot)
+}
+
+func desiredStandardActionRecordConsistent(a action, kernelSnapshot *kernelForwardSnapshot) bool {
 	if actionRequiresKernelForwardConsistency(a) {
 		if kernelSnapshot == nil {
 			kernelSnapshot = newKernelForwardSnapshot()
@@ -561,6 +576,13 @@ func canAdoptDesiredAction(a action) bool {
 }
 
 func desiredActionLocalRuntimeReady(a action) bool {
+	if iptablesOnlyBuild {
+		return allowKernelForwardAction(a) && newKernelForwardSnapshot().actionApplyReady(a)
+	}
+	return desiredStandardActionLocalRuntimeReady(a)
+}
+
+func desiredStandardActionLocalRuntimeReady(a action) bool {
 	if a.KnownRunning {
 		return desiredKnownRunningActionReady(a)
 	}
@@ -1264,6 +1286,13 @@ const (
 )
 
 func finalizeActionHandoffState(guard action, state *actionHandoffState, finalization actionHandoffFinalization) bool {
+	if iptablesOnlyBuild {
+		return false
+	}
+	return finalizeStandardActionHandoffState(guard, state, finalization)
+}
+
+func finalizeStandardActionHandoffState(guard action, state *actionHandoffState, finalization actionHandoffFinalization) bool {
 	if state == nil {
 		return false
 	}
@@ -1398,6 +1427,9 @@ func isSharedRuntimeSyncAction(a action) bool {
 // Shared runtime configs own many ports at once. Apply those configs as a short
 // batch phase before per-port work, then retain normal parallelism for all ports.
 func prepareDesiredActionJobs(jobs []actionJob) []actionJob {
+	if iptablesOnlyBuild {
+		return jobs
+	}
 	return prepareDesiredActionJobsWithOwnerResolver(jobs, localForwardTypeForAction)
 }
 
@@ -1611,6 +1643,13 @@ func localForwardTypeForAction(a action) string {
 }
 
 func captureLocalActionRuntimeSnapshot(a action) localActionRuntimeSnapshot {
+	if iptablesOnlyBuild {
+		return captureKernelActionRuntimeSnapshot(a)
+	}
+	return captureStandardLocalActionRuntimeSnapshot(a)
+}
+
+func captureStandardLocalActionRuntimeSnapshot(a action) localActionRuntimeSnapshot {
 	if !validActionPort(a.SourcePort) || strings.TrimSpace(a.StatusType) == "runtime" {
 		return localActionRuntimeSnapshot{}
 	}
@@ -1927,6 +1966,13 @@ func waitForActionPrerequisites(job actionJob) bool {
 }
 
 func acquireSharedRuntimeSyncGate(a action) func() {
+	if iptablesOnlyBuild {
+		return nil
+	}
+	return acquireStandardSharedRuntimeSyncGate(a)
+}
+
+func acquireStandardSharedRuntimeSyncGate(a action) func() {
 	statusType := strings.TrimSpace(a.StatusType)
 	forwardType := strings.TrimSpace(a.ForwardType)
 	if statusType == "runtime" && forwardType == "gost-runtime-sync" {
@@ -1969,7 +2015,7 @@ func actionSerialKeys(a action) []string {
 	if validActionPort(a.SourcePort) {
 		keys = append(keys, fmt.Sprintf("port:%d", a.SourcePort))
 	}
-	if a.Fxp != nil && isSharedFXPEntry(*a.Fxp) {
+	if !iptablesOnlyBuild && a.Fxp != nil && isSharedFXPEntry(*a.Fxp) {
 		keys = append(keys, fmt.Sprintf("fxp-entry-group:%d", a.Fxp.TunnelID))
 	}
 	keys = append(keys, accessLimitActionSerialKeys(a)...)

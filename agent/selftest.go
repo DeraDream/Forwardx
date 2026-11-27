@@ -301,6 +301,13 @@ func diagnosticPortInspection(t selfTest) map[string]any {
 }
 
 func handleSelfTest(cfg Config, t selfTest) {
+	if iptablesOnlyBuild {
+		return
+	}
+	handleStandardSelfTest(cfg, t)
+}
+
+func handleStandardSelfTest(cfg Config, t selfTest) {
 	diagnostic := strings.EqualFold(strings.TrimSpace(t.Kind), "diagnostic-hop")
 	dnsMs, dnsAddresses, dnsError, dnsSkipped := 0, []string(nil), "", false
 	var portInspection map[string]any

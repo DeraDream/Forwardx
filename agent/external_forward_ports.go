@@ -231,7 +231,7 @@ func forwardxIptablesDnatLine(line string, port int, proto string) bool {
 }
 
 func externalForwardConflict(a action) string {
-	if !iptablesOnlyBuild || (a.Op != "apply" && a.Op != "remove") || a.SourcePort <= 0 || a.ForwardType != "iptables" {
+	if !iptablesOnlyBuild || (a.Op != "apply" && a.Op != "remove") || a.SourcePort <= 0 || (a.ForwardType != "iptables" && a.ForwardType != "nftables") {
 		return ""
 	}
 	report := externalForwardPorts()

@@ -507,6 +507,7 @@ func TestActionIngressCoalescesPendingUpdatesWithoutBlocking(t *testing.T) {
 }
 
 func TestRuntimeSyncGatesAreIndependentByRuntimeFamily(t *testing.T) {
+	if iptablesOnlyBuild { t.Skip("no shared runtimes in kernel-only build") }
 	gostAction := action{StatusType: "rule", ForwardType: "gost"}
 	nginxRuntime := action{StatusType: "runtime", ForwardType: "nginx-runtime-sync"}
 	releaseGostRead := acquireSharedRuntimeSyncGate(gostAction)
@@ -551,6 +552,7 @@ func TestRuntimeSyncGatesAreIndependentByRuntimeFamily(t *testing.T) {
 }
 
 func TestGuardRuntimeSyncGateFollowsBackendFamily(t *testing.T) {
+	if iptablesOnlyBuild { t.Skip("no shared runtimes in kernel-only build") }
 	guardAction := action{StatusType: "rule", ForwardType: "guard", RuntimeBackendForwardType: "nginx"}
 	releaseGuardRead := acquireSharedRuntimeSyncGate(guardAction)
 	if releaseGuardRead == nil {

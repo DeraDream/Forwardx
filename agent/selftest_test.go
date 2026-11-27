@@ -1,3 +1,5 @@
+//go:build !iptablesonly
+
 package main
 
 import (

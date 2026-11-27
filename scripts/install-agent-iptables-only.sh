@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Offline installer for the Agent + system-provided iptables only.
+# Offline installer for the kernel-forwarding-only Agent (iptables/nftables).
 set -euo pipefail
 
 if [ "$(id -u)" -ne 0 ]; then echo '请以 root 运行' >&2; exit 1; fi
-if ! command -v iptables >/dev/null 2>&1; then
-  echo '缺少系统 iptables：请先用发行版包管理器安装（此包不包含内核工具）' >&2
+if ! command -v iptables >/dev/null 2>&1 && ! command -v nft >/dev/null 2>&1; then
+  echo '缺少系统 iptables/nft：请先安装至少一种内核防火墙命令（离线包不包含系统工具）' >&2
   exit 1
 fi
 if ! command -v systemctl >/dev/null 2>&1 || [ ! -d /run/systemd/system ]; then
@@ -114,5 +114,5 @@ EOF
 systemctl daemon-reload
 systemctl enable --now "$SERVICE"
 systemctl restart "$SERVICE"
-echo 'Agent 已安装。请在面板只分配 iptables 转发规则；其他运行时未安装。'
+echo 'Agent 已安装。请在面板只分配 iptables/nftables 内核转发规则；其他运行时未安装。'
 if [ -t 0 ]; then /usr/local/bin/forwardx; fi

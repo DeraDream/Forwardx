@@ -1,3 +1,5 @@
+//go:build !iptablesonly
+
 package main
 
 // Full-link speed tests use the deployed forwarding rule and its final

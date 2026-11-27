@@ -8,8 +8,10 @@ export const LINK_SPEED_IPTABLES_MIN_VERSION = "2.2.246";
 export function linkSpeedAgentRequirement(version: string | null | undefined, entryMode: "listener" | "iptables") {
   const standalone = isIptablesOnlyAgentVersion(version);
   const minimum = entryMode === "iptables" ? LINK_SPEED_IPTABLES_MIN_VERSION : LINK_SPEED_AGENT_MIN_VERSION;
-  if (standalone && entryMode !== "iptables") {
-    return { supported: false, reason: "轻量 Agent 仅支持 iptables 入口测速" };
+  // Even the released v1.0.7 lightweight Agent can otherwise install a speed
+  // client on demand. Keep the restriction for every lightweight version.
+  if (standalone) {
+    return { supported: false, reason: "轻量 Agent 不支持全链路测速" };
   }
   if (!isAgentVersionAtLeast(version, minimum)) {
     return {
