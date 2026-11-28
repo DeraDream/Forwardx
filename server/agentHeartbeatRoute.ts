@@ -29,7 +29,6 @@ import { isIP } from "net";
 import { resolve4, resolve6 } from "dns/promises";
 import { hasQueuedLookingGlassAgentTasks, takeLookingGlassAgentTasks } from "./lookingGlassAgentTasks";
 import { hasQueuedIperf3AgentTasks, takeIperf3AgentTasks } from "./iperf3AgentTasks";
-import { hasQueuedLinkSpeedTasks, takeLinkSpeedTasks } from "./linkSpeedTasks";
 import { hasQueuedPluginAgentTasks, takePluginAgentTasks } from "./pluginAgentTasks";
 import { getAgentPluginInventory, updateAgentPluginInventory } from "./agentPluginInventory";
 import { getAgentHostFromRequest, getAgentPresenceHostFromRequest, getResolvedAgentToken } from "./agentAuth";
@@ -1867,10 +1866,6 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     if (busyHeartbeat) {
       const panelUrl = await resolveAgentAdvertisedPanelUrl();
       const topologyTrafficWatching = isHostTopologyTrafficWatching(host.id);
-      const linkSpeedHeartbeatRequired = hasQueuedLinkSpeedTasks(host.id);
-      if (linkSpeedHeartbeatRequired) {
-        appendPanelLog("info", `[LinkSpeed] host=${host.id} busy heartbeat requested full heartbeat for queued task`);
-      }
       const metricsWatching = isHostMetricsWatching(host.id) || topologyTrafficWatching;
       logAgentHeartbeatSummary({
         hostId: logHostId,
@@ -1894,7 +1889,6 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         metricsWatching,
         trafficReportInterval: metricsWatching ? 1 : undefined,
         trafficReportIntervalMs: metricsWatching ? (topologyTrafficWatching ? 500 : 1_000) : undefined,
-        fullHeartbeatRequired: linkSpeedHeartbeatRequired,
       }));
       return;
     }
@@ -1917,7 +1911,6 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         || hasHostTcpingRequest(host.id)
         || hasQueuedLookingGlassAgentTasks(host.id)
         || hasQueuedIperf3AgentTasks(host.id)
-        || hasQueuedLinkSpeedTasks(host.id)
         || hasQueuedAgentLinkProbeTasks(host.id)
         || hasQueuedPluginAgentTasks(host.id),
       recoveryTriggered,
@@ -1963,7 +1956,6 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         selfTests: [],
         lookingGlassTests: [],
         iperf3Tasks: [],
-        linkSpeedTasks: [],
         agentLinkProbeTasks: [],
         pluginTasks: [],
         agentUpgrade: null,
@@ -6812,7 +6804,6 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
 
     const lookingGlassTests = takeLookingGlassAgentTasks(host.id);
     const iperf3Tasks = takeIperf3AgentTasks(host.id);
-    const linkSpeedTasks = takeLinkSpeedTasks(host.id);
     const agentLinkProbeTasks = await takeAgentLinkProbeTasks(host.id);
     const pluginsAwaitingSync = new Set(pluginSyncTasks.map((task) => task.pluginId));
     const pluginTasks = supportsPluginTasks && reportedPluginInventory && !pluginSyncActionQueued
@@ -6824,8 +6815,6 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     const hasPendingPluginTasks = supportsPluginTasks && hasQueuedPluginAgentTasks(host.id);
     const hasInteractiveTasks = lookingGlassTests.length > 0
       || iperf3Tasks.length > 0
-      || linkSpeedTasks.length > 0
-      || hasQueuedLinkSpeedTasks(host.id)
       || agentLinkProbeTasks.length > 0
       || hasQueuedAgentLinkProbeTasks(host.id)
       || pluginTasks.length > 0
@@ -6911,8 +6900,6 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       && selfTests.length === 0
       && lookingGlassTests.length === 0
       && iperf3Tasks.length === 0
-      && linkSpeedTasks.length === 0
-      && !hasQueuedLinkSpeedTasks(host.id)
       && agentLinkProbeTasks.length === 0
       && !hasQueuedAgentLinkProbeTasks(host.id)
       && pluginTasks.length === 0
@@ -6966,7 +6953,6 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       interactiveTasks: hasInteractiveTasks ? (
         lookingGlassTests.length
         + iperf3Tasks.length
-        + linkSpeedTasks.length
         + agentLinkProbeTasks.length
         + pluginTasks.length
         + (hasPendingPluginTasks ? 1 : 0)
@@ -6983,7 +6969,6 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       stateSignatures: stateSections.signatures,
       lookingGlassTests,
       iperf3Tasks,
-      linkSpeedTasks,
       agentLinkProbeTasks,
       pluginTasks,
       agentUpgrade,

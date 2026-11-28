@@ -304,8 +304,8 @@ test("local panel upgrades preserve custom environment settings", { skip: !bash 
         "NODE_ENV=production",
         "PORT=1234",
         "JWT_SECRET=old-secret",
-        "FORWARDX_LINK_SPEED_HOST=160.236.111.114",
-        "FORWARDX_LINK_SPEED_PORT=5202",
+        "CUSTOM_EXTRA_HOST=160.236.111.114",
+        "CUSTOM_EXTRA_PORT=5202",
         "CUSTOM_PANEL_SETTING=kept",
         "",
       ].join("\n"));
@@ -321,8 +321,8 @@ cat "$APP_DIR/.env"
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /^PORT=9810$/m);
   assert.match(result.stdout, /^JWT_SECRET=new-secret$/m);
-  assert.match(result.stdout, /^FORWARDX_LINK_SPEED_HOST=160\.236\.111\.114$/m);
-  assert.match(result.stdout, /^FORWARDX_LINK_SPEED_PORT=5202$/m);
+  assert.match(result.stdout, /^CUSTOM_EXTRA_HOST=160\.236\.111\.114$/m);
+  assert.match(result.stdout, /^CUSTOM_EXTRA_PORT=5202$/m);
   assert.match(result.stdout, /^CUSTOM_PANEL_SETTING=kept$/m);
   assert.equal((result.stdout.match(/^PORT=/gm) || []).length, 1);
   assert.equal((result.stdout.match(/^JWT_SECRET=/gm) || []).length, 1);

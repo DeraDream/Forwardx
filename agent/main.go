@@ -37,7 +37,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.249"
+var Version = "2.2.250"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -865,7 +865,6 @@ type heartbeatResp struct {
 	DNSWatch                []dnsWatchItem           `json:"dnsWatch"`
 	LookingGlassTests       []lookingGlassTask       `json:"lookingGlassTests"`
 	Iperf3Tasks             []iperf3Task             `json:"iperf3Tasks"`
-	LinkSpeedTasks          []linkSpeedTask          `json:"linkSpeedTasks"`
 	AgentLinkProbeTasks     []agentLinkProbeTask     `json:"agentLinkProbeTasks"`
 	PluginTasks             []pluginAgentTask        `json:"pluginTasks"`
 	AgentUpgrade            *agentUpgrade            `json:"agentUpgrade"`
@@ -2864,7 +2863,6 @@ func main() {
 	probeServer := startAgentProbeServer(cfg.ProbePort, cfg.Token)
 	defer probeServer.Close()
 	restoreCountingChainStates(agentBootID)
-	cleanupStaleLinkSpeedNetworkNamespaces()
 
 	startAgentLogMaintenance()
 	// Register and start the communication/reconciliation loops before restoring
@@ -3651,7 +3649,7 @@ func logHeartbeatResponse(mode string, resp *heartbeatResp, duration time.Durati
 	anomalous = anomalous || resp.ReconciliationCoalesced
 	anomalous = anomalous || resp.AgentUpgrade != nil || resp.PanelMigration != nil || resp.FullHeartbeatRequired
 	anomalous = anomalous || len(resp.Actions) > 0 || len(resp.SelfTests) > 0
-	anomalous = anomalous || len(resp.LookingGlassTests) > 0 || len(resp.Iperf3Tasks) > 0 || len(resp.LinkSpeedTasks) > 0 || len(resp.AgentLinkProbeTasks) > 0 || len(resp.PluginTasks) > 0
+	anomalous = anomalous || len(resp.LookingGlassTests) > 0 || len(resp.Iperf3Tasks) > 0 || len(resp.AgentLinkProbeTasks) > 0 || len(resp.PluginTasks) > 0
 	interval := agentHeartbeatSummaryLogInterval
 	if anomalous {
 		interval = agentReportLogInterval
@@ -3673,7 +3671,7 @@ func logHeartbeatResponse(mode string, resp *heartbeatResp, duration time.Durati
 		len(resp.TunnelProbes),
 		len(resp.SelfTests),
 		len(resp.LookingGlassTests),
-		len(resp.Iperf3Tasks)+len(resp.LinkSpeedTasks)+len(resp.AgentLinkProbeTasks),
+		len(resp.Iperf3Tasks)+len(resp.AgentLinkProbeTasks),
 		len(resp.PluginTasks),
 		resp.NextInterval,
 		resp.ReconciliationCoalesced,
@@ -4042,11 +4040,7 @@ func heartbeat(cfg Config, forceReconcile ...bool) (heartbeatResult, error) {
 	// Interactive tasks are independent from desired-state reconciliation. Accept
 	// them before an early local-state return so a heartbeat response cannot drop
 	// a task while the Agent is rebuilding its runtime snapshot.
-	// Full-link speed is explicitly rejected even on older panels. The
-	// lightweight build does not start other interactive/provisioning tasks.
-	for _, task := range resp.LinkSpeedTasks {
-		go handleLinkSpeedTask(cfg, task)
-	}
+	// The lightweight build does not start interactive/provisioning tasks.
 	if !iptablesOnlyBuild {
 		for _, task := range resp.LookingGlassTests {
 			go handleLookingGlassTask(cfg, task)

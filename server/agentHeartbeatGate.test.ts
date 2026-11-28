@@ -704,7 +704,6 @@ test("queued interactive work forces a full heartbeat out of metrics-only mode",
   assert.equal(response.metricsOnly, false);
   assert.equal(response.fullHeartbeatRequired, true);
   assert.equal(response.nextInterval, 1);
-  assert.deepEqual(response.linkSpeedTasks, []);
 });
 
 test("metrics-only heartbeats do not erase the last reported mimic runtime state", () => {

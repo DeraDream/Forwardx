@@ -12,7 +12,6 @@ import { networkProfileRouter } from "./routers/networkProfile";
 import { forwardGroupsRouter } from "./routers/forwardGroups";
 import { hostsRouter } from "./routers/hosts";
 import { lookingGlassRouter } from "./routers/lookingGlass";
-import { linkSpeedRouter } from "./routers/linkSpeed";
 import { landingRouter } from "./routers/landing";
 import { fullChainsRouter } from "./routers/fullChains";
 import { plansRouter } from "./routers/plans";
@@ -40,7 +39,6 @@ export const appRouter = router({
   hosts: hostsRouter,
   agentLinks: agentLinksRouter,
   lookingGlass: lookingGlassRouter,
-  linkSpeed: linkSpeedRouter,
   landing: landingRouter,
   fullChains: fullChainsRouter,
   rules: rulesRouter,
