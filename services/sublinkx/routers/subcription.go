@@ -12,6 +12,7 @@ func Subcription(r *gin.Engine) {
 		SubcriptionGroup.POST("/add", api.SubAdd)
 		SubcriptionGroup.DELETE("/delete", api.SubDel)
 		SubcriptionGroup.GET("/get", api.SubGet)
+		SubcriptionGroup.GET("/logs", api.SubLogsGet)
 		SubcriptionGroup.GET("/summary", api.SubscriptionSummary)
 		SubcriptionGroup.POST("/update", api.SubUpdate)
 		SubcriptionGroup.POST("/reset-token", api.SubResetToken)

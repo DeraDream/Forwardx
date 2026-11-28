@@ -296,8 +296,16 @@ export default function SubscriptionCenterPage() {
   const templateFileInputRef = useRef<HTMLInputElement>(null);
   const [templates, setTemplates] = useState<TemplateRecord[]>([]);
   const [summary, setSummary] = useState<SubscriptionSummary | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const [sectionStatus, setSectionStatus] = useState<Record<SubscriptionSection, "idle" | "loading" | "loaded" | "error">>({ subscriptions: "idle", "node-subscriptions": "idle", nodes: "idle", templates: "idle" });
+  const [sectionErrors, setSectionErrors] = useState<Partial<Record<SubscriptionSection, string>>>({});
+  const sectionStatusRef = useRef(sectionStatus);
+  const pendingSections = useRef<Partial<Record<SubscriptionSection, Promise<void>>>>({});
+  const sectionGeneration = useRef<Record<SubscriptionSection, number>>({ subscriptions: 0, "node-subscriptions": 0, nodes: 0, templates: 0 });
+  const nodesRef = useRef<NodeRecord[]>([]);
+  const [logs, setLogs] = useState<SubscriptionLog[]>([]);
+  const [logsLoading, setLogsLoading] = useState(false);
+  const [logsError, setLogsError] = useState<string | null>(null);
+  const logsRequestId = useRef(0);
   const [searchQuery, setSearchQuery] = useState("");
   const [subscriptionClientFilter, setSubscriptionClientFilter] = useState<"all" | "clash" | "egern" | "loon">("all");
   const [nodeSearchQuery, setNodeSearchQuery] = useState("");
@@ -346,6 +354,8 @@ export default function SubscriptionCenterPage() {
   const activeItem = sections.find((item) => item.value === activeSection)!;
   const ActiveIcon = activeItem.icon || Link2;
   const sectionTabs = useMemo(() => sections.map((section) => ({ ...section, badge: section.value === "subscriptions" ? summary?.subscriptions ?? subscriptions.length : section.value === "node-subscriptions" ? summary?.nodeSubscriptions ?? nodeSubscriptions.length : section.value === "nodes" ? summary?.nodes ?? nodes.length : summary?.templates ?? templates.length })), [summary, subscriptions.length, nodeSubscriptions.length, nodes.length, templates.length]);
+  const isLoading = sectionStatus[activeSection] === "idle" || sectionStatus[activeSection] === "loading";
+  const loadError = sectionErrors[activeSection] || null;
   const handleSectionChange = (section: SubscriptionSection) => { setActiveSection(section); storeSection(section); };
   const selectedSubscriptionTemplateText = useMemo(() => {
     const defaultFile = editorOutputType === "loon" ? "loon.conf" : editorOutputType === "egern" ? "egern.yaml" : "clash.yaml";
@@ -375,37 +385,89 @@ export default function SubscriptionCenterPage() {
     try { setSummary(await sublinkRequest<SubscriptionSummary>("/api/v1/subcription/summary")); } catch { /* List data remains a safe fallback for badge totals. */ }
   }, []);
 
-  const loadSubscriptions = useCallback(async () => {
-    setIsLoading(true);
-    setLoadError(null);
-    try {
-      const [subscriptionData, nodeSubscriptionData, nodeData, templateData, groupData] = await Promise.all([
-        sublinkRequest<SubscriptionRecord[]>("/api/v1/subcription/get"),
-        sublinkRequest<NodeSubscriptionRecord[]>("/api/v1/node-subscription/get"),
-        sublinkRequest<NodeListResponse>("/api/v1/nodes/get?all=1"),
-        sublinkRequest<TemplateApiRecord[]>("/api/v1/template/get"),
-        sublinkRequest<string[]>("/api/v1/nodes/group/get"),
-      ]);
-      setSubscriptions(Array.isArray(subscriptionData) ? subscriptionData : []);
-      setNodeSubscriptions(Array.isArray(nodeSubscriptionData) ? nodeSubscriptionData : []);
-      setNodes(Array.isArray(nodeData) ? nodeData : (nodeData?.items || []));
-      setNodeGroups(Array.isArray(groupData) ? groupData : []);
-      setTemplates(Array.isArray(templateData) ? templateData.map((item) => ({
-        File: item.File || item.file || "未命名模板",
-        Text: item.Text ?? item.text ?? "",
-        CreateDate: item.CreateDate || item.create_date,
-      })) : []);
-    } catch (error) {
-      setLoadError(error instanceof Error ? error.message : "订阅列表加载失败");
-    } finally {
-      setIsLoading(false);
-      void loadSubscriptionSummary();
+  const loadSection = useCallback((section: SubscriptionSection, force = false): Promise<void> => {
+    if (pendingSections.current[section]) {
+      const pending = pendingSections.current[section]!;
+      return force || sectionStatusRef.current[section] === "idle"
+        ? pending.catch(() => {}).then(() => loadSection(section, true))
+        : pending;
     }
-  }, [loadSubscriptionSummary]);
+    if (!force && sectionStatusRef.current[section] === "loaded") return Promise.resolve();
+    const generation = sectionGeneration.current[section];
+    sectionStatusRef.current = { ...sectionStatusRef.current, [section]: "loading" };
+    setSectionStatus(sectionStatusRef.current);
+    setSectionErrors((current) => ({ ...current, [section]: undefined }));
+    const task = (async () => {
+      try {
+        if (section === "subscriptions") {
+          const data = await sublinkRequest<SubscriptionRecord[]>("/api/v1/subcription/get");
+          if (sectionGeneration.current[section] === generation) setSubscriptions(Array.isArray(data) ? data : []);
+        } else if (section === "node-subscriptions") {
+          const data = await sublinkRequest<NodeSubscriptionRecord[]>("/api/v1/node-subscription/get");
+          if (sectionGeneration.current[section] === generation) setNodeSubscriptions(Array.isArray(data) ? data : []);
+        } else if (section === "nodes") {
+          const [data, groups] = await Promise.all([
+            sublinkRequest<NodeListResponse>("/api/v1/nodes/get?all=1"),
+            sublinkRequest<string[]>("/api/v1/nodes/group/get"),
+          ]);
+          const list = Array.isArray(data) ? data : (data?.items || []);
+          if (sectionGeneration.current[section] === generation) {
+            nodesRef.current = list;
+            setNodes(list);
+            setNodeGroups(Array.isArray(groups) ? groups : []);
+          }
+        } else {
+          const data = await sublinkRequest<TemplateApiRecord[]>("/api/v1/template/get");
+          if (sectionGeneration.current[section] === generation) setTemplates(Array.isArray(data) ? data.map((item) => ({
+            File: item.File || item.file || "未命名模板",
+            Text: item.Text ?? item.text ?? "",
+            CreateDate: item.CreateDate || item.create_date,
+          })) : []);
+        }
+        if (sectionGeneration.current[section] !== generation) return;
+        sectionStatusRef.current = { ...sectionStatusRef.current, [section]: "loaded" };
+        setSectionStatus(sectionStatusRef.current);
+      } catch (error) {
+        if (sectionGeneration.current[section] !== generation) return;
+        sectionStatusRef.current = { ...sectionStatusRef.current, [section]: "error" };
+        setSectionStatus(sectionStatusRef.current);
+        setSectionErrors((current) => ({ ...current, [section]: error instanceof Error ? error.message : "数据加载失败" }));
+        throw error;
+      } finally {
+        delete pendingSections.current[section];
+      }
+    })();
+    pendingSections.current[section] = task;
+    return task;
+  }, []);
+
+  const loadSubscriptions = useCallback(async () => {
+    // Mutations may affect counts and other tabs. Refresh the visible tab and
+    // invalidate the rest so they fetch fresh data when visited next.
+    for (const { value } of sections) if (value !== activeSection) sectionGeneration.current[value]++;
+    sectionStatusRef.current = Object.fromEntries(sections.map(({ value }) => [value, value === activeSection ? sectionStatusRef.current[value] : "idle"])) as typeof sectionStatusRef.current;
+    setSectionStatus(sectionStatusRef.current);
+    try { await loadSection(activeSection, true); } catch { /* Error shown in the active tab. */ }
+    void loadSubscriptionSummary();
+  }, [activeSection, loadSection, loadSubscriptionSummary]);
 
   useEffect(() => {
-    void loadSubscriptions();
-  }, [loadSubscriptions]);
+    void loadSection(activeSection).catch(() => { /* Error shown in the active tab. */ });
+  }, [activeSection, loadSection]);
+
+  useEffect(() => { void loadSubscriptionSummary(); }, [loadSubscriptionSummary]);
+
+  const openLogSubscription = (subscription: SubscriptionRecord) => {
+    const requestId = ++logsRequestId.current;
+    setLogSubscription(subscription);
+    setLogs([]);
+    setLogsError(null);
+    setLogsLoading(true);
+    void sublinkRequest<SubscriptionLog[]>(`/api/v1/subcription/logs?id=${subscription.ID}`)
+      .then((data) => { if (logsRequestId.current === requestId) setLogs(Array.isArray(data) ? data : []); })
+      .catch((error) => { if (logsRequestId.current === requestId) setLogsError(error instanceof Error ? error.message : "访问记录加载失败"); })
+      .finally(() => { if (logsRequestId.current === requestId) setLogsLoading(false); });
+  };
 
   const visibleSubscriptions = useMemo(() => {
     const keyword = searchQuery.trim().toLowerCase();
@@ -487,7 +549,8 @@ export default function SubscriptionCenterPage() {
     } catch (error) { toast.error(error instanceof Error ? error.message : "订阅状态更新失败"); }
   };
 
-  const editNodeSubscription = (subscription: NodeSubscriptionRecord) => {
+  const editNodeSubscription = async (subscription: NodeSubscriptionRecord) => {
+    try { await loadSection("nodes"); } catch { toast.error("节点数据加载失败，请重试"); return; }
     setEditorMode("node-subscription"); setEditorOriginalName(subscription.Name); setEditorName(subscription.Name);
     setEditorNodeIds((subscription.Nodes || []).map((node) => node.ID));
     setEditorExpireAt(subscription.ExpireAt ? new Date(subscription.ExpireAt).toISOString().slice(0, 16) : "");
@@ -637,17 +700,23 @@ export default function SubscriptionCenterPage() {
     }
   };
 
-  const openEditor = (mode: Exclude<EditorMode, null>, template?: TemplateRecord) => {
+  const openEditor = async (mode: Exclude<EditorMode, null>, template?: TemplateRecord): Promise<boolean> => {
+    try {
+      if (mode === "subscription") await Promise.all([loadSection("nodes"), loadSection("templates")]);
+      if (mode === "node-subscription") await loadSection("nodes");
+      if (mode === "node") await Promise.all([loadSection("nodes"), loadSection("subscriptions")]);
+    } catch { toast.error("编辑所需数据加载失败，请重试"); return false; }
     setEditorMode(mode); setEditorOriginalName("");
     setEditorName(""); setEditorLink(""); setEditorNodeIds([]); setEditorExpireAt(""); setEditorAccessLimit(""); setEditorOutputType("clash");
     setTemplateFilename(template?.File || ""); setTemplateOriginalFilename(template?.File || ""); setTemplateText(template?.Text || "");
     setSubscriptionStep(0); setSubscriptionTemplate(""); setSubscriptionUdp(true); setSubscriptionCert(true); setSubscriptionDedupe(true); setSubscriptionDoh(false); setPolicyGroupName(""); setPolicyGroups({});
     setEditorGroups([]); setEditorNewGroup(""); setEditorSubscriptionIds([]); setReplaceIpEnabled(false); setReplaceIpId(""); setEditingNode(null);
     if (mode === "node") void loadIpLibrary();
+    return true;
   };
 
-  const openNodeEditor = (node: NodeRecord) => {
-    openEditor("node");
+  const openNodeEditor = async (node: NodeRecord) => {
+    if (!await openEditor("node")) return;
     setEditingNode(node); setEditorName(node.Name); setEditorLink(node.Link);
     setEditorGroups((node.GroupNodes || []).map((group) => group.Name));
   };
@@ -670,12 +739,13 @@ export default function SubscriptionCenterPage() {
     } finally { setIsCreatingGroup(false); }
   };
 
-  const editSubscription = (subscription: SubscriptionRecord) => {
+  const editSubscription = async (subscription: SubscriptionRecord) => {
+    try { await Promise.all([loadSection("nodes"), loadSection("templates")]); } catch { toast.error("编辑所需数据加载失败，请重试"); return; }
     let config: Record<string, any> = {};
     try { config = JSON.parse(subscription.Config || "{}"); } catch { /* keep defaults */ }
     setEditorMode("subscription"); setEditorOriginalName(subscription.Name); setEditorName(subscription.Name);
     setEditorNodeIds((subscription.Nodes || []).map((node) => node.ID)); setEditorExpireAt(subscription.ExpireAt ? new Date(subscription.ExpireAt).toISOString().slice(0, 16) : ""); setEditorAccessLimit(subscription.AccessLimit ? String(subscription.AccessLimit) : "");
-    setEditorOutputType(typeof config.output_type === "string" ? config.output_type : "clash"); setSubscriptionTemplate(typeof config.clash === "string" ? config.clash : ""); setSubscriptionUdp(config.udp === true || config.udp === "true"); setSubscriptionCert(config.cert === true || config.cert === "true"); setPolicyGroups(Object.fromEntries(Object.entries(config.group_nodes || {}).map(([name, rule]: [string, any]) => [name, { mode: rule.mode || "all", nodes: (rule.nodes || []).map((nodeName: string) => nodes.find((node) => node.Name === nodeName)?.ID).filter(Boolean) }]))); setSubscriptionStep(0);
+    setEditorOutputType(typeof config.output_type === "string" ? config.output_type : "clash"); setSubscriptionTemplate(typeof config.clash === "string" ? config.clash : ""); setSubscriptionUdp(config.udp === true || config.udp === "true"); setSubscriptionCert(config.cert === true || config.cert === "true"); setPolicyGroups(Object.fromEntries(Object.entries(config.group_nodes || {}).map(([name, rule]: [string, any]) => [name, { mode: rule.mode || "all", nodes: (rule.nodes || []).map((nodeName: string) => nodesRef.current.find((node) => node.Name === nodeName)?.ID).filter(Boolean) }]))); setSubscriptionStep(0);
   };
 
   const saveEditor = async () => {
@@ -772,7 +842,7 @@ export default function SubscriptionCenterPage() {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        <DropdownMenuItem onSelect={() => setLogSubscription(subscription)}>
+        <DropdownMenuItem onSelect={() => openLogSubscription(subscription)}>
           <Clock3 className="h-4 w-4" />访问记录
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={() => editSubscription(subscription)}>
@@ -902,7 +972,7 @@ export default function SubscriptionCenterPage() {
                         <div className="mt-3"><div className="flex items-end justify-between gap-2"><span className="flex items-center gap-1.5 text-xs text-secondary-foreground"><Activity className="size-3.5 text-primary" />访问统计</span><span className="font-mono text-xs font-semibold">{accessCount.toLocaleString()} <span className="font-sans font-normal text-muted-foreground">/ {accessLimit > 0 ? accessLimit.toLocaleString() : "不限"}</span></span></div><div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${progress}%` }} /></div></div>
                         <div className="mt-auto pt-7">
                           <div className="flex items-center justify-between text-xs text-muted-foreground"><span className="flex items-center gap-1.5"><Clock3 className="size-3.5" />{formatDate(subscription.CreatedAt || subscription.CreateDate)}</span><Button variant="ghost" size="icon" className="size-7" title="复制订阅链接" onClick={() => void copySubscriptionUrl(subscription)}><Copy className="size-3.5" /></Button></div>
-                          <div className="mt-3 flex gap-2"><Button variant="outline" size="sm" className="flex-1 gap-1.5" onClick={() => setClientSubscription(subscription)}><MonitorSmartphone className="size-3.5" />客户端</Button><Button variant="ghost" size="icon" className="size-8" title="访问记录" onClick={() => setLogSubscription(subscription)}><Clock3 className="size-3.5" /></Button>{renderMoreActions(subscription)}</div>
+                          <div className="mt-3 flex gap-2"><Button variant="outline" size="sm" className="flex-1 gap-1.5" onClick={() => setClientSubscription(subscription)}><MonitorSmartphone className="size-3.5" />客户端</Button><Button variant="ghost" size="icon" className="size-8" title="访问记录" onClick={() => openLogSubscription(subscription)}><Clock3 className="size-3.5" /></Button>{renderMoreActions(subscription)}</div>
                         </div>
                       </article>
                     );
@@ -1047,14 +1117,14 @@ export default function SubscriptionCenterPage() {
             <DialogFooter><Button variant="outline" onClick={() => setClientSubscription(null)}>关闭</Button></DialogFooter>
           </DialogContent>
         </Dialog>
-        <Dialog open={!!logSubscription} onOpenChange={(open) => { if (!open) setLogSubscription(null); }}>
+        <Dialog open={!!logSubscription} onOpenChange={(open) => { if (!open) { ++logsRequestId.current; setLogSubscription(null); } }}>
           <DialogContent className="max-w-2xl">
             <DialogHeader><DialogTitle>{logSubscription?.Name || "订阅"} · 访问记录</DialogTitle><DialogDescription>展示该订阅已记录的客户端访问。</DialogDescription></DialogHeader>
             <div className="max-h-[55svh] overflow-auto rounded-lg border border-border/60">
               <Table><TableHeader><TableRow><TableHead>IP</TableHead><TableHead>地址</TableHead><TableHead>次数</TableHead><TableHead>时间</TableHead></TableRow></TableHeader><TableBody>
-                {(logSubscription?.SubLogs || []).map((log) => <TableRow key={log.ID}><TableCell className="font-mono text-xs">{log.IP || "--"}</TableCell><TableCell>{log.Addr || "--"}</TableCell><TableCell>{Number(log.Count || 0).toLocaleString()}</TableCell><TableCell className="whitespace-nowrap text-xs text-muted-foreground">{formatDate(log.Date)}</TableCell></TableRow>)}
+                {logs.map((log) => <TableRow key={log.ID}><TableCell className="font-mono text-xs">{log.IP || "--"}</TableCell><TableCell>{log.Addr || "--"}</TableCell><TableCell>{Number(log.Count || 0).toLocaleString()}</TableCell><TableCell className="whitespace-nowrap text-xs text-muted-foreground">{formatDate(log.Date)}</TableCell></TableRow>)}
               </TableBody></Table>
-              {!logSubscription?.SubLogs?.length && <p className="py-12 text-center text-sm text-muted-foreground">暂未记录访问</p>}
+              {logsLoading ? <p className="py-12 text-center text-sm text-muted-foreground">正在读取访问记录…</p> : logsError ? <p className="py-12 text-center text-destructive">{logsError}</p> : !logs.length && <p className="py-12 text-center text-sm text-muted-foreground">暂未记录访问</p>}
             </div>
             <DialogFooter><Button variant="outline" onClick={() => setLogSubscription(null)}>关闭</Button></DialogFooter>
           </DialogContent>

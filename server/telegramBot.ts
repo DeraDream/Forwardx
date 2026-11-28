@@ -1,6 +1,7 @@
 import * as db from "./db";
 import { createDirectForwardRuleForActor, deleteForwardRuleForActor, toggleForwardRuleForActor } from "./routers/rules.crud";
 import { ENV } from "./env";
+import { listTelegramSubscriptions, resetTelegramSubscriptionToken, type TelegramSubscription } from "./sublinkService";
 import { ACCOUNT_DISABLED_ERR_MSG } from "../shared/const";
 import { pushAgentRefresh, pushAgentUpgrade } from "./agentEvents";
 import { pushTunnelEndpointRefresh, refreshUserForwardEndpoints } from "./routers/helpers";
@@ -9,6 +10,9 @@ import { clearMobileTelegramLoginChallenge, hasMobileTelegramLoginChallenge } fr
 import { createTelegramWebAppLoginChallenge } from "./telegramWebAppLogin";
 import { withTelegramApiTimeout } from "./telegramApiTimeout";
 import { formatForwardRuleProtocol } from "../shared/forwardTypes";
+import { linkProbeMethodForRule } from "../shared/latencyProbe";
+import { selectTopologyTotalTarget } from "./topologyTotalTarget";
+import { formatTelegramRuleProbeResult } from "./telegramRuleProbe";
 import { isAgentVersionAtLeast } from "./agentRouteUtils";
 import { APP_VERSION, AGENT_VERSION } from "../shared/versions";
 import { checkPanelUpdateTask, startPanelUpgradeTask } from "./_core/systemRouter";
@@ -216,8 +220,8 @@ const LOGIN_CODE_TTL_MS = 5 * 60 * 1000;
 const LOGIN_SUCCESS_MESSAGE_DELETE_MS = 60 * 1000;
 const BIND_SESSION_TTL_MS = 10 * 60 * 1000;
 const REDEEM_SESSION_TTL_MS = 10 * 60 * 1000;
-const USER_PAGE_SIZE = 10;
-const RULE_PAGE_SIZE = 10;
+const USER_PAGE_SIZE = 5;
+const RULE_PAGE_SIZE = 5;
 const AI_QUERY_RESULT_LIMIT = 10;
 const AI_PROCESSING_MESSAGE_DELAY_MS = 800;
 const AI_PROCESSING_MESSAGE_TEXT = "正在处理，请稍候…";
@@ -655,8 +659,8 @@ async function sendMessage(chatId: number | string, text: string, replyMarkup?: 
   });
 }
 
-export async function sendTelegramMessage(chatId: number | string, text: string) {
-  await sendMessage(chatId, text);
+export async function sendTelegramMessage(chatId: number | string, text: string, replyMarkup?: InlineKeyboardMarkup) {
+  await sendMessage(chatId, text, replyMarkup);
 }
 
 export async function syncTelegramBotCommands() {
@@ -942,21 +946,17 @@ function webAppOpenKeyboard(url: string): InlineKeyboardMarkup {
 function mainMenuKeyboard(user: any, webAppUrl?: string): InlineKeyboardMarkup {
   const rows: InlineKeyboardMarkup["inline_keyboard"] = [
     [
-      { text: "👤 账户", callback_data: "fx:user" },
-      { text: "📊 流量", callback_data: "fx:usage" },
-      { text: "⚙️ 规则", callback_data: "fx:rules" },
+      { text: "⚙️ 转发规则", callback_data: "fx:rules" },
+      { text: "📊 流量统计", callback_data: "fx:usage" },
     ],
+    ...(user?.role === "admin" ? [[
+      { text: "🔗 订阅链接", callback_data: "fx:subscriptions" },
+      { text: "📡 入口监控", callback_data: "fx:entry-groups" },
+    ]] : []),
+    [{ text: "👤 账户与用户", callback_data: "fx:user" }],
   ];
-  const secondaryRow: InlineKeyboardButton[] = [];
-  if (user?.role === "admin") {
-    secondaryRow.push({ text: "👥 用户", callback_data: "fx:users:0" });
-  } else {
-    secondaryRow.push({ text: "🎟 兑换", callback_data: "fx:redeem" });
-  }
-  if (webAppUrl) {
-    secondaryRow.push({ text: "🌐 面板", web_app: { url: webAppUrl } });
-  }
-  rows.push(secondaryRow);
+  if (webAppUrl) rows[rows.length - 1].push({ text: "🌐 打开面板", web_app: { url: webAppUrl } });
+  if (user?.role !== "admin") rows.push([{ text: "🎟 兑换", callback_data: "fx:redeem" }]);
   return { inline_keyboard: rows };
 }
 
@@ -973,18 +973,6 @@ function userManageBackKeyboard(page = 0): InlineKeyboardMarkup {
     inline_keyboard: [
       [{ text: "👥 返回用户列表", callback_data: `fx:users:${page}` }],
       [{ text: "🏠 返回菜单", callback_data: "fx:menu" }],
-    ],
-  };
-}
-
-function renewalConfirmKeyboard(userId: number, page = 0): InlineKeyboardMarkup {
-  return {
-    inline_keyboard: [
-      [
-        { text: "✅ 确认续期 1 个月", callback_data: `fx:admin:renew:confirm:${userId}:${page}` },
-        { text: "❌ 取消", callback_data: `fx:admin:user:${userId}:${page}` },
-      ],
-      [{ text: "👤 返回用户详情", callback_data: `fx:admin:user:${userId}:${page}` }],
     ],
   };
 }
@@ -1094,31 +1082,36 @@ function ruleListBackKeyboard(page = 0): InlineKeyboardMarkup {
   };
 }
 
-function menuText(user: any) {
-  const title = user?.role === "admin" ? "ForwardX 管理菜单" : "ForwardX 用户菜单";
+async function menuText(user: any) {
+  const rules = await visibleRulesForTelegramUser(user);
+  const running = rules.filter((rule: any) => rule.isEnabled && rule.isRunning).length;
   return [
-    `<b>${escapeHtml(title)}</b>`,
-    "",
-    `当前账户：<b>${escapeHtml(user?.name || user?.username || "-")}</b>`,
-    `角色：${user?.role === "admin" ? "管理员" : "用户"}`,
-    "",
-    "请选择下面的功能按钮。",
+    "<b>🚀 ForwardX 控制中心</b>",
+    `<blockquote>├ 当前账户：<code>${escapeHtml(user?.email || user?.username || "-")}</code>`,
+    `├ 账户角色：<b>${user?.role === "admin" ? "管理员" : "用户"}</b>`,
+    `└ 转发状态：<b>${running}/${rules.length}</b> 条规则运行中</blockquote>`,
+    "请选择下方功能模块：",
   ].join("\n");
 }
 
 function userInfoText(user: any) {
   return [
-    "<b>用户信息</b>",
-    "",
-    `账户：<b>${escapeHtml(user.name || user.username)}</b>`,
-    `用户名：${escapeHtml(user.username)}`,
-    `角色：${user.role === "admin" ? "管理员" : "用户"}`,
-    `余额：${formatMoneyCny(user.balanceCents)}`,
-    `到期时间：${escapeHtml(formatDate(user.expiresAt))}`,
-    `转发权限：${user.role === "admin" || user.canAddRules ? "已启用" : "已停用"}`,
-    `绑定时间：${escapeHtml(formatDate(user.telegramLinkedAt))}`,
-    `最近使用：${escapeHtml(formatDate(user.telegramLastSeenAt))}`,
+    "<b>👤 账户与用户中心</b>",
+    `<blockquote>├ 登录账户：<code>${escapeHtml(user.email || user.username)}</code>`,
+    `├ 角色权限：<b>${user.role === "admin" ? "管理员" : "用户"}</b>`,
+    `├ 账户余额：<b>${escapeHtml(formatMoneyCny(user.balanceCents))}</b>`,
+    `├ 转发权限：${user.role === "admin" || user.canAddRules ? "🟢 已启用" : "🔴 已停用"}`,
+    `└ 到期时间：<b>${escapeHtml(formatDate(user.expiresAt))}</b></blockquote>`,
+    `🕒 绑定于 ${escapeHtml(formatDate(user.telegramLinkedAt))} · 最近使用 ${escapeHtml(formatDate(user.telegramLastSeenAt))}`,
   ].join("\n");
+}
+
+function accountKeyboard(user: any): InlineKeyboardMarkup {
+  return { inline_keyboard: [
+    ...(user.role === "admin" ? [[{ text: "👥 用户管理", callback_data: "fx:users:0" }]] : []),
+    [{ text: "📊 流量统计", callback_data: "fx:usage" }, { text: "🔄 刷新账户信息", callback_data: "fx:user" }],
+    [{ text: "🏠 返回主菜单", callback_data: "fx:menu" }],
+  ] };
 }
 
 async function usageText(user: any) {
@@ -1130,15 +1123,22 @@ async function usageText(user: any) {
   const used = Number(user.trafficUsed) || 0;
   const remaining = limit > 0 ? Math.max(0, limit - used) : null;
   const percent = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
+  const rules = await visibleRulesForTelegramUser(user);
+  const trafficByRuleId = await aiRuleTrafficSummaryMap(user, rules.map((rule: any) => Number(rule.id)));
+  const topRules = rules.map((rule: any) => ({
+    rule, bytes: (trafficByRuleId.get(Number(rule.id))?.bytesIn || 0) + (trafficByRuleId.get(Number(rule.id))?.bytesOut || 0),
+  })).sort((a: any, b: any) => b.bytes - a.bytes).slice(0, 3);
   return [
-    "<b>流量用量</b>",
-    "",
-    `已用流量：${escapeHtml(formatBytes(used))}`,
-    `流量额度：${limit > 0 ? escapeHtml(formatBytes(limit)) : "不限"}`,
-    `剩余流量：${remaining === null ? "不限" : escapeHtml(formatBytes(remaining))}`,
-    limit > 0 ? `使用率：${percent}%` : "",
-    `规则/端口：${ruleCount}${user.maxRules ? `/${user.maxRules}` : ""} 条，${portCount}${user.maxPorts ? `/${user.maxPorts}` : ""} 个端口`,
+    "<b>📊 本周期流量统计</b>",
+    `<blockquote>├ 已用流量：<b>${escapeHtml(formatBytes(used))}</b>`,
+    `├ 流量额度：${limit > 0 ? escapeHtml(formatBytes(limit)) : "不限"}`,
+    `├ 剩余流量：${remaining === null ? "不限" : escapeHtml(formatBytes(remaining))}`,
+    limit > 0 ? `├ 使用进度：${percent}%` : "",
+    `└ 规则/端口：${ruleCount}${user.maxRules ? `/${user.maxRules}` : ""} 条 · ${portCount}${user.maxPorts ? `/${user.maxPorts}` : ""} 个</blockquote>`,
     user.trafficAutoReset ? `自动重置：每月 ${user.trafficResetDay || 1} 日` : "",
+    "",
+    "<b>🔥 规则已统计流量 Top 3</b> <i>(非本周期用量)</i>",
+    topRules.length ? topRules.map(({ rule, bytes }: any, index: number) => `${index + 1}. <code>#${rule.id}</code> ${escapeHtml(shortText(rule.name, 28))} · <b>${escapeHtml(formatBytes(bytes))}</b>`).join("\n") : "暂无转发规则。",
   ].filter(Boolean).join("\n");
 }
 
@@ -1167,31 +1167,27 @@ async function rulesView(user: any, page = 0) {
     ? await aiRuleTrafficSummaryMap(user, visible.map((rule: any) => Number(rule.id)), { includeLatency: true })
     : new Map<number, AiRuleTrafficSummary>();
   const text = visible.length === 0
-    ? "<b>转发规则</b>\n\n暂无转发规则。"
+    ? "<b>⚙️ 转发规则列表</b>\n\n暂无转发规则。"
     : [
-        "<b>转发规则</b>",
-        `第 ${safePage + 1}/${totalPages} 页，共 ${rules.length} 条`,
+        `<b>⚙️ 转发规则列表</b> <i>(第 ${safePage + 1}/${totalPages} 页 · 共 ${rules.length} 条)</i>`,
         "",
         ...visible.map((rule: any) => {
-          const status = effectiveRuleStatusText(rule, trafficByRuleId.get(Number(rule.id)));
-          return `#${rule.id} <b>${escapeHtml(shortText(rule.name, 24))}</b>\n${status} · ${escapeHtml(rule.forwardType)} ${escapeHtml(formatForwardRuleProtocol(rule.protocol))} · :${rule.sourcePort}`;
+          const summary = trafficByRuleId.get(Number(rule.id));
+          const status = effectiveRuleStatusText(rule, summary);
+          return `${rule.isEnabled ? "🟢" : "🔴"} <b>#${rule.id} ${escapeHtml(rule.name)}</b>\n<blockquote>├ 端口协议：<code>:${rule.sourcePort}</code> (${escapeHtml(formatForwardRuleProtocol(rule.protocol))})\n└ ${escapeHtml(rule.forwardType)} · ${escapeHtml(status)}</blockquote>`;
         }),
+        "💡 点击下方编号按钮打开对应规则：",
       ].join("\n\n");
   const rows: InlineKeyboardMarkup["inline_keyboard"] = [];
-  for (const rule of visible) {
-    const label = formatRuleButtonLabel(rule);
-    rows.push([
-      { text: `${rule.isEnabled ? "⛔ 停用" : "✅ 启用"} ${label}`, callback_data: `fx:rule:toggle:${rule.id}:${safePage}` },
-      { text: `📄 详情 ${label}`, callback_data: `fx:rule:view:${rule.id}:${safePage}` },
-    ]);
-  }
+  if (visible.length) rows.push(visible.map((rule: any) => ({ text: `${rule.isEnabled ? "🟢" : "🔴"} #${rule.id}`, callback_data: `fx:rule:view:${rule.id}:${safePage}` })));
   if (totalPages > 1) {
     rows.push([
       { text: "⬅️ 上一页", callback_data: `fx:rules:${Math.max(0, safePage - 1)}` },
-      { text: "➡️ 下一页", callback_data: `fx:rules:${Math.min(totalPages - 1, safePage + 1)}` },
+      { text: `📄 ${safePage + 1}/${totalPages}`, callback_data: "fx:noop" },
+      { text: "下一页 ➡️", callback_data: `fx:rules:${Math.min(totalPages - 1, safePage + 1)}` },
     ]);
   }
-  rows.push([{ text: "🏠 返回菜单", callback_data: "fx:menu" }]);
+  rows.push([{ text: "🏠 返回主菜单", callback_data: "fx:menu" }]);
   return { text, keyboard: { inline_keyboard: rows } };
 }
 
@@ -1202,17 +1198,86 @@ async function ruleDetailText(ruleId: number, user: any) {
   const statusInfo = effectiveRuleStatusInfo(rule, traffic);
   const status = effectiveRuleStatusText(rule, traffic);
   return [
-    `<b>规则 #${rule.id}</b>`,
-    "",
-    `名称：${escapeHtml(rule.name)}`,
-    `状态：${status}`,
+    `<b>📄 转发规则详情 · #${rule.id}</b>`,
+    `<blockquote>├ 规则名称：<b>${escapeHtml(rule.name)}</b>`,
+    `├ 当前状态：${escapeHtml(status)}`,
+    `├ 监听端口：<code>:${rule.sourcePort}</code> (${escapeHtml(formatForwardRuleProtocol(rule.protocol))})`,
+    `├ 转发类型：${escapeHtml(rule.forwardType)}`,
+    `├ 已统计流量：<b>${escapeHtml(formatBytes((traffic?.bytesIn || 0) + (traffic?.bytesOut || 0)))}</b>`,
+    `└ 目标落地：<code>${escapeHtml(rule.targetIp)}:${rule.targetPort}</code></blockquote>`,
     statusInfo.detail ? `说明：${escapeHtml(statusInfo.detail)}` : "",
-    `类型：${escapeHtml(rule.forwardType)} / ${escapeHtml(formatForwardRuleProtocol(rule.protocol))}`,
-    `入口端口：${rule.sourcePort}`,
-    `目标：${escapeHtml(rule.targetIp)}:${rule.targetPort}`,
-    `主机 ID：${rule.hostId}`,
-    rule.tunnelId ? `隧道 ID：${rule.tunnelId}` : "",
   ].filter(Boolean).join("\n");
+}
+
+async function ruleDetailKeyboard(ruleId: number, user: any, page = 0): Promise<InlineKeyboardMarkup> {
+  const rule = (await visibleRulesForTelegramUser(user)).find((item: any) => Number(item.id) === ruleId);
+  if (!rule) return ruleListBackKeyboard(page);
+  return { inline_keyboard: [
+    [
+      { text: rule.isEnabled ? "⛔ 停用此规则" : "▶️ 启用此规则", callback_data: `fx:rule:toggle:${ruleId}:${page}` },
+      ...(rule.isEnabled && !rule.tunnelId && linkProbeMethodForRule(rule) === "tcp"
+        ? [{ text: "⚡ 探测延迟", callback_data: `fx:rule:probe:${ruleId}:${page}` }] : []),
+    ],
+    [{ text: "🔙 返回规则列表", callback_data: `fx:rules:${page}` }, { text: "🏠 主菜单", callback_data: "fx:menu" }],
+  ] };
+}
+
+// Reuse the same entrance -> first listener TCP self-test as NetworkTopology.
+// Never infer "real-time" latency from the latest background TCPing sample.
+async function ruleProbeEntries(rule: any): Promise<Array<{ hostId: number; name: string }>> {
+  if (rule.tunnelId || linkProbeMethodForRule(rule) !== "tcp") return [];
+  const { diagnosticSegments } = await import("./routers/diagnostics");
+  const segments = await diagnosticSegments("rule", rule);
+  if (!segments.length) return [];
+  let entryHostIds: number[];
+  const group = Number(rule.forwardGroupId || 0) > 0
+    ? await db.getForwardGroupById(Number(rule.forwardGroupId)) as any : null;
+  if (group?.groupMode === "port") {
+    entryHostIds = await db.getForwardGroupRuleEntryHostIds(Number(group.id));
+  } else if (Number(group?.entryGroupId || 0) > 0) {
+    const entryGroup = await db.getForwardGroupById(Number(group.entryGroupId)) as any;
+    entryHostIds = (entryGroup?.members || [])
+      .filter((member: any) => member.memberType === "host" && member.isEnabled)
+      .map((member: any) => Number(member.hostId));
+  } else {
+    entryHostIds = [Number(segments[0].fromHostId)];
+  }
+  const ids = [...new Set(entryHostIds)].filter((id) => id > 0 && !!selectTopologyTotalTarget(segments, id));
+  const hosts = await Promise.all(ids.map((id) => db.getHostById(id)));
+  return ids.map((hostId, index) => ({ hostId, name: String((hosts[index] as any)?.name || `主机 #${hostId}`) }));
+}
+
+const activeTelegramRuleProbes = new Map<string, number>();
+
+async function watchTelegramRuleProbe(chatId: number | string, actorId: number, ruleId: number, entryName: string, testId: number, page: number, key: string) {
+  try {
+    for (let attempt = 0; attempt < 12; attempt++) {
+      await new Promise<void>((resolve) => { const timer = setTimeout(resolve, 2500); timer.unref?.(); });
+      const test = await db.getForwardTestById(testId);
+      if (!test || Number(test.ruleId) !== ruleId) break;
+      if (test.status === "pending" || test.status === "running") continue;
+      const actor = await db.getUserById(actorId);
+      if (actor?.accountEnabled !== false && actor?.telegramId &&
+          (await visibleRulesForTelegramUser(actor)).some((rule: any) => Number(rule.id) === ruleId)) {
+        await sendMessage(chatId, formatTelegramRuleProbeResult(ruleId, entryName, test), ruleListBackKeyboard(page));
+      }
+      return;
+    }
+    const actor = await db.getUserById(actorId);
+    if (actor?.accountEnabled !== false && actor?.telegramId &&
+        (await visibleRulesForTelegramUser(actor)).some((rule: any) => Number(rule.id) === ruleId)) {
+      await sendMessage(chatId, `<b>⚡ 探测延迟 · 规则 #${ruleId}</b>\n探测尚未完成，可点击下方按钮查询本次任务。`, {
+        inline_keyboard: [
+          [{ text: "🔄 查询探测结果", callback_data: `fx:rule:probe:result:${ruleId}:${testId}:${page}` }],
+          [{ text: "🔙 返回规则列表", callback_data: `fx:rules:${page}` }],
+        ],
+      });
+    }
+  } catch (error) {
+    console.warn(`[Telegram] Rule probe ${testId} notification failed:`, error);
+  } finally {
+    activeTelegramRuleProbes.delete(key);
+  }
 }
 
 async function usersText() {
@@ -1230,28 +1295,28 @@ async function usersView(page = 0) {
   const { page: safePage, totalPages } = clampPage(page, users.length, USER_PAGE_SIZE);
   const visible = users.slice(safePage * USER_PAGE_SIZE, safePage * USER_PAGE_SIZE + USER_PAGE_SIZE);
   const text = visible.length === 0
-    ? "<b>用户管理</b>\n\n暂无用户。"
+    ? "<b>👥 用户管理</b>\n\n暂无用户。"
     : [
-        "<b>用户管理</b>",
-        `第 ${safePage + 1}/${totalPages} 页，共 ${users.length} 个用户`,
+        `<b>👥 用户管理</b> <i>(第 ${safePage + 1}/${totalPages} 页 · 共 ${users.length} 个用户)</i>`,
+        "<i>状态图例：🟢 转发启用 · 🔴 转发停用</i>",
         "",
         ...visible.map((user: any) => {
           const limit = Number(user.trafficLimit) || 0;
-          const access = user.role === "admin" || user.canAddRules ? "转发启用" : "转发停用";
-          return `#${user.id} <b>${escapeHtml(shortText(user.name || user.username, 18))}</b> · ${user.role === "admin" ? "管理员" : "用户"}\n${access} · ${escapeHtml(formatBytes(user.trafficUsed))}/${limit > 0 ? escapeHtml(formatBytes(limit)) : "不限"}`;
+          const enabled = user.role === "admin" || user.canAddRules;
+          return `${enabled ? "🟢" : "🔴"} <b>#${user.id}</b> <code>${escapeHtml(user.email || user.username)}</code>\n<blockquote>├ 角色权限：<b>${user.role === "admin" ? "管理员" : "用户"}</b> (${enabled ? "转发启用" : "转发停用"})\n└ 流量使用：<b>${escapeHtml(formatBytes(user.trafficUsed))}</b> / ${limit > 0 ? escapeHtml(formatBytes(limit)) : "不限"}</blockquote>`;
         }),
+        "💡 点击下方编号按钮管理对应用户：",
       ].join("\n\n");
   const rows: InlineKeyboardMarkup["inline_keyboard"] = [];
-  for (const user of visible) {
-    rows.push([{ text: `🛠 管理 #${user.id} ${shortText(user.name || user.username, 14)}`, callback_data: `fx:admin:user:${user.id}:${safePage}` }]);
-  }
+  if (visible.length) rows.push(visible.map((item: any) => ({ text: `${item.role === "admin" || item.canAddRules ? "🟢" : "🔴"} #${item.id}`, callback_data: `fx:admin:user:${item.id}:${safePage}` })));
   if (totalPages > 1) {
     rows.push([
       { text: "⬅️ 上一页", callback_data: `fx:users:${Math.max(0, safePage - 1)}` },
-      { text: "➡️ 下一页", callback_data: `fx:users:${Math.min(totalPages - 1, safePage + 1)}` },
+      { text: `📄 ${safePage + 1}/${totalPages}`, callback_data: "fx:noop" },
+      { text: "下一页 ➡️", callback_data: `fx:users:${Math.min(totalPages - 1, safePage + 1)}` },
     ]);
   }
-  rows.push([{ text: "🏠 返回菜单", callback_data: "fx:menu" }]);
+  rows.push([{ text: "👤 返回我的账户", callback_data: "fx:user" }, { text: "🏠 主菜单", callback_data: "fx:menu" }]);
   return { text, keyboard: { inline_keyboard: rows } };
 }
 
@@ -1267,19 +1332,15 @@ async function adminUserText(userId: number) {
   const remaining = limit > 0 ? Math.max(0, limit - used) : null;
   const percent = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
   const text = [
-    `<b>管理用户 #${target.id}</b>`,
-    "",
-    `账户：${escapeHtml(target.name || target.username)}`,
-    `用户名：${escapeHtml(target.username)}`,
-    `角色：${target.role === "admin" ? "管理员" : "用户"}`,
-    `转发权限：${target.role === "admin" || target.canAddRules ? "已启用" : "已停用"}`,
-    `已用流量：${escapeHtml(formatBytes(used))}`,
-    `流量额度：${limit > 0 ? escapeHtml(formatBytes(limit)) : "不限"}`,
-    `剩余流量：${remaining === null ? "不限" : escapeHtml(formatBytes(remaining))}`,
-    limit > 0 ? `使用率：${percent}%` : "",
-    `到期时间：${escapeHtml(formatDate(target.expiresAt))}`,
-    `规则/端口：${ruleCount}${target.maxRules ? `/${target.maxRules}` : ""} 条，${portCount}${target.maxPorts ? `/${target.maxPorts}` : ""} 个端口`,
-    `TG：${target.telegramId ? (target.telegramUsername ? `@${escapeHtml(target.telegramUsername)}` : target.telegramId) : "未绑定"}`,
+    `<b>🛠️ 管理用户 · #${target.id}</b>`,
+    `<blockquote>├ 账户邮箱：<code>${escapeHtml(target.email || target.username)}</code>`,
+    `├ 绑定 TG：${target.telegramId ? (target.telegramUsername ? `@${escapeHtml(target.telegramUsername)}` : escapeHtml(target.telegramId)) : "未绑定"}`,
+    `├ 角色状态：<b>${target.role === "admin" ? "管理员" : "用户"}</b> · ${target.role === "admin" || target.canAddRules ? "🟢 转发已启用" : "🔴 转发已停用"}`,
+    `├ 流量使用：<b>${escapeHtml(formatBytes(used))}</b> / ${limit > 0 ? escapeHtml(formatBytes(limit)) : "不限"}`,
+    `├ 剩余流量：<b>${remaining === null ? "不限" : escapeHtml(formatBytes(remaining))}</b>`,
+    limit > 0 ? `├ 使用率：${percent}%` : "",
+    `├ 资源占用：<b>${ruleCount}</b> 条规则 · <b>${portCount}</b> 个端口`,
+    `└ 到期时间：<b>${escapeHtml(formatDate(target.expiresAt))}</b></blockquote>`,
   ].filter(Boolean).join("\n");
   return { target, text };
 }
@@ -1293,11 +1354,45 @@ async function adminUserKeyboard(userId: number, page = 0): Promise<InlineKeyboa
         { text: "🔄 重置流量", callback_data: `fx:admin:reset:${userId}:${page}` },
         { text: accessEnabled ? "⛔ 停用转发" : "✅ 启用转发", callback_data: `fx:admin:access:${userId}:${accessEnabled ? "0" : "1"}:${page}` },
       ],
-      [{ text: "📆 续期 1 个月", callback_data: `fx:admin:renew:${userId}:${page}` }],
-      [{ text: "🔄 刷新详情", callback_data: `fx:admin:user:${userId}:${page}` }],
-      [{ text: "👥 返回用户列表", callback_data: `fx:users:${page}` }],
-      [{ text: "🏠 返回菜单", callback_data: "fx:menu" }],
+      [
+        { text: "📆 续期 1 个月", callback_data: `fx:admin:renew:${userId}:${page}` },
+        { text: "🔄 刷新详情", callback_data: `fx:admin:user:${userId}:${page}` },
+      ],
+      [
+        { text: "👥 返回用户列表", callback_data: `fx:users:${page}` },
+        { text: "🏠 主菜单", callback_data: "fx:menu" },
+      ],
     ],
+  };
+}
+
+type TelegramUserAction = "reset" | "access" | "renew";
+const pendingTelegramUserActions = new Map<string, { actorId: number; userId: number; page: number; action: TelegramUserAction; enabled?: boolean; expiresAt: number }>();
+
+function createTelegramUserAction(actorId: number, userId: number, page: number, action: TelegramUserAction, enabled?: boolean) {
+  for (const [key, pending] of pendingTelegramUserActions) {
+    if (pending.expiresAt <= Date.now()) pendingTelegramUserActions.delete(key);
+  }
+  const key = randomCode(16);
+  pendingTelegramUserActions.set(key, { actorId, userId, page, action, enabled, expiresAt: Date.now() + 5 * 60_000 });
+  return key;
+}
+
+async function userActionConfirmView(actorId: number, userId: number, page: number, action: TelegramUserAction, enabled?: boolean) {
+  const target = await db.getUserById(userId);
+  if (!target) return null;
+  if (action === "access" && (target.role === "admin" || !!target.canAddRules === enabled)) return null;
+  const title = action === "reset" ? "⚠️ 确认重置已用流量？" : enabled ? "⚠️ 确认启用转发权限？" : "⚠️ 确认停用转发权限？";
+  const description = action === "reset"
+    ? `将清零当前周期已用流量（当前 ${escapeHtml(formatBytes(target.trafficUsed))}），不可撤销。`
+    : enabled ? "将恢复该用户的转发权限。" : "该用户的转发将被暂停。";
+  const key = createTelegramUserAction(actorId, userId, page, action, enabled);
+  return {
+    text: `<b>${title}</b>\n<blockquote>├ 目标用户：<b>#${userId}</b> (<code>${escapeHtml(target.email || target.username)}</code>)\n└ 操作说明：${description}</blockquote>\n请确认是否继续执行：`,
+    keyboard: { inline_keyboard: [[
+      { text: action === "reset" ? "✅ 确认重置流量" : enabled ? "✅ 确认启用转发" : "✅ 确认停用转发", callback_data: `fx:admin:confirm:${key}` },
+      { text: "❌ 取消返回", callback_data: `fx:admin:user:${userId}:${page}` },
+    ]] } as InlineKeyboardMarkup,
   };
 }
 
@@ -1306,14 +1401,11 @@ async function renewalConfirmText(userId: number) {
   if (!target) return { target: null, text: "用户不存在。" };
   const { base, nextExpiresAt } = getRenewalDates(target, 1);
   const text = [
-    "<b>确认套餐续期</b>",
-    "",
-    `用户：#${target.id} ${escapeHtml(target.name || target.username)}`,
-    `当前到期：${escapeHtml(formatDateTime(target.expiresAt))}`,
-    `续期方式：从${base.getTime() > Date.now() ? "当前到期时间" : "当前时间"}起延长 1 个月`,
-    `续期后到期：<b>${escapeHtml(formatDateTime(nextExpiresAt))}</b>`,
-    "",
-    "请确认后再执行续期。",
+    "<b>⚠️ 确认续期 1 个月？</b>",
+    `<blockquote>├ 目标用户：<b>#${target.id}</b> (<code>${escapeHtml(target.email || target.username)}</code>)`,
+    `├ 当前到期：${escapeHtml(formatDateTime(target.expiresAt))}`,
+    `└ 续期后到期：<b>${escapeHtml(formatDateTime(nextExpiresAt))}</b></blockquote>`,
+    `将从${base.getTime() > Date.now() ? "当前到期时间" : "当前时间"}起延长 1 个月。请确认是否继续执行：`,
   ].join("\n");
   return { target, text, nextExpiresAt };
 }
@@ -1324,6 +1416,138 @@ async function renewUserOneMonth(actor: any, userId: number) {
   const { nextExpiresAt } = getRenewalDates(target, 1);
   await renewUserCommand({ actor, targetUserId: userId, expiresAt: nextExpiresAt, reasonPrefix: "telegram-command-user-renewed" });
   return { target, nextExpiresAt };
+}
+
+function subscriptionClientTypes(subscription: TelegramSubscription): string[] {
+  try {
+    const output = JSON.parse(subscription.Config || "{}").output_type;
+    return output === "clash" ? ["clash", "v2ray"] : ["egern", "loon", "surge"].includes(output) ? [output] : ["clash"];
+  } catch { return ["clash"]; }
+}
+
+function subscriptionUrl(panelUrl: string, subscription: TelegramSubscription, client: string) {
+  const url = new URL("/c/", panelUrl);
+  url.searchParams.set("token", subscription.Token);
+  url.searchParams.set("client", client);
+  return url.toString();
+}
+
+async function subscriptionsView(page = 0) {
+  const subscriptions = await listTelegramSubscriptions();
+  const { page: safePage, totalPages } = clampPage(page, subscriptions.length, 5);
+  const visible = subscriptions.slice(safePage * 5, safePage * 5 + 5);
+  const text = `<b>🔗 ForwardX 订阅中心</b> <i>(第 ${safePage + 1}/${totalPages} 页 · 共 ${subscriptions.length} 条)</i>\n\n${visible.length ? visible.map((s) => `${s.Revoked ? "🔴" : "🟢"} <b>#${s.ID}</b> ${escapeHtml(s.Name)}`).join("\n") : "暂无订阅。"}\n\n点击下方编号查看订阅地址：`;
+  const rows: InlineKeyboardMarkup["inline_keyboard"] = [];
+  if (visible.length) rows.push(visible.map((s) => ({ text: `#${s.ID}`, callback_data: `fx:sub:view:${s.ID}:${safePage}` })));
+  if (totalPages > 1) rows.push([
+    { text: "⬅️ 上一页", callback_data: `fx:sub:list:${Math.max(0, safePage - 1)}` },
+    { text: `📄 ${safePage + 1}/${totalPages}`, callback_data: "fx:noop" },
+    { text: "下一页 ➡️", callback_data: `fx:sub:list:${Math.min(totalPages - 1, safePage + 1)}` },
+  ]);
+  rows.push([{ text: "🏠 主菜单", callback_data: "fx:menu" }]);
+  return { text, keyboard: { inline_keyboard: rows } };
+}
+
+async function subscriptionDetailView(id: number, page: number) {
+  const subscription = (await listTelegramSubscriptions()).find((s) => s.ID === id);
+  if (!subscription) return null;
+  const settings = await getTelegramSettings();
+  const clients = subscriptionClientTypes(subscription);
+  const urls = settings.panelPublicUrl && subscription.Token
+    ? clients.map((client) => `${escapeHtml(client.toUpperCase())}：<code>${escapeHtml(subscriptionUrl(settings.panelPublicUrl!, subscription, client))}</code>`)
+    : ["尚未配置面板公开地址或订阅凭证，请在面板中检查设置。"];
+  const text = `<b>🔗 ${escapeHtml(subscription.Name)}</b> · #${id}\n${subscription.Revoked ? "🔴 已停用" : "🟢 可用"}\n\n<blockquote>${urls.join("\n\n")}</blockquote>\n链接为访问凭证，请勿转发。`;
+  const rows: InlineKeyboardMarkup["inline_keyboard"] = [];
+  if (settings.panelPublicUrl && subscription.Token && !subscription.Revoked) {
+    for (const client of clients) rows.push([{ text: `📨 单发 ${client.toUpperCase()} 链接`, callback_data: `fx:sub:send:${id}:${client}` }]);
+  }
+  rows.push([{ text: `🌐 查看节点信息 (${subscription.Nodes?.length || 0})`, callback_data: `fx:sub:nodes:${id}:0` }]);
+  if (!subscription.Revoked) rows.push([{ text: "🔑 重置订阅链接", callback_data: `fx:sub:reset:${id}:${page}` }]);
+  rows.push([{ text: "🔙 返回订阅列表", callback_data: `fx:sub:list:${page}` }, { text: "🏠 主菜单", callback_data: "fx:menu" }]);
+  return { text, keyboard: { inline_keyboard: rows }, subscription };
+}
+
+function subscriptionNodeEndpoint(link: string): { protocol: string; endpoint: string | null } {
+  const protocol = link.match(/^([a-z][a-z\d+.-]*):\/\//i)?.[1]?.toUpperCase() || "未知";
+  try {
+    let value = link;
+    if (protocol === "SS" && !link.split(/[?#]/)[0].includes("@")) {
+      const encoded = link.replace(/^ss:\/\//i, "").split(/[?#]/)[0];
+      value = `ss://${Buffer.from(encoded, "base64url").toString("utf8")}`;
+    }
+    if (protocol === "VMESS") {
+      const encoded = link.replace(/^vmess:\/\//i, "").split(/[?#]/)[0];
+      const node = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+      const host = String(node.add || "");
+      const port = Number(node.port);
+      return { protocol, endpoint: host && port > 0 && port <= 65535 ? `${host}:${port}` : null };
+    }
+    const url = new URL(value);
+    return { protocol, endpoint: url.hostname && url.port ? `${url.hostname}:${url.port}` : null };
+  } catch { return { protocol, endpoint: null }; }
+}
+
+async function subscriptionNodesView(id: number, page: number) {
+  const subscription = (await listTelegramSubscriptions()).find((s) => s.ID === id);
+  if (!subscription) return null;
+  const nodes = subscription.Nodes || [];
+  const { page: safePage, totalPages } = clampPage(page, nodes.length, 5);
+  const visible = nodes.slice(safePage * 5, safePage * 5 + 5);
+  const text = `<b>🌐 节点信息</b> <i>(第 ${safePage + 1}/${totalPages} 页 · 共 ${nodes.length} 个)</i>\n\n${visible.length ? visible.map((n) => {
+    const { protocol, endpoint } = subscriptionNodeEndpoint(n.Link || "");
+    return `${n.Disabled ? "🔴" : "🟢"} <b>#${n.ID} ${escapeHtml(n.Name)}</b>\n<blockquote>├ 入口地址：${endpoint ? `<code>${escapeHtml(endpoint)}</code>` : "暂无可识别地址"}\n└ 节点协议：${escapeHtml(protocol)}</blockquote>`;
+  }).join("\n\n") : "暂无节点。"}`;
+  const rows: InlineKeyboardMarkup["inline_keyboard"] = [];
+  if (totalPages > 1) rows.push([
+    { text: "⬅️ 上一页", callback_data: `fx:sub:nodes:${id}:${Math.max(0, safePage - 1)}` },
+    { text: `📄 ${safePage + 1}/${totalPages}`, callback_data: "fx:noop" },
+    { text: "下一页 ➡️", callback_data: `fx:sub:nodes:${id}:${Math.min(totalPages - 1, safePage + 1)}` },
+  ]);
+  rows.push([{ text: "🔙 返回订阅链接", callback_data: `fx:sub:view:${id}:0` }, { text: "🏠 主菜单", callback_data: "fx:menu" }]);
+  return { text, keyboard: { inline_keyboard: rows } };
+}
+
+const pendingTelegramSubResets = new Map<string, { actorId: number; subscriptionId: number; page: number; expiresAt: number }>();
+
+async function entryGroupsForTelegramAdmin() {
+  const groups = await db.getForwardGroups(undefined, { includeRuntime: true });
+  return (groups as any[]).filter((group) => group.groupMode === "entry");
+}
+
+async function entryGroupsView(page = 0) {
+  const groups = await entryGroupsForTelegramAdmin();
+  const { page: safePage, totalPages } = clampPage(page, groups.length, 5);
+  const visible = groups.slice(safePage * 5, safePage * 5 + 5);
+  const text = `<b>📡 入口组监控</b> <i>(第 ${safePage + 1}/${totalPages} 页 · 共 ${groups.length} 个)</i>\n\n${visible.length ? visible.map((g) => `${g.isEnabled ? "🟢" : "🔴"} <b>#${g.id} ${escapeHtml(g.name)}</b>\n<blockquote>域名：<code>${escapeHtml(g.domain || "未配置")}</code></blockquote>`).join("\n\n") : "暂无入口组。"}`;
+  const rows: InlineKeyboardMarkup["inline_keyboard"] = [];
+  if (visible.length) rows.push(visible.map((g) => ({ text: `#${g.id}`, callback_data: `fx:entry:view:${g.id}` })));
+  if (totalPages > 1) rows.push([
+    { text: "⬅️ 上一页", callback_data: `fx:entry:list:${Math.max(0, safePage - 1)}` },
+    { text: `📄 ${safePage + 1}/${totalPages}`, callback_data: "fx:noop" },
+    { text: "下一页 ➡️", callback_data: `fx:entry:list:${Math.min(totalPages - 1, safePage + 1)}` },
+  ]);
+  rows.push([{ text: "🏠 主菜单", callback_data: "fx:menu" }]);
+  return { text, keyboard: { inline_keyboard: rows } };
+}
+
+async function entryGroupDetailView(groupId: number) {
+  const group = (await entryGroupsForTelegramAdmin()).find((g) => Number(g.id) === groupId);
+  if (!group) return null;
+  const text = `<b>📡 入口组详情 · #${groupId}</b>\n<blockquote>├ 名称：<b>${escapeHtml(group.name)}</b>\n├ 状态：${group.isEnabled ? "🟢 已启用" : "🔴 已停用"}\n├ 域名：<code>${escapeHtml(group.domain || "未配置")}</code>\n├ 记录类型：${escapeHtml(group.recordType || "A")}\n└ 成员数量：${group.members?.length || 0}</blockquote>`;
+  return { text, keyboard: { inline_keyboard: [
+    [{ text: "📋 查看事件记录", callback_data: `fx:entry:events:${groupId}` }, { text: "🔄 刷新", callback_data: `fx:entry:view:${groupId}` }],
+    [{ text: "🔙 返回入口组", callback_data: "fx:entry-groups" }, { text: "🏠 主菜单", callback_data: "fx:menu" }],
+  ] } as InlineKeyboardMarkup };
+}
+
+async function entryGroupEventsView(groupId: number) {
+  const group = (await entryGroupsForTelegramAdmin()).find((g) => Number(g.id) === groupId);
+  if (!group) return null;
+  const events = await db.getForwardGroupEvents(groupId, 5);
+  const text = `<b>📋 入口组事件记录 · #${groupId}</b>\n\n${events.length ? events.map((event: any) => `<blockquote>${escapeHtml(formatDateTime(event.createdAt))}\n${escapeHtml(shortText(event.message || event.type || "事件", 240))}</blockquote>`).join("\n\n") : "暂无事件记录。"}`;
+  return { text, keyboard: { inline_keyboard: [
+    [{ text: "🔙 返回入口组详情", callback_data: `fx:entry:view:${groupId}` }, { text: "🏠 主菜单", callback_data: "fx:menu" }],
+  ] } as InlineKeyboardMarkup };
 }
 
 async function loginText(user: any) {
@@ -1351,7 +1575,7 @@ async function sendMainMenu(chatId: number | string, user: any) {
       createTelegramWebAppLoginChallenge({ telegramId: user?.telegramId || null }),
     )
     : "";
-  await sendMessage(chatId, menuText(user), mainMenuKeyboard(user, webAppUrl || undefined));
+  await sendMessage(chatId, await menuText(user), mainMenuKeyboard(user, webAppUrl || undefined));
 }
 
 async function editMainMenu(chatId: number | string, messageId: number, user: any) {
@@ -1362,7 +1586,7 @@ async function editMainMenu(chatId: number | string, messageId: number, user: an
       createTelegramWebAppLoginChallenge({ telegramId: user?.telegramId || null }),
     )
     : "";
-  await editMessage(chatId, messageId, menuText(user), mainMenuKeyboard(user, webAppUrl || undefined));
+  await editMessage(chatId, messageId, await menuText(user), mainMenuKeyboard(user, webAppUrl || undefined));
 }
 
 async function handleBind(message: TelegramMessage, code: string) {
@@ -4657,22 +4881,22 @@ async function handleReset(message: TelegramMessage, actor: any, userIdRaw: stri
     await sendMessage(message.chat.id, "请发送 /reset 用户ID，例如：/reset 8");
     return;
   }
-  try {
-    const result = await resetUserTrafficCommand({ actor, targetUserId: userId, reasonPrefix: "telegram-command-traffic-reset" });
-    await sendMessage(message.chat.id, `用户 #${userId} ${escapeHtml(result.target.name || result.target.username)} 的流量已重置。`);
-  } catch (error: any) {
-    await sendMessage(message.chat.id, error?.message || "重置用户流量失败。");
-  }
+  const confirm = await userActionConfirmView(Number(actor.id), userId, 0, "reset");
+  await sendMessage(message.chat.id, confirm?.text || "用户不存在。", confirm?.keyboard);
 }
 
-async function handleRenew(message: TelegramMessage, userIdRaw: string | undefined) {
+async function handleRenew(message: TelegramMessage, actor: any, userIdRaw: string | undefined) {
   const userId = Number(userIdRaw);
   if (!Number.isFinite(userId) || userId <= 0) {
     await sendMessage(message.chat.id, "请发送 /renew 用户ID，例如：/renew 8。该操作需要二次确认。");
     return;
   }
   const detail = await renewalConfirmText(userId);
-  await sendMessage(message.chat.id, detail.text, detail.target ? renewalConfirmKeyboard(userId, 0) : undefined);
+  const key = detail.target ? createTelegramUserAction(Number(actor.id), userId, 0, "renew") : "";
+  await sendMessage(message.chat.id, detail.text, detail.target ? { inline_keyboard: [[
+    { text: "✅ 确认续期 1 个月", callback_data: `fx:admin:confirm:${key}` },
+    { text: "❌ 取消返回", callback_data: `fx:admin:user:${userId}:0` },
+  ]] } : undefined);
 }
 
 async function handleUpdatePanel(message: TelegramMessage, user: any) {
@@ -4957,7 +5181,7 @@ async function handleMessage(message: TelegramMessage) {
 
   if (user.role === "admin" && command === "/users") return handleUsers(message);
   if (user.role === "admin" && command === "/reset") return handleReset(message, user, args[0]);
-  if (user.role === "admin" && command === "/renew") return handleRenew(message, args[0]);
+  if (user.role === "admin" && command === "/renew") return handleRenew(message, user, args[0]);
   if (user.role === "admin" && command === "/updatepanel") return handleUpdatePanel(message, user);
   if (user.role === "admin" && command === "/updateagent") return handleUpdateAgent(message, user);
 
@@ -5065,17 +5289,188 @@ async function handleCallback(query: TelegramCallbackQuery) {
     return;
   }
 
+  if (data === "fx:noop") return;
+
+  if (data === "fx:subscriptions" || data.startsWith("fx:sub:")) {
+    if (user.role !== "admin" || query.message.chat.type !== "private") {
+      await editMessage(chatId, messageId, "订阅凭证只允许管理员在与 Bot 的私聊中查看。", backMenuKeyboard());
+      return;
+    }
+    if (data === "fx:subscriptions" || data.startsWith("fx:sub:list:")) {
+      const page = data.startsWith("fx:sub:list:") ? Number(data.split(":")[3]) : 0;
+      const view = await subscriptionsView(page);
+      await editMessage(chatId, messageId, view.text, view.keyboard);
+      return;
+    }
+    if (data.startsWith("fx:sub:view:")) {
+      const [, , , idRaw, pageRaw] = data.split(":");
+      const view = await subscriptionDetailView(Number(idRaw), Number(pageRaw || 0));
+      await editMessage(chatId, messageId, view?.text || "订阅已不存在。", view?.keyboard || backMenuKeyboard());
+      return;
+    }
+    if (data.startsWith("fx:sub:nodes:")) {
+      const [, , , idRaw, pageRaw] = data.split(":");
+      const view = await subscriptionNodesView(Number(idRaw), Number(pageRaw || 0));
+      await editMessage(chatId, messageId, view?.text || "订阅已不存在。", view?.keyboard || backMenuKeyboard());
+      return;
+    }
+    if (data.startsWith("fx:sub:send:")) {
+      const [, , , idRaw, client] = data.split(":");
+      const view = await subscriptionDetailView(Number(idRaw), 0);
+      const settings = await getTelegramSettings();
+      if (!view?.subscription.Token || view.subscription.Revoked || !settings.panelPublicUrl || !subscriptionClientTypes(view.subscription).includes(client)) {
+        await editMessage(chatId, messageId, "订阅链接不可用，请刷新订阅。", backMenuKeyboard());
+        return;
+      }
+      await sendMessage(chatId, `<code>${escapeHtml(subscriptionUrl(settings.panelPublicUrl, view.subscription, client))}</code>`);
+      return;
+    }
+    if (data.startsWith("fx:sub:reset:")) {
+      const [, , , idRaw, pageRaw] = data.split(":");
+      const id = Number(idRaw);
+      const page = Number(pageRaw || 0);
+      const view = await subscriptionDetailView(id, page);
+      if (!view || view.subscription.Revoked) {
+        await editMessage(chatId, messageId, "订阅不存在或已停用；停用状态下请在面板管理订阅。", backMenuKeyboard());
+        return;
+      }
+      const key = randomCode(16);
+      for (const [token, pending] of pendingTelegramSubResets) if (pending.expiresAt <= Date.now()) pendingTelegramSubResets.delete(token);
+      pendingTelegramSubResets.set(key, { actorId: Number(user.id), subscriptionId: id, page, expiresAt: Date.now() + 5 * 60_000 });
+      await editMessage(chatId, messageId,
+        `<b>⚠️ 确认重置订阅链接？</b>\n<blockquote>订阅：<b>${escapeHtml(view.subscription.Name)}</b> (#${id})\n旧链接将立即失效，所有客户端都需要更新地址。</blockquote>`,
+        { inline_keyboard: [[
+          { text: "✅ 确认重置", callback_data: `fx:sub:confirm:${key}` },
+          { text: "❌ 取消", callback_data: `fx:sub:view:${id}:${page}` },
+        ]] });
+      return;
+    }
+    if (data.startsWith("fx:sub:confirm:")) {
+      const key = data.slice("fx:sub:confirm:".length);
+      const pending = pendingTelegramSubResets.get(key);
+      if (!pending || pending.expiresAt <= Date.now() || pending.actorId !== Number(user.id)) {
+        await editMessage(chatId, messageId, "操作已过期或已执行，请重新发起。", backMenuKeyboard());
+        return;
+      }
+      pendingTelegramSubResets.delete(key);
+      if (!(await listTelegramSubscriptions()).some((s) => s.ID === pending.subscriptionId && !s.Revoked)) {
+        await editMessage(chatId, messageId, "订阅已不存在或已停用，请刷新订阅。", backMenuKeyboard());
+        return;
+      }
+      await resetTelegramSubscriptionToken(pending.subscriptionId);
+      const view = await subscriptionDetailView(pending.subscriptionId, pending.page);
+      await editMessage(chatId, messageId, `订阅链接已重置，旧地址立即失效。\n\n${view?.text || "订阅已不存在。"}`, view?.keyboard || backMenuKeyboard());
+      return;
+    }
+  }
+
+  if (data === "fx:entry-groups" || data.startsWith("fx:entry:")) {
+    if (user.role !== "admin") {
+      await editMessage(chatId, messageId, "你没有管理员权限。", backMenuKeyboard());
+      return;
+    }
+    const parts = data.split(":");
+    const view = data === "fx:entry-groups" || parts[2] === "list"
+      ? await entryGroupsView(parts[2] === "list" ? Number(parts[3] || 0) : 0)
+      : parts[2] === "view" ? await entryGroupDetailView(Number(parts[3]))
+      : parts[2] === "events" ? await entryGroupEventsView(Number(parts[3])) : null;
+    await editMessage(chatId, messageId, view?.text || "入口组不存在。", view?.keyboard || backMenuKeyboard());
+    return;
+  }
+
   if (data.startsWith("fx:rules:")) {
     const page = Number(data.split(":")[2] || 0);
     const view = await rulesView(user, page);
     await editMessage(chatId, messageId, view.text, view.keyboard);
     return;
   }
+  if (data.startsWith("fx:rule:probe:result:")) {
+    const [, , , , ruleIdRaw, testIdRaw, pageRaw] = data.split(":");
+    const ruleId = Number(ruleIdRaw);
+    const testId = Number(testIdRaw);
+    const page = Number(pageRaw || 0);
+    const rule = (await visibleRulesForTelegramUser(user)).find((item: any) => Number(item.id) === ruleId);
+    const test = Number.isSafeInteger(testId) && testId > 0 ? await db.getForwardTestById(testId) : null;
+    if (!rule || !test || Number(test.ruleId) !== ruleId || linkProbeMethodForRule(rule) !== "tcp") {
+      await editMessage(chatId, messageId, "探测任务不存在或无权查看。", ruleListBackKeyboard(page));
+      return;
+    }
+    const entry = await db.getHostById(Number(test.hostId));
+    const entryName = String((entry as any)?.name || `主机 #${test.hostId}`);
+    await editMessage(chatId, messageId, formatTelegramRuleProbeResult(ruleId, entryName, test), {
+      inline_keyboard: [
+        ...(test.status === "pending" || test.status === "running" ? [[{ text: "🔄 查询探测结果", callback_data: data }]] : []),
+        [{ text: "🔙 返回规则列表", callback_data: `fx:rules:${page}` }],
+      ],
+    });
+    return;
+  }
+  if (data.startsWith("fx:rule:probe:start:")) {
+    const [, , , , ruleIdRaw, pageRaw, hostRaw] = data.split(":");
+    const ruleId = Number(ruleIdRaw);
+    const page = Number(pageRaw || 0);
+    const hostId = Number(hostRaw);
+    const rule = (await visibleRulesForTelegramUser(user)).find((item: any) => Number(item.id) === ruleId);
+    if (!rule || !rule.isEnabled) {
+      await editMessage(chatId, messageId, "规则不存在、未启用或无权操作。", ruleListBackKeyboard(page));
+      return;
+    }
+    const entries = await ruleProbeEntries(rule);
+    const entry = entries.find((item) => item.hostId === hostId);
+    if (!entry) {
+      await editMessage(chatId, messageId, "入口已变化或不支持 TCP 延迟探测，请重新选择。", await ruleDetailKeyboard(ruleId, user, page));
+      return;
+    }
+    const key = `${user.id}:${ruleId}:${hostId}`;
+    if ((activeTelegramRuleProbes.get(key) || 0) > Date.now()) {
+      await editMessage(chatId, messageId, "该入口正在探测中，请等待上一次结果。", await ruleDetailKeyboard(ruleId, user, page));
+      return;
+    }
+    activeTelegramRuleProbes.set(key, Date.now() + 35_000);
+    try {
+      const { selfTestRulesRouter } = await import("./routers/rules.selfTest");
+      const caller = selfTestRulesRouter.createCaller({ user, req: { headers: {} }, res: {}, authSession: null, authFailureReason: null } as any);
+      const result = await caller.startTopologyTotalTest({ ruleId, entryHostId: hostId });
+      const testId = Number(result.id);
+      await editMessage(chatId, messageId, formatTelegramRuleProbeResult(ruleId, entry.name, { status: "pending" }), {
+        inline_keyboard: [
+          [{ text: "🔄 查询探测结果", callback_data: `fx:rule:probe:result:${ruleId}:${testId}:${page}` }],
+          [{ text: "🔙 返回规则列表", callback_data: `fx:rules:${page}` }],
+        ],
+      });
+      void watchTelegramRuleProbe(chatId, Number(user.id), ruleId, entry.name, testId, page, key);
+    } catch (error) {
+      activeTelegramRuleProbes.delete(key);
+      throw error;
+    }
+    return;
+  }
+  if (data.startsWith("fx:rule:probe:")) {
+    const [, , , ruleIdRaw, pageRaw] = data.split(":");
+    const ruleId = Number(ruleIdRaw);
+    const page = Number(pageRaw || 0);
+    const rule = (await visibleRulesForTelegramUser(user)).find((item: any) => Number(item.id) === ruleId);
+    if (!rule || !rule.isEnabled) {
+      await editMessage(chatId, messageId, "规则不存在、未启用或无权操作。", ruleListBackKeyboard(page));
+      return;
+    }
+    const entries = await ruleProbeEntries(rule);
+    if (!entries.length) {
+      await editMessage(chatId, messageId, "此规则没有可用的 TCP 入口；纯 UDP 或隧道入口不支持这项端到端探测。", await ruleDetailKeyboard(ruleId, user, page));
+      return;
+    }
+    const rows: InlineKeyboardMarkup["inline_keyboard"] = entries.slice(0, 20).map((entry) => [
+      { text: `⚡ ${shortText(entry.name, 30)} (#${entry.hostId})`, callback_data: `fx:rule:probe:start:${ruleId}:${page}:${entry.hostId}` },
+    ]);
+    rows.push([{ text: "❌ 取消返回", callback_data: `fx:rule:view:${ruleId}:${page}` }]);
+    await editMessage(chatId, messageId, `<b>⚡ 探测延迟 · 规则 #${ruleId}</b>\n请选择入口主机，Bot 将手动执行一次端到端 TCP 连接延迟探测（非吞吐测速）：`, { inline_keyboard: rows });
+    return;
+  }
   if (data.startsWith("fx:rule:view:")) {
     const [, , , ruleIdRaw, pageRaw] = data.split(":");
     const ruleId = Number(ruleIdRaw);
     const page = Number(pageRaw || 0);
-    await editMessage(chatId, messageId, await ruleDetailText(ruleId, user), ruleListBackKeyboard(page));
+    await editMessage(chatId, messageId, await ruleDetailText(ruleId, user), await ruleDetailKeyboard(ruleId, user, page));
     return;
   }
   if (data.startsWith("fx:rule:toggle:")) {
@@ -5114,6 +5509,34 @@ async function handleCallback(query: TelegramCallbackQuery) {
     await editMessage(chatId, messageId, detail.text, detail.target ? await adminUserKeyboard(userId, page) : userManageBackKeyboard(page));
     return;
   }
+  if (data.startsWith("fx:admin:confirm:")) {
+    if (user.role !== "admin") {
+      await editMessage(chatId, messageId, "你没有管理员权限。", backMenuKeyboard());
+      return;
+    }
+    const key = data.slice("fx:admin:confirm:".length);
+    const pending = pendingTelegramUserActions.get(key);
+    if (!pending || pending.expiresAt <= Date.now() || pending.actorId !== Number(user.id)) {
+      await editMessage(chatId, messageId, "操作已过期或已处理，请从用户详情重新发起。", backMenuKeyboard());
+      return;
+    }
+    pendingTelegramUserActions.delete(key);
+    const target = await db.getUserById(pending.userId);
+    if (!target || (pending.action === "access" && (target.role === "admin" || !!target.canAddRules === pending.enabled))) {
+      await editMessage(chatId, messageId, "用户不存在或状态已变化，请重新确认。", userManageBackKeyboard(pending.page));
+      return;
+    }
+    if (pending.action === "reset") {
+      await resetUserTrafficCommand({ actor: user, targetUserId: pending.userId, reasonPrefix: "telegram-menu-traffic-reset" });
+    } else if (pending.action === "access") {
+      await setUserForwardAccessCommand({ actor: user, targetUserId: pending.userId, enabled: !!pending.enabled, reasonPrefix: "telegram-menu-user-forward" });
+    } else {
+      await renewUserOneMonth(user, pending.userId);
+    }
+    const detail = await adminUserText(pending.userId);
+    await editMessage(chatId, messageId, `操作已完成。\n\n${detail.text}`, await adminUserKeyboard(pending.userId, pending.page));
+    return;
+  }
   if (data.startsWith("fx:admin:reset:")) {
     if (user.role !== "admin") {
       await editMessage(chatId, messageId, "你没有管理员权限。", backMenuKeyboard());
@@ -5127,9 +5550,8 @@ async function handleCallback(query: TelegramCallbackQuery) {
       await editMessage(chatId, messageId, "用户不存在。", userManageBackKeyboard(page));
       return;
     }
-    await resetUserTrafficCommand({ actor: user, targetUserId: userId, reasonPrefix: "telegram-menu-traffic-reset" });
-    const detail = await adminUserText(userId);
-    await editMessage(chatId, messageId, `已重置用户 #${userId} 的流量。\n\n${detail.text}`, await adminUserKeyboard(userId, page));
+    const confirm = await userActionConfirmView(Number(user.id), userId, page, "reset");
+    if (confirm) await editMessage(chatId, messageId, confirm.text, confirm.keyboard);
     return;
   }
   if (data.startsWith("fx:admin:access:")) {
@@ -5150,27 +5572,14 @@ async function handleCallback(query: TelegramCallbackQuery) {
       return;
     }
     const enabled = enabledRaw === "1";
-    await setUserForwardAccessCommand({ actor: user, targetUserId: userId, enabled, reasonPrefix: "telegram-menu-user-forward" });
-    const detail = await adminUserText(userId);
-    await editMessage(chatId, messageId, `已${enabled ? "启用" : "停用"}用户 #${userId} 的转发权限。\n\n${detail.text}`, await adminUserKeyboard(userId, page));
+    const confirm = await userActionConfirmView(Number(user.id), userId, page, "access", enabled);
+    if (confirm) await editMessage(chatId, messageId, confirm.text, confirm.keyboard);
+    else await editMessage(chatId, messageId, "用户状态已变化，请刷新详情。", userManageBackKeyboard(page));
     return;
   }
+  // Do not execute legacy confirmation callbacks: they have no one-time token.
   if (data.startsWith("fx:admin:renew:confirm:")) {
-    if (user.role !== "admin") {
-      await editMessage(chatId, messageId, "你没有管理员权限。", backMenuKeyboard());
-      return;
-    }
-    const [, , , , userIdRaw, pageRaw] = data.split(":");
-    const userId = Number(userIdRaw);
-    const page = Number(pageRaw || 0);
-    const result = await renewUserOneMonth(user, userId);
-    const detail = await adminUserText(userId);
-    await editMessage(
-      chatId,
-      messageId,
-      `已为用户 #${userId} 续期 1 个月。\n新到期时间：<b>${escapeHtml(formatDateTime(result.nextExpiresAt))}</b>\n\n${detail.text}`,
-      await adminUserKeyboard(userId, page),
-    );
+    await editMessage(chatId, messageId, "旧版确认按钮已失效，请从用户详情重新发起续期。", backMenuKeyboard());
     return;
   }
   if (data.startsWith("fx:admin:renew:")) {
@@ -5182,7 +5591,12 @@ async function handleCallback(query: TelegramCallbackQuery) {
     const userId = Number(userIdRaw);
     const page = Number(pageRaw || 0);
     const detail = await renewalConfirmText(userId);
-    await editMessage(chatId, messageId, detail.text, detail.target ? renewalConfirmKeyboard(userId, page) : userManageBackKeyboard(page));
+    const key = detail.target ? createTelegramUserAction(Number(user.id), userId, page, "renew") : "";
+    const keyboard: InlineKeyboardMarkup = detail.target ? { inline_keyboard: [[
+      { text: "✅ 确认续期 1 个月", callback_data: `fx:admin:confirm:${key}` },
+      { text: "❌ 取消返回", callback_data: `fx:admin:user:${userId}:${page}` },
+    ]] } : userManageBackKeyboard(page);
+    await editMessage(chatId, messageId, detail.text, keyboard);
     return;
   }
 
@@ -5364,10 +5778,13 @@ async function handleCallback(query: TelegramCallbackQuery) {
       await editMainMenu(chatId, messageId, user);
       return;
     case "fx:user":
-      await editMessage(chatId, messageId, userInfoText(user), backMenuKeyboard());
+      await editMessage(chatId, messageId, userInfoText(user), accountKeyboard(user));
       return;
     case "fx:usage":
-      await editMessage(chatId, messageId, await usageText(user), backMenuKeyboard());
+      await editMessage(chatId, messageId, await usageText(user), { inline_keyboard: [
+        [{ text: "⚙️ 管理转发规则", callback_data: "fx:rules" }, { text: "🔄 刷新数据", callback_data: "fx:usage" }],
+        [{ text: "🏠 返回主菜单", callback_data: "fx:menu" }],
+      ] });
       return;
     case "fx:rules":
       {

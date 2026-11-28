@@ -14,10 +14,23 @@ export function formatTopologyBlockNotification(event: TopologySegmentIncidentTr
   const source = escapeHtml(event.sourceName);
   const target = escapeHtml(event.targetName);
   const address = escapeHtml(event.targetAddress);
-  const subject = `<b>${source} → ${target}</b> (<code>${address}</code>)`;
-  return event.type === "blocked"
-    ? [`<b>🔴 拓扑物理链路阻断</b>`, "", subject, `连续失败已确认，持续 ${duration} 秒。`, `时间：${escapeHtml(time)}`].join("\n")
-    : [`<b>🟢 拓扑物理链路恢复</b>`, "", subject, `阻断共持续 ${duration} 秒${event.recoveryLatencyMs == null ? "" : `，恢复延迟 ${Math.max(0, event.recoveryLatencyMs)} ms`}。`, `时间：${escapeHtml(time)}`].join("\n");
+  const lines = [
+    `<b>${event.type === "blocked" ? "🔴 物理链路 · 已阻断" : "🟢 物理链路 · 已恢复"}</b>`,
+    "",
+    `<b>${source} → ${target}</b>`,
+    `目标：<code>${address}</code>`,
+    "",
+    "<blockquote>",
+    event.type === "blocked"
+      ? `连续探测失败：<b>${duration} 秒</b>`
+      : `阻断持续：<b>${duration} 秒</b>`,
+    event.type === "blocked" ? "状态：已确认阻断" : "",
+    event.type === "recovered" && event.recoveryLatencyMs != null && Number.isFinite(Number(event.recoveryLatencyMs))
+      ? `恢复探测延迟：<b>${Math.max(0, Number(event.recoveryLatencyMs))} ms</b>` : "",
+    "</blockquote>",
+    `🕒 ${escapeHtml(time)}`,
+  ];
+  return lines.filter(Boolean).join("\n");
 }
 
 // One physical edge can belong to several users' rules. Admins receive one

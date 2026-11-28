@@ -264,10 +264,10 @@ func (sub *Subcription) Find() error {
 	return nil
 }
 
-// List 订阅列表 (返回所有订阅，并加载其关联节点和日志，按指定顺序)
+// List 订阅列表（日志仅在打开访问记录时单独加载）
 func (sub *Subcription) List() ([]Subcription, error) {
 	var subs []Subcription
-	err := DB.Preload("Nodes").Preload("SubLogs").Find(&subs).Error // 预加载所有关联
+	err := DB.Preload("Nodes").Find(&subs).Error
 	if err != nil {
 		return nil, err
 	}

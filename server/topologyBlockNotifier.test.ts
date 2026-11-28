@@ -12,11 +12,17 @@ const blocked: TopologySegmentIncidentTransition = {
 
 test("topology block and recovery messages use confirmed incident times and escape names", () => {
   const text = formatTopologyBlockNotification(blocked);
-  assert.match(text, /持续 17 秒/);
+  assert.match(text, /🔴 物理链路 · 已阻断/);
+  assert.match(text, /连续探测失败：<b>17 秒<\/b>/);
+  assert.match(text, /状态：已确认阻断/);
   assert.match(text, /入口 &lt;JP&gt; → 出口 &amp;SG/);
+  assert.match(text, /目标：<code>203\.0\.113\.1<\/code>/);
   assert.doesNotMatch(text, /入口 <JP>/);
   const recovered = formatTopologyBlockNotification({ ...blocked, type: "recovered", occurredAt: new Date("2026-11-28T01:07:50Z"), recoveryLatencyMs: 94 });
-  assert.match(recovered, /阻断共持续 31 秒，恢复延迟 94 ms/);
+  assert.match(recovered, /🟢 物理链路 · 已恢复/);
+  assert.match(recovered, /阻断持续：<b>31 秒<\/b>/);
+  assert.match(recovered, /恢复探测延迟：<b>94 ms<\/b>/);
+  assert.doesNotMatch(formatTopologyBlockNotification({ ...blocked, type: "recovered", recoveryLatencyMs: null }), /恢复探测延迟/);
 });
 
 test("admin notifications deduplicate shared physical edges within one Agent report", () => {

@@ -75,6 +75,38 @@ function proxyToSublink(req: Request, res: Response, targetPath: string, options
   })();
 }
 
+// Server-only access for Telegram administration. Never forward this JWT to a Telegram chat.
+export type TelegramSubscription = {
+  ID: number;
+  Name: string;
+  Token: string;
+  Config?: string;
+  Revoked?: boolean;
+  Nodes?: Array<{ ID: number; Name: string; Link?: string; Disabled?: boolean }>;
+};
+
+export async function resetTelegramSubscriptionToken(id: number): Promise<void> {
+  const body = new URLSearchParams({ id: String(id) });
+  const response = await fetch(`http://${SUBLINK_HOST}:${SUBLINK_PORT}/api/v1/subcription/reset-token`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${issueSublinkToken()}`, "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!response.ok || (await response.json() as { code?: string }).code !== "00000") throw new Error("订阅 Token 重置失败");
+}
+
+export async function listTelegramSubscriptions(): Promise<TelegramSubscription[]> {
+  const response = await fetch(`http://${SUBLINK_HOST}:${SUBLINK_PORT}/api/v1/subcription/get`, {
+    headers: { Authorization: `Bearer ${issueSublinkToken()}` },
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!response.ok) throw new Error("订阅服务暂不可用");
+  const payload = await response.json() as { code?: string; data?: TelegramSubscription[] };
+  if (payload.code !== "00000" || !Array.isArray(payload.data)) throw new Error("订阅列表获取失败");
+  return payload.data;
+}
+
 /** Mount SublinkX APIs and public subscription endpoints behind ForwardX checks. */
 export function installSublinkProxy(app: Express) {
   app.use("/api/v1", (req, res) => proxyToSublink(req, res, req.originalUrl, { requireAdmin: true }));

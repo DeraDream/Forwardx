@@ -49,6 +49,30 @@ func SubGet(c *gin.Context) {
 	})
 }
 
+// SubLogsGet 按需返回指定订阅的访问记录；不随订阅列表一起传输。
+func SubLogsGet(c *gin.Context) {
+	id, err := strconv.Atoi(c.Query("id"))
+	if err != nil || id <= 0 {
+		c.JSON(400, gin.H{"msg": "订阅 ID 无效"})
+		return
+	}
+	var count int64
+	if err := models.DB.Model(&models.Subcription{}).Where("id = ?", id).Count(&count).Error; err != nil {
+		c.JSON(500, gin.H{"msg": "查询订阅失败"})
+		return
+	}
+	if count == 0 {
+		c.JSON(404, gin.H{"msg": "订阅不存在"})
+		return
+	}
+	var logs []models.SubLogs
+	if err := models.DB.Where("subcription_id = ?", id).Order("id desc").Find(&logs).Error; err != nil {
+		c.JSON(500, gin.H{"msg": "读取访问记录失败"})
+		return
+	}
+	c.JSON(200, gin.H{"code": "00000", "data": logs, "msg": "ok"})
+}
+
 // 添加订阅
 func buildNodesFromRefs(nodes string) ([]models.Node, error) {
 	var nodesData []models.Node
