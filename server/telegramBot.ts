@@ -13,6 +13,7 @@ import { formatForwardRuleProtocol } from "../shared/forwardTypes";
 import { linkProbeMethodForRule } from "../shared/latencyProbe";
 import { selectTopologyTotalTarget } from "./topologyTotalTarget";
 import { formatTelegramRuleProbeResult } from "./telegramRuleProbe";
+import { isTelegramMessageNotModified } from "./telegramEditError";
 import { isAgentVersionAtLeast } from "./agentRouteUtils";
 import { APP_VERSION, AGENT_VERSION } from "../shared/versions";
 import { checkPanelUpdateTask, startPanelUpgradeTask } from "./_core/systemRouter";
@@ -674,14 +675,18 @@ export async function syncTelegramBotCommands() {
 }
 
 async function editMessage(chatId: number | string, messageId: number, text: string, replyMarkup?: InlineKeyboardMarkup) {
-  await telegramApi("editMessageText", {
-    chat_id: chatId,
-    message_id: messageId,
-    text,
-    parse_mode: "HTML",
-    disable_web_page_preview: true,
-    ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-  });
+  try {
+    await telegramApi("editMessageText", {
+      chat_id: chatId,
+      message_id: messageId,
+      text,
+      parse_mode: "HTML",
+      disable_web_page_preview: true,
+      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+    });
+  } catch (error) {
+    if (!isTelegramMessageNotModified(error)) throw error;
+  }
 }
 
 async function deleteMessage(chatId: number | string, messageId: number) {
@@ -1248,35 +1253,45 @@ async function ruleProbeEntries(rule: any): Promise<Array<{ hostId: number; name
 }
 
 const activeTelegramRuleProbes = new Map<string, number>();
+const pendingTelegramProbeMessages = new Map<string, number>();
 
-async function watchTelegramRuleProbe(chatId: number | string, actorId: number, ruleId: number, entryName: string, testId: number, page: number, key: string) {
+function probeMessageKey(chatId: number | string, messageId: number) {
+  return `${chatId}:${messageId}`;
+}
+
+async function watchTelegramRuleProbe(chatId: number | string, messageId: number, actorId: number, ruleId: number, entryName: string, testId: number, page: number, key: string) {
+  const messageKey = probeMessageKey(chatId, messageId);
+  const isCurrent = () => pendingTelegramProbeMessages.get(messageKey) === testId;
   try {
-    for (let attempt = 0; attempt < 12; attempt++) {
+    // The Agent completes the existing asynchronous test; never substitute
+    // the most recent background sample for this particular test ID.
+    for (let attempt = 0; attempt < 120; attempt++) {
       await new Promise<void>((resolve) => { const timer = setTimeout(resolve, 2500); timer.unref?.(); });
+      if (!isCurrent()) return; // User navigated away from this message.
       const test = await db.getForwardTestById(testId);
+      if (!isCurrent()) return;
       if (!test || Number(test.ruleId) !== ruleId) break;
       if (test.status === "pending" || test.status === "running") continue;
       const actor = await db.getUserById(actorId);
-      if (actor?.accountEnabled !== false && actor?.telegramId &&
+      if (isCurrent() && actor?.accountEnabled !== false && actor?.telegramId &&
           (await visibleRulesForTelegramUser(actor)).some((rule: any) => Number(rule.id) === ruleId)) {
-        await sendMessage(chatId, formatTelegramRuleProbeResult(ruleId, entryName, test), ruleListBackKeyboard(page));
+        await editMessage(chatId, messageId, formatTelegramRuleProbeResult(ruleId, entryName, test), ruleListBackKeyboard(page));
       }
       return;
     }
     const actor = await db.getUserById(actorId);
-    if (actor?.accountEnabled !== false && actor?.telegramId &&
+    if (isCurrent() && actor?.accountEnabled !== false && actor?.telegramId &&
         (await visibleRulesForTelegramUser(actor)).some((rule: any) => Number(rule.id) === ruleId)) {
-      await sendMessage(chatId, `<b>⚡ 探测延迟 · 规则 #${ruleId}</b>\n探测尚未完成，可点击下方按钮查询本次任务。`, {
-        inline_keyboard: [
-          [{ text: "🔄 查询探测结果", callback_data: `fx:rule:probe:result:${ruleId}:${testId}:${page}` }],
-          [{ text: "🔙 返回规则列表", callback_data: `fx:rules:${page}` }],
-        ],
-      });
+      await editMessage(chatId, messageId, `<b>⚡ 探测延迟 · 规则 #${ruleId}</b>\n等待结果超过 5 分钟，暂未收到探测完成报告。可返回规则详情重新发起。`, ruleListBackKeyboard(page));
     }
   } catch (error) {
-    console.warn(`[Telegram] Rule probe ${testId} notification failed:`, error);
+    console.warn(`[Telegram] Rule probe ${testId} message update failed:`, error);
+    if (isCurrent()) {
+      await editMessage(chatId, messageId, `<b>⚡ 探测延迟 · 规则 #${ruleId}</b>\n暂时无法获取本次探测结果，请稍后重试。`, ruleListBackKeyboard(page)).catch(() => undefined);
+    }
   } finally {
-    activeTelegramRuleProbes.delete(key);
+    if (isCurrent()) pendingTelegramProbeMessages.delete(messageKey);
+    if (activeTelegramRuleProbes.get(key) === testId) activeTelegramRuleProbes.delete(key);
   }
 }
 
@@ -5227,6 +5242,10 @@ async function handleCallback(query: TelegramCallbackQuery) {
     return;
   }
 
+  // A different button on this message means the user left the pending probe.
+  // The background watcher must not replace their new screen with a late result.
+  if (data && data !== "fx:noop") pendingTelegramProbeMessages.delete(probeMessageKey(chatId, messageId));
+
   if (data.startsWith("fx:app-login:")) {
     await confirmMobileLogin(chatId, messageId, data.slice("fx:app-login:".length), user);
     return;
@@ -5422,23 +5441,20 @@ async function handleCallback(query: TelegramCallbackQuery) {
       return;
     }
     const key = `${user.id}:${ruleId}:${hostId}`;
-    if ((activeTelegramRuleProbes.get(key) || 0) > Date.now()) {
+    if (activeTelegramRuleProbes.has(key)) {
       await editMessage(chatId, messageId, "该入口正在探测中，请等待上一次结果。", await ruleDetailKeyboard(ruleId, user, page));
       return;
     }
-    activeTelegramRuleProbes.set(key, Date.now() + 35_000);
+    activeTelegramRuleProbes.set(key, 0);
     try {
       const { selfTestRulesRouter } = await import("./routers/rules.selfTest");
       const caller = selfTestRulesRouter.createCaller({ user, req: { headers: {} }, res: {}, authSession: null, authFailureReason: null } as any);
       const result = await caller.startTopologyTotalTest({ ruleId, entryHostId: hostId });
       const testId = Number(result.id);
-      await editMessage(chatId, messageId, formatTelegramRuleProbeResult(ruleId, entry.name, { status: "pending" }), {
-        inline_keyboard: [
-          [{ text: "🔄 查询探测结果", callback_data: `fx:rule:probe:result:${ruleId}:${testId}:${page}` }],
-          [{ text: "🔙 返回规则列表", callback_data: `fx:rules:${page}` }],
-        ],
-      });
-      void watchTelegramRuleProbe(chatId, Number(user.id), ruleId, entry.name, testId, page, key);
+      await editMessage(chatId, messageId, formatTelegramRuleProbeResult(ruleId, entry.name, { status: "pending" }), ruleListBackKeyboard(page));
+      activeTelegramRuleProbes.set(key, testId);
+      pendingTelegramProbeMessages.set(probeMessageKey(chatId, messageId), testId);
+      void watchTelegramRuleProbe(chatId, messageId, Number(user.id), ruleId, entry.name, testId, page, key);
     } catch (error) {
       activeTelegramRuleProbes.delete(key);
       throw error;
