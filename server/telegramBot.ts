@@ -11,7 +11,7 @@ import { createTelegramWebAppLoginChallenge } from "./telegramWebAppLogin";
 import { withTelegramApiTimeout } from "./telegramApiTimeout";
 import { formatForwardRuleProtocol } from "../shared/forwardTypes";
 import { linkProbeMethodForRule } from "../shared/latencyProbe";
-import { formatRuleDetailLatency, formatTelegramRuleProbeResult, selectRuleProbeCompletion } from "./telegramRuleProbe";
+import { formatRuleDetailLatency, formatTelegramRuleProbeResult } from "./telegramRuleProbe";
 import { isTelegramMessageNotModified } from "./telegramEditError";
 import { isAgentVersionAtLeast } from "./agentRouteUtils";
 import { APP_VERSION, AGENT_VERSION } from "../shared/versions";
@@ -1220,7 +1220,7 @@ async function ruleDetailKeyboard(ruleId: number, user: any, page = 0, probing =
   return { inline_keyboard: [
     [
       { text: rule.isEnabled ? "⛔ 停用此规则" : "▶️ 启用此规则", callback_data: `fx:rule:toggle:${ruleId}:${page}` },
-      ...(rule.isEnabled
+      ...(rule.isEnabled && !rule.tunnelId && linkProbeMethodForRule(rule) === "tcp"
         ? [{ text: probing ? "⏳ 探测中…" : "⚡ 探测延迟", callback_data: probing ? "fx:noop" : `fx:rule:probe:${ruleId}:${page}` }] : []),
     ],
     [{ text: "🔙 返回规则列表", callback_data: `fx:rules:${page}` }, { text: "🏠 主菜单", callback_data: "fx:menu" }],
@@ -1234,27 +1234,19 @@ function probeMessageKey(chatId: number | string, messageId: number) {
   return `${chatId}:${messageId}`;
 }
 
-async function watchTelegramRuleProbe(chatId: number | string, messageId: number, actorId: number, ruleId: number, testId: number, queued: number, page: number, key: string) {
+async function watchTelegramRuleProbe(chatId: number | string, messageId: number, actorId: number, ruleId: number, testId: number, page: number, key: string) {
   const messageKey = probeMessageKey(chatId, messageId);
   const isCurrent = () => pendingTelegramProbeMessages.get(messageKey) === testId;
   try {
-    // Reuse Rules page's manual self-test. For a chain, wait for the aggregate
-    // instead of displaying the first hop's latency as an end-to-end value.
-    const first = queued > 1 ? await db.getForwardTestById(testId) : null;
-    let batchId = "";
-    try { batchId = String(JSON.parse(first?.message || "{}").batchId || ""); } catch { /* already completed */ }
-    if (queued > 1 && !batchId) throw new Error("转发链探测批次信息不可用");
-    let batchIds: number[] = queued > 1 ? await db.getForwardTestBatchIds(ruleId, batchId) : [];
+    // One TCP request from the selected entrance to its next forwarding
+    // listener. Never wait for per-hop jobs or combine unrelated samples.
     for (let attempt = 0; attempt < 120; attempt++) {
       await new Promise<void>((resolve) => { const timer = setTimeout(resolve, 2500); timer.unref?.(); });
       if (!isCurrent()) return;
-      if (queued > 1 && batchIds.length < queued) batchIds = await db.getForwardTestBatchIds(ruleId, batchId);
-      const tests = queued > 1
-        ? await db.getForwardTestsByIds(ruleId, batchIds)
-        : [await db.getForwardTestById(testId)].filter(Boolean);
+      const completed = await db.getForwardTestById(testId);
       if (!isCurrent()) return;
-      const completed = selectRuleProbeCompletion(tests as any[], queued);
-      if (!completed) continue;
+      if (!completed || Number(completed.ruleId) !== ruleId) throw new Error("探测任务不存在");
+      if (completed.status === "pending" || completed.status === "running") continue;
       const actor = await db.getUserById(actorId);
       if (isCurrent() && actor?.accountEnabled !== false && actor?.telegramId &&
           (await visibleRulesForTelegramUser(actor)).some((rule: any) => Number(rule.id) === ruleId)) {
@@ -5423,8 +5415,8 @@ async function handleCallback(query: TelegramCallbackQuery) {
     const ruleId = Number(ruleIdRaw);
     const page = Number(pageRaw || 0);
     const rule = (await visibleRulesForTelegramUser(user)).find((item: any) => Number(item.id) === ruleId);
-    if (!rule || !rule.isEnabled) {
-      await editMessage(chatId, messageId, "规则不存在、未启用或无权操作。", ruleListBackKeyboard(page));
+    if (!rule || !rule.isEnabled || rule.tunnelId || linkProbeMethodForRule(rule) !== "tcp") {
+      await editMessage(chatId, messageId, "规则不存在、未启用或不支持 TCP 探测。", ruleListBackKeyboard(page));
       return;
     }
     const key = `${user.id}:${ruleId}`;
@@ -5434,12 +5426,16 @@ async function handleCallback(query: TelegramCallbackQuery) {
       await editMessage(chatId, messageId, await ruleDetailText(ruleId, user, { status: "pending" }), await ruleDetailKeyboard(ruleId, user, page, true));
       const { selfTestRulesRouter } = await import("./routers/rules.selfTest");
       const caller = selfTestRulesRouter.createCaller({ user, req: { headers: {} }, res: {}, authSession: null, authFailureReason: null } as any);
-      const result = await caller.startSelfTest({ ruleId });
+      const entryHostId = Number(rule.forwardGroupId
+        ? await db.getForwardGroupDefaultHostId(Number(rule.forwardGroupId))
+        : rule.hostId || 0);
+      if (!Number.isSafeInteger(entryHostId) || entryHostId <= 0) throw new Error("规则没有可用的入口主机");
+      const result = await caller.startTopologyTotalTest({ ruleId, entryHostId });
       const testId = Number(result.id);
       if (!Number.isSafeInteger(testId) || testId <= 0) throw new Error("未创建探测任务");
       activeTelegramRuleProbes.set(key, testId);
       pendingTelegramProbeMessages.set(probeMessageKey(chatId, messageId), testId);
-      void watchTelegramRuleProbe(chatId, messageId, Number(user.id), ruleId, testId, Number(result.queued || 1), page, key);
+      void watchTelegramRuleProbe(chatId, messageId, Number(user.id), ruleId, testId, page, key);
     } catch (error) {
       activeTelegramRuleProbes.delete(key);
       await editMessage(chatId, messageId,
