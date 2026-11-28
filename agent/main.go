@@ -2886,9 +2886,7 @@ func main() {
 		startPluginAgentTaskWorkers(cfg)
 	}
 	go actionWorker()
-	if !iptablesOnlyBuild {
-		go selfTestPoller(cfg)
-	}
+	go selfTestPoller(cfg)
 	go agentEventStream(cfg)
 	go agentPresenceLoop(cfg)
 	go agentMetricsScheduler(cfg)
@@ -4099,7 +4097,11 @@ func heartbeat(cfg Config, forceReconcile ...bool) (heartbeatResult, error) {
 		}
 		actionDone = append(actionDone, enqueueAction(cfg, a))
 	}
-	if !iptablesOnlyBuild {
+	if iptablesOnlyBuild {
+		for _, t := range resp.SelfTests {
+			enqueueSelfTest(cfg, t)
+		}
+	} else {
 		dependentSelfTests := make([]selfTest, 0, len(resp.SelfTests))
 		for _, t := range resp.SelfTests {
 			if !selfTestDependsOnRuntime(t) {
@@ -4964,7 +4966,7 @@ func runAgentEventStream(cfg Config) error {
 						}
 						go selfUpgrade(cfg, &up)
 					}
-				} else if msg.Type == "agent-selftest" && !iptablesOnlyBuild {
+				} else if msg.Type == "agent-selftest" {
 					go pullSelfTestsOnce(cfg)
 				} else if msg.Type == "agent-external-port-check" && iptablesOnlyBuild {
 					var request externalPortCheckRequest

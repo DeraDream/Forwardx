@@ -4,6 +4,7 @@ import { AGENT_VERSION } from "./_core/systemRouter";
 import { clearHostTcpingRequest, hasHostTcpingRequest, isHostMetricsWatching, isHostTopologyTrafficWatching, pushAgentDesiredState } from "./agentEvents";
 import { AGENT_PLUGIN_TASK_VERSION, buildMetaAgentSelfTestPayload, buildRuleAgentSelfTestPayload, hasAgentVersionChanged, isAgentUpgradeTargetSatisfied, isAgentVersionAtLeast, isIptablesOnlyAgentVersion, parseSelfTestMeta, tunnelSecretSeed } from "./agentRouteUtils";
 import { resolveAgentAdvertisedPanelUrl } from "./agentPanelUrl";
+import { canDispatchAgentSelfTest } from "./topologyTcpAgentCapability";
 import { getAgentMigrationSwitchTarget, getPanelMigrationAgentDirective } from "./panelMigrationAgentState";
 import * as hopRepo from "./repositories/tunnelRepository";
 import crypto from "crypto";
@@ -6344,9 +6345,10 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     if (!deferActionsForLocalState) {
       const pendingTests = await db.getPendingForwardTestsByHost(host.id);
       for (const t of pendingTests) {
+        const meta = parseSelfTestMeta((t as any).message);
+        if (!canDispatchAgentSelfTest(effectiveAgentVersion, meta?.kind)) continue;
         const claimed = await db.markForwardTestRunning(t.id);
         if (!claimed) continue;
-        const meta = parseSelfTestMeta((t as any).message);
         const metaSelfTest = buildMetaAgentSelfTestPayload(t, meta);
         if (metaSelfTest) {
           selfTests.push(metaSelfTest);

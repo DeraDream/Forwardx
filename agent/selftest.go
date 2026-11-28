@@ -75,7 +75,19 @@ func shouldPollSelfTests(eventStreamConnected bool) bool {
 	return !eventStreamConnected
 }
 
+// The standalone kernel-only Agent may dial one TCP topology target, but must
+// never execute rule actions, diagnostic jobs, tunnel or runtime self-tests.
+func allowedIptablesOnlySelfTest(t selfTest) bool {
+	return t.TestID > 0 && t.RuleID > 0 && t.Kind == "topology-total" &&
+		t.ForwardType == "topology-total" && t.Method == "tcp" && t.Protocol == "tcp" &&
+		t.SourcePort == 0 && t.TargetIP != "" && t.TargetPort > 0 && t.TargetPort <= 65535 &&
+		t.TunnelID == 0 && t.WireGuardPeerID == ""
+}
+
 func enqueueSelfTest(cfg Config, t selfTest) {
+	if iptablesOnlyBuild && !allowedIptablesOnlySelfTest(t) {
+		return
+	}
 	if !claimSelfTest(t.TestID) {
 		return
 	}
@@ -302,9 +314,25 @@ func diagnosticPortInspection(t selfTest) map[string]any {
 
 func handleSelfTest(cfg Config, t selfTest) {
 	if iptablesOnlyBuild {
+		if allowedIptablesOnlySelfTest(t) {
+			handleIptablesOnlyTopologyTCPTest(cfg, t)
+		}
 		return
 	}
 	handleStandardSelfTest(cfg, t)
+}
+
+func handleIptablesOnlyTopologyTCPTest(cfg Config, t selfTest) {
+	latency, reachable, _ := tcpLatencyResolved(t.TargetIP, t.TargetPort, selfTestTCPAttemptTimeout)
+	message := fmt.Sprintf("目标 %s TCP不可达或超时", net.JoinHostPort(t.TargetIP, strconv.Itoa(t.TargetPort)))
+	if reachable {
+		message = fmt.Sprintf("目标 %s TCP可达，延迟 %dms", net.JoinHostPort(t.TargetIP, strconv.Itoa(t.TargetPort)), latency)
+	}
+	if err := post(cfg, "/api/agent/selftest-result", map[string]any{
+		"testId": t.TestID, "targetReachable": reachable, "latencyMs": latency, "message": message,
+	}, &map[string]any{}); err != nil {
+		logSelfTestReportError(t.TestID, t.TargetIP, err)
+	}
 }
 
 func handleStandardSelfTest(cfg Config, t selfTest) {

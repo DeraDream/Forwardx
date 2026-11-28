@@ -9,6 +9,7 @@ import { createHopTestBatch, registerHopTest } from "../hopTestState";
 import { linkProbeMethodForRule } from "@shared/latencyProbe";
 import { ruleLatencySeriesQueryCache as selfTestQueryCache } from "../ruleLatencyQueryCache";
 import { selectTopologyTotalTarget } from "../topologyTotalTarget";
+import { canRunTopologyTcpTest } from "../topologyTcpAgentCapability";
 
 export const selfTestRulesRouter = router({
   // Network topology: one TCP handshake from the selected entrance through
@@ -27,6 +28,10 @@ export const selfTestRulesRouter = router({
       const target = selectTopologyTotalTarget(segments, input.entryHostId);
       if (!target) throw new Error("选中入口没有有效的 TCP 首跳监听端口");
       const { targetIp, targetPort } = target;
+      const entryHost = await db.getHostById(input.entryHostId);
+      if (!entryHost || !canRunTopologyTcpTest(entryHost.agentVersion)) {
+        throw new Error("入口轻量 Agent 不支持 TCP 延迟探测，请升级独立轻量 Agent 至 v1.0.9");
+      }
       const id = await db.createForwardTest({
         ruleId: rule.id, hostId: input.entryHostId, userId: rule.userId, status: "pending",
         listenOk: false, targetReachable: false, forwardOk: false,

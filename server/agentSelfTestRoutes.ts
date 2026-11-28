@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import * as db from "./db";
 import { buildMetaAgentSelfTestPayload, buildRuleAgentSelfTestPayload, parseSelfTestMeta } from "./agentRouteUtils";
+import { canDispatchAgentSelfTest } from "./topologyTcpAgentCapability";
 import { recordTunnelHopTestResult } from "./tunnelHopTestState";
 import { aggregateTunnelBranchTest } from "./tunnelBranchLatency";
 import { withBranchedTunnelTest } from "./tunnelBranchTopology";
@@ -658,9 +659,10 @@ agentRouter.post("/api/agent/selftest-pull", async (req: Request, res: Response)
     const pendingTests = await db.getPendingForwardTestsByHost(host.id);
     const selfTests: any[] = [];
     for (const t of pendingTests) {
+      const meta = parseSelfTestMeta((t as any).message);
+      if (!canDispatchAgentSelfTest((host as any).agentVersion, meta?.kind)) continue;
       const claimed = await db.markForwardTestRunning(t.id);
       if (!claimed) continue;
-      const meta = parseSelfTestMeta((t as any).message);
       const metaSelfTest = buildMetaAgentSelfTestPayload(t, meta);
       if (metaSelfTest) {
         selfTests.push(metaSelfTest);
