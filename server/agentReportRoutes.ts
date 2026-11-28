@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import crypto from "node:crypto";
 import * as db from "./db";
+import { notifyTopologyBlockTransitions } from "./topologyBlockNotifier";
 import { isHostMetricsWatching, isHostTopologyTrafficWatching, pushAgentRefresh } from "./agentEvents";
 import {
   isAgentForwardGroupLatencyResult,
@@ -1181,8 +1182,11 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
       const uniqueSegments = new Map<string, any>();
       for (const sample of acceptedSegments) uniqueSegments.set(`${sample.ruleId}:${sample.segmentKey}`, sample);
       const samples = Array.from(uniqueSegments.values());
-      await db.updateTopologySegmentIncidents(samples);
+      const transitions = await db.updateTopologySegmentIncidents(samples);
       await db.recordTopologySegmentLatency(samples);
+      if (transitions.length > 0) void notifyTopologyBlockTransitions(transitions).catch((error) => {
+        console.warn(`[Telegram] Topology block notification failed: ${error instanceof Error ? error.message : String(error)}`);
+      });
     }
     const topologyGatePlan = agentTcpingReportGate.plan({
       hostId: Number(host.id),

@@ -2569,8 +2569,22 @@ export type TopologySegmentIncidentSample = TopologySegmentLatencySample & {
   targetName: string;
 };
 
+export type TopologySegmentIncidentTransition = {
+  incidentId: number;
+  userId: number;
+  type: "blocked" | "recovered";
+  sourceHostId: number;
+  sourceName: string;
+  targetName: string;
+  targetAddress: string;
+  failureStartedAt: Date;
+  occurredAt: Date;
+  recoveryLatencyMs: number | null;
+};
+
 /** Persist only confirmed physical-edge block/recovery incidents for the topology log. */
-export async function updateTopologySegmentIncidents(samples: TopologySegmentIncidentSample[]) {
+export async function updateTopologySegmentIncidents(samples: TopologySegmentIncidentSample[]): Promise<TopologySegmentIncidentTransition[]> {
+  const transitions: TopologySegmentIncidentTransition[] = [];
   const q = quoteIdentifier;
   const unique = new Map<string, TopologySegmentIncidentSample>();
   for (const sample of samples) {
@@ -2593,12 +2607,18 @@ export async function updateTopologySegmentIncidents(samples: TopologySegmentInc
         // A short loss recovered before the confirmation threshold: no log.
         await executeRaw(`DELETE FROM ${q("topology_segment_incidents")} WHERE ${q("id")} = ?`, [Number(open.id)]);
       } else {
-        await executeRaw(
+        const recoveryLatencyMs = Math.max(0, Math.round(Number(sample.latencyMs)));
+        const updated = await executeRaw(
           `UPDATE ${q("topology_segment_incidents")}
               SET ${q("recoveredAt")} = ?, ${q("recoveryLatencyMs")} = ?, ${q("updatedAt")} = ?
             WHERE ${q("id")} = ? AND ${q("recoveredAt")} IS NULL`,
-          [occurredAtSec, Math.max(0, Math.round(Number(sample.latencyMs))), occurredAtSec, Number(open.id)],
+          [occurredAtSec, recoveryLatencyMs, occurredAtSec, Number(open.id)],
         );
+        if (rawAffectedRows(updated) > 0) transitions.push({
+          incidentId: Number(open.id), userId: sample.userId, type: "recovered", sourceHostId: sample.sourceHostId,
+          sourceName: String(open.sourceName), targetName: String(open.targetName), targetAddress: String(open.targetAddress),
+          failureStartedAt: rowDate(open.failureStartedAt), occurredAt, recoveryLatencyMs,
+        });
       }
       continue;
     }
@@ -2613,12 +2633,18 @@ export async function updateTopologySegmentIncidents(samples: TopologySegmentInc
       continue;
     }
     if (open.blockedAt == null && occurredAt.getTime() - rowDate(open.failureStartedAt).getTime() >= 15_000) {
-      await executeRaw(
+      const updated = await executeRaw(
         `UPDATE ${q("topology_segment_incidents")} SET ${q("blockedAt")} = ?, ${q("updatedAt")} = ? WHERE ${q("id")} = ? AND ${q("blockedAt")} IS NULL`,
         [occurredAtSec, occurredAtSec, Number(open.id)],
       );
+      if (rawAffectedRows(updated) > 0) transitions.push({
+        incidentId: Number(open.id), userId: sample.userId, type: "blocked", sourceHostId: sample.sourceHostId,
+        sourceName: String(open.sourceName), targetName: String(open.targetName), targetAddress: String(open.targetAddress),
+        failureStartedAt: rowDate(open.failureStartedAt), occurredAt, recoveryLatencyMs: null,
+      });
     }
   }
+  return transitions;
 }
 
 export type TopologyBlockLogEntry = {

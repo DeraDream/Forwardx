@@ -2299,6 +2299,7 @@ function TelegramBotSettingsCard() {
   const [telegramExpiryReminder, setTelegramExpiryReminder] = useState(false);
   const [telegramTrafficReminder, setTelegramTrafficReminder] = useState(false);
   const [telegramHostStatusNotify, setTelegramHostStatusNotify] = useState(false);
+  const [telegramTopologyBlockNotify, setTelegramTopologyBlockNotify] = useState(false);
   const [telegramTrafficThreshold, setTelegramTrafficThreshold] = useState(20);
   const [showDeleteTelegramBot, setShowDeleteTelegramBot] = useState(false);
 
@@ -2309,6 +2310,7 @@ function TelegramBotSettingsCard() {
       setTelegramExpiryReminder(telegramReady && !!settings.telegram?.expiryReminder);
       setTelegramTrafficReminder(telegramReady && !!settings.telegram?.trafficReminder);
       setTelegramHostStatusNotify(telegramReady && !!settings.telegram?.hostStatusNotify);
+      setTelegramTopologyBlockNotify(telegramReady && !!settings.telegram?.topologyBlockNotify);
       setTelegramTrafficThreshold(Number(settings.telegram?.trafficReminderThreshold || 20));
     }
   }, [settings]);
@@ -2334,7 +2336,7 @@ function TelegramBotSettingsCard() {
       toast.error("请先填写 Bot Token");
       return;
     }
-    if ((telegramExpiryReminder || telegramTrafficReminder || telegramHostStatusNotify) && !remindersReady) {
+    if ((telegramExpiryReminder || telegramTrafficReminder || telegramHostStatusNotify || telegramTopologyBlockNotify) && !remindersReady) {
       toast.error("请先保存并启用 Telegram 机器人后再开启提醒");
       return;
     }
@@ -2345,6 +2347,7 @@ function TelegramBotSettingsCard() {
         expiryReminder: remindersReady ? telegramExpiryReminder : false,
         trafficReminder: remindersReady ? telegramTrafficReminder : false,
         hostStatusNotify: remindersReady ? telegramHostStatusNotify : false,
+        topologyBlockNotify: remindersReady ? telegramTopologyBlockNotify : false,
         trafficReminderThreshold: telegramTrafficThreshold,
       },
     });
@@ -2478,6 +2481,19 @@ function TelegramBotSettingsCard() {
                     checked={telegramRemindersReady && telegramHostStatusNotify}
                     disabled={!telegramRemindersReady}
                     onCheckedChange={setTelegramHostStatusNotify}
+                  />
+                </div>
+              </div>
+              <div className="rounded-lg border border-border/40 bg-background/50 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-medium">拓扑阻断及恢复通知</p>
+                    <p className="mt-1 text-xs text-muted-foreground">{telegramReminderHint || "持续阻断满 15 秒后通知已绑定的管理员，恢复时再通知一次。"}</p>
+                  </div>
+                  <Switch
+                    checked={telegramRemindersReady && telegramTopologyBlockNotify}
+                    disabled={!telegramRemindersReady}
+                    onCheckedChange={setTelegramTopologyBlockNotify}
                   />
                 </div>
               </div>

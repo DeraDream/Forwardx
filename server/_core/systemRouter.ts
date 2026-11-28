@@ -1803,6 +1803,7 @@ function publicSystemSettings(all: Record<string, string | null>, activeProtocol
       trafficReminder: false,
       trafficReminderThreshold: 20,
       hostStatusNotify: false,
+      topologyBlockNotify: false,
     },
     deepseek: {
       provider: aiProvider,
@@ -2004,6 +2005,7 @@ export const systemRouter = router({
         trafficReminder: all.telegramTrafficReminder === "true",
         trafficReminderThreshold: Number(all.telegramTrafficReminderThreshold || 20),
         hostStatusNotify: all.telegramHostStatusNotify === "true",
+        topologyBlockNotify: all.telegramTopologyBlockNotify === "true",
       },
       deepseek: {
         provider: aiProvider,
@@ -2190,6 +2192,7 @@ export const systemRouter = router({
           trafficReminder: z.boolean().optional(),
           trafficReminderThreshold: z.number().int().min(1).max(99).optional(),
           hostStatusNotify: z.boolean().optional(),
+          topologyBlockNotify: z.boolean().optional(),
         }).optional(),
         deepseek: z.object({
           provider: aiProviderSchema.optional(),
@@ -2459,7 +2462,7 @@ export const systemRouter = router({
         const nextEnabled = input.telegram.enabled !== undefined
           ? !!input.telegram.enabled
           : (currentEnabledSetting === "true" || (!!envToken && currentEnabledSetting !== "false"));
-        const wantsReminder = !!input.telegram.expiryReminder || !!input.telegram.trafficReminder || !!input.telegram.hostStatusNotify;
+        const wantsReminder = !!input.telegram.expiryReminder || !!input.telegram.trafficReminder || !!input.telegram.hostStatusNotify || !!input.telegram.topologyBlockNotify;
         if (nextEnabled && !effectiveToken) {
           throw new Error("请先配置 Telegram Bot Token");
         }
@@ -2471,6 +2474,7 @@ export const systemRouter = router({
         if (input.telegram.trafficReminder !== undefined) next.telegramTrafficReminder = input.telegram.trafficReminder && nextEnabled && !!effectiveToken ? "true" : "false";
         if (input.telegram.trafficReminderThreshold !== undefined) next.telegramTrafficReminderThreshold = String(input.telegram.trafficReminderThreshold);
         if (input.telegram.hostStatusNotify !== undefined) next.telegramHostStatusNotify = input.telegram.hostStatusNotify && nextEnabled && !!effectiveToken ? "true" : "false";
+        if (input.telegram.topologyBlockNotify !== undefined) next.telegramTopologyBlockNotify = input.telegram.topologyBlockNotify && nextEnabled && !!effectiveToken ? "true" : "false";
         let tokenChanged = false;
         if (input.telegram.clearToken) {
           next.telegramBotToken = null;
@@ -2480,6 +2484,7 @@ export const systemRouter = router({
             next.telegramExpiryReminder = "false";
             next.telegramTrafficReminder = "false";
             next.telegramHostStatusNotify = "false";
+            next.telegramTopologyBlockNotify = "false";
           }
           tokenChanged = true;
         }
