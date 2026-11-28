@@ -581,6 +581,7 @@ agentRouter.post("/api/agent/selftest-result", async (req: Request, res: Respons
           const aggregateMessage = structuredLinkTestMessage({
             kind: "forward-chain-hop-summary",
             groupId: meta.groupId,
+            batchId: typeof (meta as any).batchId === "string" ? (meta as any).batchId : null,
             message: aggregate.message,
             details: aggregate.details,
             totalLatencyMs: aggregate.latencyMs,

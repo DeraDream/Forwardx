@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull, or } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, like, or } from "drizzle-orm";
 import { forwardTests, InsertForwardTest, tunnelLatencyStats } from "../../drizzle/schema";
 import { executeRaw, getDb, insertAndGetId, nowDate, queryRaw, rawAffectedRows } from "../dbRuntime";
 import { quoteIdentifier } from "../dbCompat";
@@ -213,6 +213,24 @@ export async function getLatestTopologyTestsForEntries(entries: Array<{ ruleId: 
     [...ruleIds, ...hostIds],
   );
   return new Map(rows.map((row) => [`${Number(row.ruleId)}:${Number(row.hostId)}`, row]));
+}
+
+// A rule self-test can enqueue multiple hops. Resolve its exact batch before
+// any hop overwrites its metadata with the aggregate result.
+export async function getForwardTestBatchIds(ruleId: number, batchId: string) {
+  const db = await getDb();
+  if (!db || !/^[a-z0-9-]{1,100}$/i.test(batchId)) return [] as number[];
+  const rows = await db.select({ id: forwardTests.id }).from(forwardTests)
+    .where(and(eq(forwardTests.ruleId, ruleId), like(forwardTests.message, `%"batchId":"${batchId}"%`)))
+    .orderBy(forwardTests.id);
+  return rows.map((row: { id: number }) => row.id);
+}
+
+export async function getForwardTestsByIds(ruleId: number, ids: number[]) {
+  const db = await getDb();
+  const safe = [...new Set(ids.filter((id) => Number.isSafeInteger(id) && id > 0))];
+  if (!db || !safe.length) return [] as Array<typeof forwardTests.$inferSelect>;
+  return db.select().from(forwardTests).where(and(eq(forwardTests.ruleId, ruleId), inArray(forwardTests.id, safe)));
 }
 
 export async function getForwardTestById(id: number) {
